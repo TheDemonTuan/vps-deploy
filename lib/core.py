@@ -196,8 +196,8 @@ def trusted_path(path, directory=False):
         except (OSError, ValueError):
             raise Failure('UNTRUSTED_PATH') from None
         require(mode.st_uid == 0 and not stat.S_ISLNK(mode.st_mode) and (stat.S_ISDIR(mode.st_mode) if entry != path or directory else stat.S_ISREG(mode.st_mode)), 'UNTRUSTED_PATH')
-        sticky_fixture = entry == Path('/tmp') and fixture_authorized() and mode.st_mode & stat.S_ISVTX
-        require(not mode.st_mode & 0o022 or sticky_fixture, 'UNTRUSTED_PATH')
+        sticky_parent = entry == Path('/run/lock') or (entry == Path('/tmp') and fixture_authorized())
+        require(not mode.st_mode & 0o022 or (sticky_parent and mode.st_mode & stat.S_ISVTX), 'UNTRUSTED_PATH')
     return path
 
 

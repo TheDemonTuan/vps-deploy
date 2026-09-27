@@ -1,10 +1,13 @@
 import sys
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-from core import Failure, app_registration, exact, host_registration, parse_yaml, resource_collisions
+from core import Failure, app_registration, exact, host_registration, parse_yaml, resource_collisions, trusted_path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,6 +52,18 @@ class Registration(unittest.TestCase):
         with self.assertRaisesRegex(Failure, 'RESOURCE_COLLISION'):
             resource_collisions(host)
 
+
+    def test_root_owned_sticky_lock_ancestor_only(self):
+        modes = {'/run/lock': stat.S_IFDIR | 0o1777, '/etc': stat.S_IFDIR | 0o1777}
+        def metadata(path):
+            return SimpleNamespace(st_uid=0, st_mode=modes.get(str(path), stat.S_IFDIR | 0o755))
+        with mock.patch.object(Path, 'lstat', metadata), mock.patch('core.fixture_authorized', return_value=False):
+            self.assertEqual(trusted_path('/run/lock/vps-deploy', directory=True), Path('/run/lock/vps-deploy'))
+            with self.assertRaisesRegex(Failure, 'UNTRUSTED_PATH'):
+                trusted_path('/etc/vps-deploy', directory=True)
+            modes['/run/lock'] = stat.S_IFDIR | 0o777
+            with self.assertRaisesRegex(Failure, 'UNTRUSTED_PATH'):
+                trusted_path('/run/lock/vps-deploy', directory=True)
 
 
 if __name__ == '__main__':
