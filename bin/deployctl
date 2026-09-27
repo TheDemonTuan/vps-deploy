@@ -67,6 +67,8 @@ def submit(req, cfg, state_dir, locks):
 
 
 def state_status(state_dir, req_id, cfg):
+    existing = receipt_dir(state_dir, req_id) if req_id else None
+    entry = get_receipt(state_dir, req_id) if existing and existing.is_dir() else result(req_id, 'complete', 'status')
     state = load(state_dir / 'state.json')
     profile = host(cfg)
     healthy = False
@@ -77,8 +79,6 @@ def state_status(state_dir, req_id, cfg):
         healthy = state['operation'] is None
     except (Failure, OSError):
         pass
-    existing = receipt_dir(state_dir, req_id) if req_id else None
-    entry = get_receipt(state_dir, req_id) if existing and existing.is_dir() else result(req_id, 'complete', 'status')
     rtk_healthy = None
     if existing and (existing / 'request.json').is_file():
         previous_request = request((existing / 'request.json').read_bytes(), (profile['image_repository'], profile['rtk_image_repository']))
