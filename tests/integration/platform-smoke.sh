@@ -279,7 +279,6 @@ printf 'BASELINE_9ROUTER_MIGRATION_OK\n'
 demo_profile=/etc/vps-deploy/apps/demo
 demo_state=/var/lib/vps-deploy/apps/demo
 install -d -m 0700 "$fixture/demo" "$demo_profile" "$demo_state" "$demo_state/requests"
-cp "$new_release/registry/demo.yml" "$fixture/demo/registration.yml"
 python3 - "$new_release/registry/demo.yml" "$demo_profile/app.yml" <<'PY'
 import pathlib,sys,yaml
 source = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())
