@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 probe_observed_slot() {
-  local tmp status probe
+  local status probe
   tmp="$(mktemp -d /tmp/9router-probe.XXXXXXXX)" || return 1
   trap 'rm -rf -- "$tmp"' EXIT
   probe="$(python3 -c 'import uuid;print(uuid.uuid4().hex)')"
