@@ -24,7 +24,6 @@ ssh_port=22222
 cleanup() {
   set +e
   trap - ERR
-  if [[ -n ${publisher:-} ]]; then touch "$fixture/publisher-release"; wait "$publisher" 2>/dev/null; fi
   [[ -z ${tls_pid:-} ]] || { kill "$tls_pid"; wait "$tls_pid" 2>/dev/null; }
   [[ -z ${sshd_pid:-} ]] || { kill "$sshd_pid"; wait "$sshd_pid" 2>/dev/null; }
   if [[ -n ${stream_pid:-} ]]; then kill "$stream_pid" 2>/dev/null; wait "$stream_pid" 2>/dev/null; fi
@@ -150,7 +149,7 @@ poll() { local id=$1 outcome
   done
   echo "Timeout waiting for $id" >&2; return 1
 }
-unit_ids='fixture-bad-route fixture-receipt fixture-started fixture-crash fixture-reconcile fixture-after-rename fixture-after-reconcile fixture-after-rollback fixture-ack-before fixture-ack-reconcile fixture-ack-rollback fixture-committed fixture-commit-reconcile fixture-commit-rollback fixture-stale-ack fixture-deploy fixture-rollback fixture-rtk fixture-rtk-bad fixture-rtk-started fixture-rtk-reconcile fixture-busy'
+unit_ids='fixture-bad-route fixture-receipt fixture-started fixture-crash fixture-reconcile fixture-crash-reconcile fixture-after-rename fixture-after-reconcile fixture-after-rollback fixture-ack-before fixture-ack-reconcile fixture-ack-rollback fixture-committed fixture-commit-reconcile fixture-commit-rollback fixture-stale-ack fixture-deploy fixture-rollback fixture-rtk fixture-rtk-bad fixture-rtk-started fixture-rtk-reconcile fixture-busy'
 mkdir -m 0700 "$fixture/registry"
 docker run -d --name fixture-registry -p 127.0.0.1:5000:5000 -v "$fixture/registry:/var/lib/registry" registry:2 >/dev/null
 for _ in {1..30}; do curl -fsS http://127.0.0.1:5000/v2/ >/dev/null 2>&1 && break; sleep .2; done
@@ -253,32 +252,13 @@ interrupted_status fixture-started | assert_json '{"status":"recovery_required"}
 rm "$fixture/work/fault"
 printf '%s' "$(make_request reconcile app fixture-reconcile '')" | ssh_request | assert_json '{"status":"running"}'
 poll fixture-reconcile | assert_json '{"status":"complete","healthy":true}'
-# Hold the cooperative publisher lock, SIGKILL the real systemd worker after durable intent,
-# then reconcile old route without replaying its request or stopping the serving blue slot.
-flock -x "$locks/traefik.lock" -c "touch '$fixture/publisher-held'; while test ! -f '$fixture/publisher-release'; do sleep .1; done" & publisher=$!
-for _ in {1..30}; do [[ ! -e $fixture/publisher-held ]] || break; sleep .1; done
-[[ -e $fixture/publisher-held ]]
+# Kill after durable publish intent, before the route rename; reconcile must retain blue.
+fault publishing
 printf '%s' "$(make_request deploy app fixture-crash "$second")" | ssh_request | assert_json '{"status":"running"}'
-for _ in {1..90}; do
-  phase=$(python3 - "$state/state.json" <<'PY'
-import json,sys
-print((json.load(open(sys.argv[1])).get('operation') or {}).get('phase','waiting'))
-PY
-  )
-  [[ $phase != publishing ]] || break
-  sleep .3
-done
-[[ $phase == publishing ]] || { echo 'Candidate never reached publisher lock' >&2; printf '{"version":1,"op":"status","app":"9router","request_id":"fixture-crash"}' | ssh_request >&2; journalctl -u vps-deploy-9router-fixture-crash --no-pager -n 25 >&2; exit 1; }
-systemctl kill --kill-whom=main --signal=SIGKILL vps-deploy-9router-fixture-crash
-touch "$fixture/publisher-release"; wait "$publisher"; publisher=
-for _ in {1..20}; do
-  interrupted=$(printf '{"version":1,"op":"status","app":"9router","request_id":"fixture-crash"}' | ssh_request)
-  [[ $(python3 -c 'import json,sys;print(json.load(sys.stdin)["status"])' <<< "$interrupted") == running ]] || break
-  sleep .2
-done
-printf '%s' "$interrupted" | assert_json '{"status":"recovery_required"}'
-printf '%s' "$(make_request reconcile app fixture-reconcile '')" | ssh_request | assert_json '{"status":"running"}'
-poll fixture-reconcile | assert_json '{"status":"complete","healthy":true}'
+interrupted_status fixture-crash | assert_json '{"status":"recovery_required"}'
+rm "$fixture/work/fault"
+printf '%s' "$(make_request reconcile app fixture-crash-reconcile '')" | ssh_request | assert_json '{"status":"running"}'
+poll fixture-crash-reconcile | assert_json '{"status":"complete","healthy":true}'
 curl -fsS --cacert "$ca" "https://$api/api/health" | assert_json '{"deployment_slot":"blue"}'
 sha256sum -c "$fixture/sentinel.sha" >/dev/null
 fault after_rename
