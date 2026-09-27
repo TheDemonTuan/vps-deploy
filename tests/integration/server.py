@@ -51,18 +51,28 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
-            connection = http.client.HTTPConnection('127.0.0.1', int(sys.argv[4]), timeout=10)
+            stream = self.path == '/stream'
+            connection = http.client.HTTPConnection('127.0.0.1', int(sys.argv[4]), timeout=180 if stream else 10)
             try:
                 connection.request('GET', self.path, headers={'Host': self.headers['Host'], 'Cache-Control': self.headers.get('Cache-Control', 'no-cache')})
                 response = connection.getresponse()
-                body = response.read()
                 self.send_response(response.status)
                 for name, value in response.getheaders():
                     if name.lower() not in ('connection', 'transfer-encoding', 'content-length', 'server', 'date'):
                         self.send_header(name, value)
-                self.send_header('Content-Length', str(len(body)))
+                if stream:
+                    self.send_header('Connection', 'close')
+                    self.close_connection = True
+                else:
+                    body = response.read()
+                    self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                if stream:
+                    while chunk := response.read1(65536):
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                else:
+                    self.wfile.write(body)
             finally:
                 connection.close()
             return
