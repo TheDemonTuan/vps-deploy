@@ -168,7 +168,7 @@ docker network create edge-9router >/dev/null
 export RTK_IMAGE=$rtk RTK_NETWORK=9router-rtk RTK_PROJECT=9router-rtk
 /usr/bin/docker compose -f "$release/apps/9router/docker-compose.rtk.yml" up -d rtk >/dev/null
 docker network inspect 9router-rtk | python3 -c 'import json,sys; net=json.load(sys.stdin)[0]; assert net["Internal"] is True and net["Driver"]=="bridge"'
-docker inspect 9router-rtk-rtk-1 | python3 -c 'import json,sys; c=json.load(sys.stdin)[0]; assert not c["NetworkSettings"]["Ports"]["8080/tcp"] and set(c["NetworkSettings"]["Networks"])=={"9router-rtk"}'
+docker inspect 9router-rtk-rtk-1 | python3 -c 'import json,sys; c=json.load(sys.stdin)[0]; assert not (c["NetworkSettings"]["Ports"] or {}).get("8080/tcp") and set(c["NetworkSettings"]["Networks"])=={"9router-rtk"}'
 export IMAGE_REF=$first INITIAL_PASSWORD=fixture-not-a-secret DASHBOARD_HOST=dashboard.platform-smoke.test API_HOST=$api EDGE_NETWORK=edge-9router
 /usr/bin/docker compose --env-file "$profile/runtime.env" -p 9router -f "$release/apps/9router/docker-compose.prod.yml" up -d 9router-blue >/dev/null
 cat > "$fixture/dynamic/shared.yml" <<'YAML'
