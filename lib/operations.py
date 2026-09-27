@@ -218,9 +218,10 @@ def transaction(req, state, state_dir, cfg, release, profile, locks):
         trust = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C'}
         if profile.get('fixture_ci'):
             trust['CURL_CA_BUNDLE'] = profile['ca_bundle']
+            trust['VPS_DEPLOY_FIXTURE_TRACE'] = '1'
             if profile.get('fault_file'):
                 trust['VPS_DEPLOY_FIXTURE_FAULT'] = profile['fault_file']
-        result = subprocess.run(['/usr/bin/bash', str(Path(__file__).with_name('traefik.sh')), 'cutover', profile['api_host'], str(route_path), str(snapshot), str(candidate), old_hash, new_hash, old['slot'], old_gen, target, generation, str(Path(__file__).with_name('route.py')), profile['registration']['manifest']['health']['path'], profile['registration']['route']['generation_header'], str(profile['registration']['manifest']['route']['timeout_seconds'])], env=trust, cwd='/', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=80)
+        result = subprocess.run(['/usr/bin/bash', str(Path(__file__).with_name('traefik.sh')), 'cutover', profile['api_host'], str(route_path), str(snapshot), str(candidate), old_hash, new_hash, old['slot'], old_gen, target, generation, str(Path(__file__).with_name('route.py')), profile['registration']['manifest']['health']['path'], profile['registration']['route']['generation_header'], str(profile['registration']['manifest']['route']['timeout_seconds'])], env=trust, cwd='/', stdout=subprocess.DEVNULL, stderr=None if profile.get('fixture_ci') else subprocess.DEVNULL, timeout=80)
         if result.returncode == 10:
             state['operation'] = None
             state['revision'] += 1

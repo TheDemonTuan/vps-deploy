@@ -2,7 +2,7 @@
 set -euo pipefail
 set -E
 # shellcheck disable=SC2154 # rc is assigned when ERR trap executes.
-trap 'rc=$?; printf "platform-smoke failed line=%s exit=%s\n" "$LINENO" "$rc" >&2; if [[ -f ${fixture:-/nonexistent}/sshd.log ]]; then cat "$fixture/sshd.log" >&2; fi' ERR
+trap 'rc=$?; printf "platform-smoke failed line=%s exit=%s\n" "$LINENO" "$rc" >&2; if [[ -f ${fixture:-/nonexistent}/sshd.log ]]; then cat "$fixture/sshd.log" >&2; fi; if [[ ${demo_user_created:-} == 1 ]]; then journalctl -u vps-deploy-demo@demo-deploy.service --no-pager -n 120 >&2 || true; fi' ERR
 [[ $(id -u) == 0 && $(uname -s) == Linux && -n ${RUNNER_TEMP:-} ]] || { echo 'Requires sudo on disposable Ubuntu runner with RUNNER_TEMP' >&2; exit 1; }
 export NO_PROXY='localhost,127.0.0.1,.platform-smoke.test,.fixture.test'
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy

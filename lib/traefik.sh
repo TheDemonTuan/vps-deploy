@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+[[ ${VPS_DEPLOY_FIXTURE_TRACE:-} != 1 ]] || set -x
 probe_observed_slot() {
   local status probe
   tmp="$(mktemp -d /tmp/vps-deploy-probe.XXXXXXXX)" || return 1
