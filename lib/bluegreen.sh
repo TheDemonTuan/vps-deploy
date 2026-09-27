@@ -49,6 +49,7 @@ compose_app() {
   docker compose "${args[@]}" --ansi=never --progress=plain "$@"
 }
 
+
 pull_image() {
   local release="$1" config="$2" slot="$3" attempt rc heartbeat
   for attempt in 1 2; do
@@ -57,7 +58,11 @@ pull_image() {
       while true; do sleep 15 || break; printf '[pull] %s still downloading\n' "$slot" >&2; done
     ) &
     heartbeat=$!
-    if timeout 300 compose_app "$release" "$config" pull "9router-$slot"; then
+    local args=(--env-file "$config/runtime.env" -p 9router -f "$release/apps/9router/docker-compose.prod.yml")
+    if [[ -n "${CHATGPT_WEB_SOCKET_GID:-}" ]]; then
+      args+=(-f "$release/apps/9router/docker-compose.chatgpt-web.yml")
+    fi
+    if timeout 300 docker compose "${args[@]}" --ansi=never --progress=plain pull "9router-$slot"; then
       kill -TERM "$heartbeat" 2>/dev/null || true
       pkill -TERM -P "$heartbeat" 2>/dev/null || true
       wait "$heartbeat" 2>/dev/null || true
