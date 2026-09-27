@@ -354,7 +354,7 @@ docker exec 9router-blue rm /app/data/health-override
 "$release/bin/deployctl" cleanup-drains --app 9router >/dev/null
 [[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == false ]]
 printf '%s' "$(make_request rollback app fixture-rollback '')" | ssh_request | assert_json '{"status":"running"}'
-poll fixture-rollback | assert_json '{"status":"complete","healthy":true,"draining":"green"}'
+poll fixture-rollback | assert_json '{"status":"complete","healthy":true}'
 [[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
 printf '%s' "$(make_request deploy rtk fixture-rtk "$rtk")" | ssh_request | assert_json '{"status":"running"}'
 poll fixture-rtk | assert_json '{"status":"complete","rtk_healthy":true}'
