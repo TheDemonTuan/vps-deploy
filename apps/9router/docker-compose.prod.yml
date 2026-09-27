@@ -12,9 +12,9 @@ services:
       DEPLOY_SLOT: blue
       NODE_ENV: production
       INITIAL_PASSWORD: ${INITIAL_PASSWORD:?INITIAL_PASSWORD must be set for production}
-      PUBLIC_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}}
-      NEXT_PUBLIC_BASE_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}}
-      DASHBOARD_HOST: ${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}
+      PUBLIC_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-9router.tuannguyenviet.site}}
+      NEXT_PUBLIC_BASE_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-9router.tuannguyenviet.site}}
+      DASHBOARD_HOST: ${DASHBOARD_HOST:-9router.tuannguyenviet.site}
       API_HOST: ${API_HOST:-9router-api.tuannguyenviet.site}
       CLOUDFLARE_ACCESS_TEAM_NAME: ${CLOUDFLARE_ACCESS_TEAM_NAME:-}
       CLOUDFLARE_ACCESS_AUD: ${CLOUDFLARE_ACCESS_AUD:-}

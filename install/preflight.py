@@ -22,7 +22,7 @@ def main():
     require(len(live) >= 1, 'NO_RUNNING_SLOT')
     sockets = [m for value in live.values() for m in value['Mounts'] if m['Destination'] == '/run/9router-chatgpt-web']
     require(not sockets or all(profile.get('bridge_socket_root') == m['Source'] for m in sockets), 'BRIDGE_PROFILE_REQUIRED')
-    env = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'IMAGE_REF': container_digest(next(iter(live.values())), APP_IMAGE), 'DASHBOARD_HOST': profile.get('dashboard_host', '9router-admin.tuannguyenviet.site'), 'API_HOST': profile.get('api_host', '9router-api.tuannguyenviet.site'), 'EDGE_NETWORK': 'edge-9router', 'RTK_NETWORK': '9router-rtk'}
+    env = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'IMAGE_REF': container_digest(next(iter(live.values())), APP_IMAGE), 'DASHBOARD_HOST': profile.get('dashboard_host', '9router.tuannguyenviet.site'), 'API_HOST': profile.get('api_host', '9router-api.tuannguyenviet.site'), 'EDGE_NETWORK': 'edge-9router', 'RTK_NETWORK': '9router-rtk'}
     args = ['/usr/bin/docker', 'compose', '--env-file', str(runtime), '-p', '9router', '-f', str(root/'apps/9router/docker-compose.prod.yml')]
     if sockets:
         env['CHATGPT_WEB_SOCKET_ROOT'] = profile['bridge_socket_root']

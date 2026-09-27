@@ -98,7 +98,7 @@ sys.path.insert(0, '/opt/vps-deploy/releases/' + sys.argv[1] + '/lib')
 from core import save
 cfg = Path('/etc/vps-deploy/apps/9router')
 if not (cfg/'host.json').exists():
-    profile = {'platform_ref':sys.argv[1], 'dynamic_dir':'/opt/platform/edge/dynamic', 'api_host':'9router-api.tuannguyenviet.site', 'dashboard_host':'9router-admin.tuannguyenviet.site', 'dashboard_alias_host':'9router.tuannguyenviet.site', 'work_dir':'/opt/9router', 'compose_project':'9router', 'edge_network':'edge-9router', 'rtk_network':'9router-rtk', 'route_name':'9router.yml'}
+    profile = {'platform_ref':sys.argv[1], 'dynamic_dir':'/opt/platform/edge/dynamic', 'api_host':'9router-api.tuannguyenviet.site', 'dashboard_host':'9router.tuannguyenviet.site', 'dashboard_alias_host':'9router-admin.tuannguyenviet.site', 'work_dir':'/opt/9router', 'compose_project':'9router', 'edge_network':'edge-9router', 'rtk_network':'9router-rtk', 'route_name':'9router.yml'}
     save(cfg/'host.json',profile)
 else:
     profile=json.loads((cfg/'host.json').read_text()); profile['platform_ref']=sys.argv[1]; save(cfg/'host.json',profile)
