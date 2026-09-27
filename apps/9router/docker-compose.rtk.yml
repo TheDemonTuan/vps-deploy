@@ -1,0 +1,40 @@
+name: ${RTK_PROJECT:-9router-rtk}
+services:
+  rtk:
+    image: ${RTK_IMAGE:?RTK_IMAGE must be pinned}
+    restart: unless-stopped
+    environment:
+      HOME: /tmp
+      RTK_TELEMETRY_DISABLED: "1"
+      RTK_RECALL: "0"
+      RTK_TEE: "0"
+      NO_COLOR: "1"
+    networks:
+      rtk:
+        aliases: [rtk]
+    expose: ["8080"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1.0
+    ulimits:
+      core: 0
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:8080/health');if(!r.ok || !(await r.json()).ok)process.exit(1)"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+networks:
+  rtk:
+    name: ${RTK_NETWORK:-9router-rtk}
+    internal: true

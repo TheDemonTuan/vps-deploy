@@ -1,0 +1,100 @@
+services:
+  9router-blue:
+    image: ${IMAGE_REF:-decolua/9router:latest}
+    container_name: 9router-blue
+    restart: unless-stopped
+    expose:
+      - "20128"
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: "0.0.0.0"
+      DEPLOY_SLOT: blue
+      NODE_ENV: production
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD:?INITIAL_PASSWORD must be set for production}
+      PUBLIC_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}}
+      NEXT_PUBLIC_BASE_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}}
+      DASHBOARD_HOST: ${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}
+      API_HOST: ${API_HOST:-9router-api.tuannguyenviet.site}
+      CLOUDFLARE_ACCESS_TEAM_NAME: ${CLOUDFLARE_ACCESS_TEAM_NAME:-}
+      CLOUDFLARE_ACCESS_AUD: ${CLOUDFLARE_ACCESS_AUD:-}
+      RTK_URL: ${RTK_URL-http://rtk:8080}
+    volumes:
+      - 9router-data:/app/data
+    networks:
+      - edge
+      - internal
+      - rtk
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:20128/api/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  9router-green:
+    image: ${IMAGE_REF:-decolua/9router:latest}
+    container_name: 9router-green
+    restart: unless-stopped
+    expose:
+      - "20128"
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: "0.0.0.0"
+      DEPLOY_SLOT: green
+      NODE_ENV: production
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD:?INITIAL_PASSWORD must be set for production}
+      PUBLIC_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}}
+      NEXT_PUBLIC_BASE_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}}
+      DASHBOARD_HOST: ${DASHBOARD_HOST:-9router-admin.tuannguyenviet.site}
+      API_HOST: ${API_HOST:-9router-api.tuannguyenviet.site}
+      CLOUDFLARE_ACCESS_TEAM_NAME: ${CLOUDFLARE_ACCESS_TEAM_NAME:-}
+      CLOUDFLARE_ACCESS_AUD: ${CLOUDFLARE_ACCESS_AUD:-}
+      RTK_URL: ${RTK_URL-http://rtk:8080}
+    volumes:
+      - 9router-data:/app/data
+    networks:
+      - edge
+      - internal
+      - rtk
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:20128/api/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-edge-9router}
+  internal:
+    driver: bridge
+  rtk:
+    external: true
+    name: ${RTK_NETWORK:-9router-rtk}
+
+volumes:
+  9router-data:
+    name: 9router-data

@@ -1,0 +1,17 @@
+# Optional native ChatGPT Web bridge integration.
+# Keep this override disabled for deployments without a provisioned host bridge.
+services:
+  9router-blue:
+    environment:
+      CHATGPT_WEB_BRIDGE_SOCKET_ROOT: /run/9router-chatgpt-web
+    volumes:
+      - ${CHATGPT_WEB_SOCKET_ROOT:-/run/9router-chatgpt-web}:/run/9router-chatgpt-web:ro
+    group_add:
+      - "${CHATGPT_WEB_SOCKET_GID:?Set CHATGPT_WEB_SOCKET_GID to the host bridge socket group}"
+  9router-green:
+    environment:
+      CHATGPT_WEB_BRIDGE_SOCKET_ROOT: /run/9router-chatgpt-web
+    volumes:
+      - ${CHATGPT_WEB_SOCKET_ROOT:-/run/9router-chatgpt-web}:/run/9router-chatgpt-web:ro
+    group_add:
+      - "${CHATGPT_WEB_SOCKET_GID:?Set CHATGPT_WEB_SOCKET_GID to the host bridge socket group}"
