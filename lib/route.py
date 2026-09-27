@@ -165,9 +165,8 @@ if __name__ == '__main__':
     try:
         path, source, previous = sys.argv[2:]
         require(Path(path).is_absolute() and Path(source).is_absolute() and re.fullmatch('[0-9a-f]{64}', previous), 'ROUTE_ARGUMENT')
-        publish(Path(path), checked_file(Path(source)), previous)
+        trusted_path(Path(source))
+        require(stat.S_IMODE(Path(source).stat().st_mode) == 0o600, 'ROUTE_CANDIDATE_POLICY')
+        publish(Path(path), Path(source).read_bytes(), previous)
     except (Failure, OSError):
-        if __import__('core').fixture_authorized():
-            import traceback
-            traceback.print_exc()
         sys.exit(1)
