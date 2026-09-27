@@ -1,5 +1,6 @@
 FROM oven/bun:1.4.2-alpine AS bun
 FROM python:3.12-alpine
+RUN apk add --no-cache libstdc++
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY server.py /fixture/server.py
 ARG FIXTURE_MODE=app
