@@ -167,4 +167,7 @@ if __name__ == '__main__':
         require(Path(path).is_absolute() and Path(source).is_absolute() and re.fullmatch('[0-9a-f]{64}', previous), 'ROUTE_ARGUMENT')
         publish(Path(path), checked_file(Path(source)), previous)
     except (Failure, OSError):
+        if __import__('core').fixture_authorized():
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
