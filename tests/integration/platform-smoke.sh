@@ -60,7 +60,6 @@ chmod 0700 /etc/vps-deploy /etc/vps-deploy/apps "$profile" /var/lib/vps-deploy /
 install -d -m 0755 "$release"
 for area in bin lib apps schema install; do cp -a "$root/$area" "$release/$area"; done
 chown -R root:root "$release"; chmod -R go-w "$release"
-chmod 0755 "$release/bin/deployctl"
 ln -s "$release" /opt/vps-deploy/current
 install -m 0600 /dev/null /etc/vps-deploy/fixture-ci
 printf '%s\n' "127.0.0.1 $api dashboard.platform-smoke.test legacy.platform-smoke.test sentinel.platform-smoke.test # vps-deploy-smoke" >> /etc/hosts
