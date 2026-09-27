@@ -57,8 +57,7 @@ pull_image() {
       while true; do sleep 15 || break; printf '[pull] %s still downloading\n' "$slot" >&2; done
     ) &
     heartbeat=$!
-    # shellcheck disable=SC2016 # $0/$@ expand in the child shell, not here.
-    if timeout 300 bash -c 'exec "$0" "$@"' "${BASH_SOURCE[0]}" pull-once "$release" "$config" "$slot"; then
+    if timeout 300 compose_app "$release" "$config" pull "9router-$slot"; then
       kill -TERM "$heartbeat" 2>/dev/null || true
       pkill -TERM -P "$heartbeat" 2>/dev/null || true
       wait "$heartbeat" 2>/dev/null || true
@@ -114,7 +113,6 @@ handoff() {
 case "${1:-}" in
   health) [[ $# == 2 || $# == 3 ]] && direct_slot_healthy "$2" "${3:-health}" ;;
   rtk) [[ $# == 2 ]] && rtk_healthy "$2" ;;
-  pull-once) [[ $# == 4 ]] && compose_app "$2" "$3" pull "9router-$4" ;;
   pull) [[ $# == 4 ]] && pull_image "$2" "$3" "$4" ;;
   candidate) [[ $# == 4 ]] && start_candidate "$2" "$3" "$4" ;;
   rollback) [[ $# == 2 ]] && start_previous "$2" ;;
