@@ -75,9 +75,10 @@ SafeLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, yaml_
 
 def parse_yaml(raw):
     require(len(raw) <= 65536, 'MANIFEST_TOO_LARGE')
-    require(not re.search(rb'(^|[\s\[{,])(?:[&*][A-Za-z0-9_-]+|![A-Za-z])', raw), 'UNSAFE_YAML')
     try:
-        value = yaml.load(raw.decode('utf-8'), Loader=SafeLoader)
+        text = raw.decode('utf-8')
+        require(not any(isinstance(token, (yaml.tokens.AnchorToken, yaml.tokens.AliasToken, yaml.tokens.TagToken)) for token in yaml.scan(text)), 'UNSAFE_YAML')
+        value = yaml.load(text, Loader=SafeLoader)
     except (yaml.YAMLError, UnicodeError):
         raise Failure('INVALID_YAML') from None
     require(type(value) is dict, 'INVALID_YAML')

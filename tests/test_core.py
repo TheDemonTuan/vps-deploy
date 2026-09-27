@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-from core import Failure, atomic, digest, manifest, parse_json, request
+from core import Failure, atomic, digest, manifest, parse_json, parse_yaml, request
 
 GOOD = b'''version: 1
 app: 9router
@@ -26,6 +26,12 @@ class Validation(unittest.TestCase):
         for bad in (GOOD+b'unknown: true\n', GOOD.replace(b'port: 20128', b'port: true'), GOOD.replace(b'app: 9router', b'app: 9router\napp: 9router'), GOOD.replace(b'port: 20128', b'port: &x 20128'), GOOD+b'---\napp: 9router\n', GOOD+b' '*65536):
             with self.subTest(bad=bad[:30]), self.assertRaises(Failure):
                 manifest(bad)
+
+    def test_quoted_rule_negation_is_not_yaml_tag(self):
+        self.assertEqual(parse_yaml(b'rule: "Host(`example.test`) && !PathPrefix(`/internal`)"\n')['rule'], 'Host(`example.test`) && !PathPrefix(`/internal`)')
+        for bad in (b'item: &anchor value\n', b'item: *anchor\n', b'item: !custom value\n'):
+            with self.subTest(bad=bad), self.assertRaisesRegex(Failure, 'UNSAFE_YAML'):
+                parse_yaml(bad)
 
     def test_request_rejects_boundary_mutations(self):
         self.assertEqual(request(BASE.encode())['request_id'], 'canary-1')
