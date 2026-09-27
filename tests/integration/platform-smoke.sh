@@ -136,7 +136,7 @@ interrupted_status() { local id=$1 expected=${2:-recovery_required} outcome
     if [[ $(python3 -c 'import json,sys;print(json.load(sys.stdin)["status"])' <<< "$outcome") == "$expected" ]]; then printf '%s\n' "$outcome"; return 0; fi
     sleep .2
   done
-  echo "No $expected status: $id" >&2; return 1
+  echo "No $expected status: $id" >&2; printf '%s\n' "$outcome" >&2; journalctl -u "vps-deploy-9router-$id" --no-pager -n 25 >&2; return 1
 }
 poll() { local id=$1 outcome
   for _ in {1..90}; do
