@@ -75,6 +75,7 @@ jobs:
           test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
           printf '%s\n' "$DEPLOY_SSH_KEY" > "$sshdir/key"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$sshdir/known_hosts"
+          ssh-keygen -lf "$sshdir/known_hosts" | cut -d' ' -f 2
           export DEPLOY_KEY_FILE="$sshdir/key" DEPLOY_KNOWN_HOSTS_FILE="$sshdir/known_hosts"
           python3 ../platform/scripts/ssh-request.py --operation deploy --component "$COMPONENT" --image "$IMAGE_REF" \
             --source-sha "$SOURCE_SHA" --platform-ref "$PLATFORM_REF" --config "$CONFIG" \
