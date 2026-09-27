@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Retained direct identity and drain protocol from legacy 9router deployment.
+# Validated internal values supplied by the root-owned engine, never by SSH client input.
+[[ ${APP_ID:-} =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ && ${APP_PORT:-} =~ ^[0-9]+$ && ${HEALTH_PATH:-} =~ ^/[A-Za-z0-9._/-]*$ && ${COMPOSE_PROJECT:-} == "$APP_ID" && ${EDGE_NETWORK:-} == "edge-$APP_ID" ]] || exit 2
 direct_slot_healthy() {
-  local slot="$1" mode="${2:-health}" container="9router-$1" hostname health
+  local slot="$1" mode="${2:-health}" container="$APP_ID-$1" hostname health
   hostname="$(docker inspect "$container" --format '{{.Config.Hostname}}' 2>/dev/null)" || return 1
   [[ -n "$hostname" ]] || return 1
-  health="$(timeout 6 docker exec "$container" wget -T 5 -qO- http://127.0.0.1:20128/api/health 2>/dev/null)" || return 1
+  health="$(timeout 6 docker exec "$container" wget -T 5 -qO- "http://127.0.0.1:$APP_PORT$HEALTH_PATH" 2>/dev/null)" || return 1
   python3 - "$slot" "$hostname" "$health" "$mode" <<'PY'
 import json, sys
 
@@ -42,11 +43,11 @@ rtk_healthy() {
 
 compose_app() {
   local release="$1" config="$2"; shift 2
-  local args=(--env-file "$config/runtime.env" -p 9router -f "$release/apps/9router/docker-compose.prod.yml")
+  local args=(--env-file "$config/runtime.env" -p "$COMPOSE_PROJECT" -f "$release/apps/$APP_ID/docker-compose.prod.yml")
   if [[ -n "${CHATGPT_WEB_SOCKET_GID:-}" ]]; then
-    args+=(-f "$release/apps/9router/docker-compose.chatgpt-web.yml")
+    args+=(-f "$release/apps/$APP_ID/docker-compose.chatgpt-web.yml")
   fi
-  docker compose "${args[@]}" --ansi=never --progress=plain "$@"
+  timeout 300 docker compose "${args[@]}" --ansi=never --progress=plain "$@"
 }
 
 
@@ -58,11 +59,7 @@ pull_image() {
       while true; do sleep 15 || break; printf '[pull] %s still downloading\n' "$slot" >&2; done
     ) &
     heartbeat=$!
-    local args=(--env-file "$config/runtime.env" -p 9router -f "$release/apps/9router/docker-compose.prod.yml")
-    if [[ -n "${CHATGPT_WEB_SOCKET_GID:-}" ]]; then
-      args+=(-f "$release/apps/9router/docker-compose.chatgpt-web.yml")
-    fi
-    if timeout 300 docker compose "${args[@]}" --ansi=never --progress=plain pull "9router-$slot"; then
+    if compose_app "$release" "$config" pull "$APP_ID-$slot"; then
       kill -TERM "$heartbeat" 2>/dev/null || true
       pkill -TERM -P "$heartbeat" 2>/dev/null || true
       wait "$heartbeat" 2>/dev/null || true
@@ -89,7 +86,7 @@ wait_healthy() {
 }
 
 start_candidate() {
-  local release="$1" config="$2" slot="$3" name="9router-$3" state
+  local release="$1" config="$2" slot="$3" name="$APP_ID-$3" state
   state="$(docker inspect "$name" --format '{{.State.Status}}' 2>/dev/null || true)"
   if [[ $state == running ]]; then
     direct_slot_healthy "$slot" idle >/dev/null || { echo DRAIN_UNSAFE >&2; return 1; }
@@ -100,7 +97,7 @@ start_candidate() {
 }
 
 start_previous() {
-  local slot="$1" name="9router-$1" state
+  local slot="$1" name="$APP_ID-$1" state
   state="$(docker inspect "$name" --format '{{.State.Status}}')" || return 1
   if [[ $state != running ]]; then docker start "$name" >/dev/null; fi
   wait_healthy "$slot"

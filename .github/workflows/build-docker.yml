@@ -1,7 +1,10 @@
-name: Build 9router image
+name: Build registered app image
 on:
   workflow_call:
     inputs:
+      app:
+        required: true
+        type: string
       source-sha:
         required: true
         type: string
@@ -25,46 +28,72 @@ jobs:
     outputs:
       image-ref: ${{ steps.smoke.outputs.image-ref }}
     steps:
-      - name: Reject untrusted caller before checkout
+      - name: Reject mutable platform checkout
         env:
+          APP: ${{ inputs.app }}
           SOURCE_SHA: ${{ inputs.source-sha }}
           PLATFORM_REF: ${{ inputs.platform-ref }}
-          CONFIG: ${{ inputs.config }}
-          CALLER_REPO: ${{ github.repository }}
           CALLER_SHA: ${{ github.sha }}
-          CALLER_REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
-          [[ "$CALLER_REPO" == TheDemonTuan/9router && "$CALLER_REF_TYPE" == branch && "$CONFIG" == .deploy/app.yml ]]
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" && "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ ]]
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: TheDemonTuan/9router
-          ref: ${{ inputs.source-sha }}
-          path: source
-          persist-credentials: false
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" ]]
+          [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APP" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: TheDemonTuan/vps-deploy
           ref: ${{ inputs.platform-ref }}
           path: platform
           persist-credentials: false
-      - name: Validate checked out inputs
+      - name: Validate registered caller before source checkout
         env:
+          APP: ${{ inputs.app }}
           SOURCE_SHA: ${{ inputs.source-sha }}
           PLATFORM_REF: ${{ inputs.platform-ref }}
           CONFIG: ${{ inputs.config }}
-        run: python3 platform/scripts/check-caller.py build-docker.yml
-      - name: Validate registered manifest contract
+          CALLER_REPO: ${{ github.repository }}
+          CALLER_SHA: ${{ github.sha }}
+          CALLER_REF: ${{ github.ref }}
+          OPERATION: build
+          COMPONENT: app
+          IMAGE_REF: ''
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y python3-yaml
+          python3 platform/scripts/check-caller.py build-docker.yml --preflight
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.source-sha }}
+          path: source
+          persist-credentials: false
+      - name: Validate checked out caller and registered manifest
+        env:
+          APP: ${{ inputs.app }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+          CONFIG: ${{ inputs.config }}
+          CALLER_REPO: ${{ github.repository }}
+          CALLER_SHA: ${{ github.sha }}
+          CALLER_REF: ${{ github.ref }}
+          OPERATION: build
+          COMPONENT: app
+          IMAGE_REF: ''
+        run: |
+          set -euo pipefail
+          python3 platform/scripts/check-caller.py build-docker.yml
           python3 - <<'PY'
-          import sys
+          import os, sys
           from pathlib import Path
           sys.path.insert(0, 'platform/lib')
-          from core import manifest
-          manifest(Path('source/.deploy/app.yml').read_bytes())
+          from core import app_registration
+          registration = app_registration(Path('platform'), os.environ['APP'])
+          image = registration['manifest']['image']
+          if not image.startswith('ghcr.io/') or registration['manifest']['platform'] != 'linux/arm64':
+              raise SystemExit('unsupported production build policy')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write('REGISTERED_IMAGE=' + image + '\n')
           PY
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -81,8 +110,8 @@ jobs:
           push: true
           platforms: linux/arm64
           tags: |
-            ghcr.io/thedemontuan/9router:sha-${{ inputs.source-sha }}
-            ghcr.io/thedemontuan/9router:latest
+            ${{ env.REGISTERED_IMAGE }}:sha-${{ inputs.source-sha }}
+            ${{ env.REGISTERED_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=min,ignore-error=true
           provenance: false
@@ -91,9 +120,10 @@ jobs:
         id: smoke
         working-directory: source
         env:
-          IMAGE_REF: ghcr.io/thedemontuan/9router@${{ steps.digest.outputs.digest }}
+          IMAGE_REF: ${{ env.REGISTERED_IMAGE }}@${{ steps.digest.outputs.digest }}
+          REGISTERED_IMAGE: ${{ env.REGISTERED_IMAGE }}
         run: |
           set -euo pipefail
-          [[ "$IMAGE_REF" =~ ^ghcr\.io/thedemontuan/9router@sha256:[0-9a-f]{64}$ ]]
+          [[ "$IMAGE_REF" =~ ^${REGISTERED_IMAGE}@sha256:[0-9a-f]{64}$ ]]
           bash .deploy/smoke-image.sh "$IMAGE_REF"
           echo "image-ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"

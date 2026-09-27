@@ -1,7 +1,0 @@
-[Unit]
-Description=Clean only verified idle 9router inactive slot
-
-[Service]
-Type=oneshot
-ExecStart=/opt/vps-deploy/current/bin/deployctl cleanup-drains --app 9router
-TimeoutStartSec=120

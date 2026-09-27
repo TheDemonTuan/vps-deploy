@@ -1,10 +1,10 @@
 [Unit]
-Description=Check 9router inactive slot drain
+Description=Check %i inactive deployment slot drain
 
 [Timer]
 OnBootSec=60s
 OnUnitInactiveSec=60s
-Unit=vps-deploy-9router-drain.service
+Unit=vps-deploy-drain@%i.service
 
 [Install]
 WantedBy=timers.target

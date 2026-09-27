@@ -20,6 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Install YAML parser and actionlint
         run: |
@@ -27,9 +28,14 @@ jobs:
           sudo apt-get install -y python3-yaml openssh-server
           go install github.com/rhysd/actionlint/cmd/actionlint@393031adb9afb225ee52ae2ccd7a5af5525e03e8
           "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
+      - name: Verify immutable migration baseline
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/vps-deploy-baseline" 4e9674ad29112a02d2384f6542cc64644da33dea
+          (cd "$RUNNER_TEMP/vps-deploy-baseline" && python3 -m unittest discover -s tests -p 'test_*.py' -v)
+          (cd "$RUNNER_TEMP/vps-deploy-baseline" && bash tests/blue-green-reconcile.test.sh)
       - name: Exercise state, input and crash boundaries
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - name: Exercise adapted blue-green harness
         run: bash tests/blue-green-reconcile.test.sh
       - name: Exercise disposable Traefik and systemd integration
-        run: sudo RUNNER_TEMP="$RUNNER_TEMP" bash tests/integration/platform-smoke.sh
+        run: sudo RUNNER_TEMP="$RUNNER_TEMP" bash tests/integration/platform-smoke.sh --migration-base "$RUNNER_TEMP/vps-deploy-baseline"

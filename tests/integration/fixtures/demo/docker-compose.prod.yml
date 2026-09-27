@@ -1,0 +1,22 @@
+services:
+  demo-blue:
+    image: ${IMAGE_REF:?image required}
+    container_name: demo-blue
+    expose: ["18081"]
+    environment: {APP_PORT: "18081", HEALTH_PATH: /healthz, DEPLOY_SLOT: blue}
+    volumes: ["demo-data:/app/data"]
+    networks: [edge]
+  demo-green:
+    image: ${IMAGE_REF:?image required}
+    container_name: demo-green
+    expose: ["18081"]
+    environment: {APP_PORT: "18081", HEALTH_PATH: /healthz, DEPLOY_SLOT: green}
+    volumes: ["demo-data:/app/data"]
+    networks: [edge]
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:?edge network required}
+volumes:
+  demo-data:
+    name: demo-data
