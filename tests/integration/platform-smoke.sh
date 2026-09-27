@@ -210,6 +210,7 @@ YAML
 docker run -d --name edge-traefik --network edge-9router -p 127.0.0.1:18080:80 -v "$fixture/dynamic:/etc/traefik/dynamic:ro" -v "$fixture/traefik.yml:/etc/traefik/traefik.yml:ro" traefik:v3.7.13 >/dev/null
 for _ in {1..40}; do if curl -fsS --cacert "$ca" "https://$api/api/health" | python3 -c 'import json,sys;assert json.load(sys.stdin)["deployment_slot"]=="blue"' 2>/dev/null; then break; fi; sleep .5; done
 curl -fsS --cacert "$ca" "https://$api/api/health" | assert_json '{"deployment_slot":"blue"}'
+CURL_CA_BUNDLE="$ca" bash "$release/lib/traefik.sh" probe "$api" || { curl -fsS --cacert "$ca" -D - "https://$api/api/health?deploy_probe=fixture" >&2; exit 1; }
 "$release/bin/deployctl" adopt --app 9router --strict | assert_json '{"healthy":true}'
 foreign=$(printf '{"version":1,"op":"status","app":"acb"}' | ssh_request || true)
 printf '%s' "$foreign" | assert_json '{"status":"failed","error_code":"INVALID_APP"}'
