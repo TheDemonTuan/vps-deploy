@@ -71,6 +71,7 @@ done
 trap cleanup EXIT
 mkdir -m 0755 "$fixture"
 mkdir -p "$fixture/dynamic" "$fixture/work" /opt/vps-deploy/releases /etc/vps-deploy/apps "$profile" /var/lib/vps-deploy/apps "$state/requests" "$locks"
+install -d -m 0755 /opt/vps-deploy /opt/vps-deploy/releases
 chmod 0700 /etc/vps-deploy /etc/vps-deploy/apps "$profile" /var/lib/vps-deploy /var/lib/vps-deploy/apps "$state" "$state/requests" "$locks" "$fixture/work"
 install -d -m 0755 "$release"
 for area in bin lib apps schema install; do cp -a "$root/$area" "$release/$area"; done
@@ -264,6 +265,7 @@ git -C "$fixture/source" -c user.name=Fixture -c user.email=fixture@example.inva
 app_sha=$(git -C "$fixture/source" rev-parse HEAD)
 state_before=$(sha256sum "$state/state.json" | cut -d' ' -f1)
 route_before=$(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1)
+stat -c '%n %u %a' / /opt /opt/vps-deploy /opt/vps-deploy/releases "$new_release"
 bash "$new_release/install/install.sh" --fixture --check --app 9router --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/key.pub"
 [[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$route_before" ]]
 bash "$new_release/install/install.sh" --fixture --app 9router --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/key.pub"
