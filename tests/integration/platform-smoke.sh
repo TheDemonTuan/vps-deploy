@@ -223,7 +223,7 @@ if scp -O -P "$ssh_port" -i "$fixture/key" -o UserKnownHostsFile="$fixture/known
 if ssh -W 127.0.0.1:5000 "${ssh_args[@]}" deploy-9router@127.0.0.1 </dev/null >/dev/null 2>&1; then echo 'Forwarding accepted' >&2; exit 1; fi
 ssh-keygen -q -t ed25519 -N '' -f "$fixture/wrong-host"
 printf '[127.0.0.1]:%s %s\n' "$ssh_port" "$(cat "$fixture/wrong-host.pub")" > "$fixture/wrong-known"
-if printf '{"version":1,"op":"status","app":"9router"}' | ssh "${ssh_args[@]}" -o UserKnownHostsFile="$fixture/wrong-known" deploy-9router@127.0.0.1 deployctl >/dev/null 2>&1; then echo 'Wrong host key accepted' >&2; exit 1; fi
+if printf '{"version":1,"op":"status","app":"9router"}' | ssh -i "$fixture/key" -p "$ssh_port" -o UserKnownHostsFile="$fixture/wrong-known" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes deploy-9router@127.0.0.1 deployctl >/dev/null 2>&1; then echo 'Wrong host key accepted' >&2; exit 1; fi
 printf '{"version":1,"op":"status","app":"9router"}' | ssh_request | assert_json '{"healthy":true}'
 [[ $(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$ca" "https://$api/internal") == 403 ]]
 [[ $(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$ca" "https://$api/api/settings") == 403 ]]
