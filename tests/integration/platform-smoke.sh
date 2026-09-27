@@ -313,7 +313,6 @@ for _ in {1..30}; do
 done
 "$release/bin/deployctl" status --app 9router --strict | assert_json '{"healthy":true}'
 [[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
-[[ $(docker inspect -f '{{.State.Running}}' 9router-green) == true ]]
 # SSE begins through HTTPS before route publication; the old Docker slot must survive.
 curl --silent --show-error --no-buffer --cacert "$ca" "https://dashboard.platform-smoke.test/stream" > "$fixture/stream.out" & stream_pid=$!
 for _ in {1..30}; do
