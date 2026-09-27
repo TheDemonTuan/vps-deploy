@@ -394,8 +394,5 @@ if __name__ == '__main__':
     try:
         main()
     except (Failure, OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired) as exc:
-        if '--fixture' in sys.argv:
-            import traceback
-            traceback.print_exc()
         print(exc.code if isinstance(exc, Failure) else 'INSTALL_IO_ERROR', file=sys.stderr)
         sys.exit(1)

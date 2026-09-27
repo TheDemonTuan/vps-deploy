@@ -53,6 +53,7 @@ cleanup() {
   [[ -z ${demo_user_created:-} ]] || userdel -r deploy-demo >/dev/null 2>&1
   rm -rf -- "$baseline_release" "$new_release" "$profile" "$state" /etc/vps-deploy/apps/demo /var/lib/vps-deploy/apps/demo "$fixture"
   if [[ ${sshd_directory_created:-} == 1 ]]; then rmdir /run/sshd 2>/dev/null || true; fi
+  [[ -z ${opt_mode:-} ]] || chmod "$opt_mode" /opt
 }
 for path in /etc/vps-deploy/fixture-ci "$profile" "$state" "$release" "$new_release" /etc/vps-deploy/apps/demo /var/lib/vps-deploy/apps/demo /opt/vps-deploy/current /usr/local/libexec/vps-deploy-9router /usr/local/libexec/vps-deploy-demo /usr/local/libexec/vps-deploy-drain-9router /usr/local/libexec/vps-deploy-drain-demo /etc/sudoers.d/vps-deploy-9router /etc/sudoers.d/vps-deploy-demo /etc/systemd/system/vps-deploy-drain@.service /etc/systemd/system/vps-deploy-drain@.timer; do
   [[ ! -e $path && ! -L $path ]] || { echo "Refusing occupied fixture path $path" >&2; exit 1; }
@@ -68,7 +69,10 @@ for tagged in localhost:5000/9router:first localhost:5000/9router:second localho
   ! docker image inspect "$tagged" >/dev/null 2>&1 || { echo "Image tag occupied: $tagged" >&2; exit 1; }
 done
 ! id deploy-demo >/dev/null 2>&1 || { echo 'User occupied: deploy-demo' >&2; exit 1; }
+[[ $(stat -c %u /opt) == 0 && ! -L /opt ]] || { echo 'Untrusted runner /opt' >&2; exit 1; }
+opt_mode=$(stat -c %a /opt)
 trap cleanup EXIT
+chmod 0755 /opt
 mkdir -m 0755 "$fixture"
 mkdir -p "$fixture/dynamic" "$fixture/work" /opt/vps-deploy/releases /etc/vps-deploy/apps "$profile" /var/lib/vps-deploy/apps "$state/requests" "$locks"
 install -d -m 0755 /opt/vps-deploy /opt/vps-deploy/releases
@@ -265,7 +269,6 @@ git -C "$fixture/source" -c user.name=Fixture -c user.email=fixture@example.inva
 app_sha=$(git -C "$fixture/source" rev-parse HEAD)
 state_before=$(sha256sum "$state/state.json" | cut -d' ' -f1)
 route_before=$(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1)
-stat -c '%n %u %a' / /opt /opt/vps-deploy /opt/vps-deploy/releases "$new_release"
 bash "$new_release/install/install.sh" --fixture --check --app 9router --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/key.pub"
 [[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$route_before" ]]
 bash "$new_release/install/install.sh" --fixture --app 9router --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/key.pub"
