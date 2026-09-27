@@ -1,0 +1,25 @@
+version: 1
+app: 9router
+host: oracle-main
+caller:
+  repository: TheDemonTuan/9router
+  ref: refs/heads/master
+  config: .deploy/app.yml
+  build_workflows: [deploy.yml]
+  deploy_workflows: [deploy.yml, rtk-sidecar.yml, deploy-ops.yml]
+manifest:
+  version: 1
+  app: 9router
+  strategy: blue-green
+  image: ghcr.io/thedemontuan/9router
+  platform: linux/arm64
+  runtime: {port: 20128}
+  health: {path: /api/health, timeout_seconds: 60}
+  route: {timeout_seconds: 30}
+  rtk: {image: ghcr.io/thedemontuan/rtk-sidecar}
+runtime:
+  allowed_env: [INITIAL_PASSWORD, PUBLIC_URL, CLOUDFLARE_ACCESS_TEAM_NAME, CLOUDFLARE_ACCESS_AUD, RTK_URL, CHATGPT_WEB_SOCKET_ROOT, CHATGPT_WEB_SOCKET_GID]
+  required_env: [INITIAL_PASSWORD]
+route:
+  generation_header: X-9Router-Route-Generation
+  required_middlewares: [deny-internal, tunnel-only, public-api-rate-limit, security-headers]
