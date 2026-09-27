@@ -270,9 +270,6 @@ if __name__ == '__main__':
     try:
         sys.exit(main())
     except (Failure, OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired) as error:
-        if __import__('core').fixture_authorized():
-            import traceback
-            traceback.print_exc()
         code = error.code if isinstance(error, Failure) else 'HOST_IO_ERROR'
         print(json.dumps({'status': 'failed', 'error_code': code}))
         sys.exit(1)

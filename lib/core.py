@@ -416,6 +416,7 @@ def host(config, registration, host_record):
         fixture_image = 'localhost:5000/' + app
         fixture_rtk = 'localhost:5000/rtk-sidecar' if 'rtk' in registration['manifest'] else None
         require(value['architecture'] == native and value['image_repository'] == fixture_image and value.get('rtk_image_repository') == fixture_rtk, 'FIXTURE_POLICY')
+        value['rtk_image_repository'] = fixture_rtk
         require(type(value['ca_bundle']) is str, 'FIXTURE_POLICY')
         trusted_path(value['ca_bundle'])
         if 'fault_file' in value:
