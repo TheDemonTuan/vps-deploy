@@ -90,6 +90,10 @@ fd=os.open(os.path.dirname(sys.argv[1]),os.O_DIRECTORY)
 os.fsync(fd);os.close(fd)
 PY
 fi
+if command -v restorecon >/dev/null 2>&1 && command -v matchpathcon >/dev/null 2>&1; then
+  restorecon -R "$RELEASE_DIR"
+  [[ $(stat -c %C "$RELEASE_DIR/bin/deployctl" | cut -d: -f3) == "$(matchpathcon -n "$RELEASE_DIR/bin/deployctl" | cut -d: -f3)" ]] || { echo RELEASE_CONTEXT >&2; exit 1; }
+fi
 install -m 0600 "$MANIFEST" /etc/vps-deploy/apps/9router/app.yml
 python3 - "$RELEASE" <<'PY'
 import json, os, sys
