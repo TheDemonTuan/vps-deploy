@@ -85,6 +85,7 @@ def main():
     # A lost submit receipt is replayed with exactly the same request ID and payload.
     answer = connected(payload)
     if args.operation != "status":
+        print(json.dumps({"receipt": answer}, sort_keys=True), flush=True)
         status_request = dict(version=1, op="status", app="9router", request_id=args.request_id)
         while answer.get("status") not in ("complete", "failed", "recovery_required"):
             if time.monotonic() >= deadline:
