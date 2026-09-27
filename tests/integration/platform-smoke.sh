@@ -23,6 +23,7 @@ registry=localhost:5000
 ssh_port=22222
 cleanup() {
   set +e
+  trap - ERR
   if [[ -n ${publisher:-} ]]; then touch "$fixture/publisher-release"; wait "$publisher" 2>/dev/null; fi
   [[ -z ${tls_pid:-} ]] || { kill "$tls_pid"; wait "$tls_pid" 2>/dev/null; }
   [[ -z ${sshd_pid:-} ]] || { kill "$sshd_pid"; wait "$sshd_pid" 2>/dev/null; }
@@ -38,6 +39,7 @@ cleanup() {
   rm -f /etc/vps-deploy/fixture-ci /opt/vps-deploy/current /usr/local/libexec/vps-deploy-9router /etc/sudoers.d/vps-deploy-9router
   [[ -z ${user_created:-} ]] || userdel -r deploy-9router >/dev/null 2>&1
   rm -rf -- "$release" "$profile" "$state" "$fixture"
+  if [[ ${sshd_directory_created:-} == 1 ]]; then rmdir /run/sshd 2>/dev/null || true; fi
 }
 for path in /etc/vps-deploy/fixture-ci "$profile" "$state" "$release" /opt/vps-deploy/current /usr/local/libexec/vps-deploy-9router /etc/sudoers.d/vps-deploy-9router; do
   [[ ! -e $path && ! -L $path ]] || { echo "Refusing occupied fixture path $path" >&2; exit 1; }
@@ -114,6 +116,7 @@ X11Forwarding no
 Subsystem sftp internal-sftp
 LogLevel ERROR
 EOF
+if [[ ! -d /run/sshd ]]; then install -d -m 0755 /run/sshd; sshd_directory_created=1; fi
 /usr/sbin/sshd -f "$fixture/sshd_config" -E "$fixture/sshd.log"; sshd_pid=$(cat "$fixture/sshd.pid")
 printf '[127.0.0.1]:%s %s\n' "$ssh_port" "$(cat "$fixture/hostkey.pub")" > "$fixture/known_hosts"
 ssh_args=(-i "$fixture/key" -p "$ssh_port" -o UserKnownHostsFile="$fixture/known_hosts" -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=5)
