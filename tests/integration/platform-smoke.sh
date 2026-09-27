@@ -268,7 +268,7 @@ PY
   [[ $phase != publishing ]] || break
   sleep .3
 done
-[[ $phase == publishing ]] || { echo 'Candidate never reached publisher lock' >&2; exit 1; }
+[[ $phase == publishing ]] || { echo 'Candidate never reached publisher lock' >&2; printf '{"version":1,"op":"status","app":"9router","request_id":"fixture-crash"}' | ssh_request >&2; journalctl -u vps-deploy-9router-fixture-crash --no-pager -n 25 >&2; exit 1; }
 systemctl kill --kill-whom=main --signal=SIGKILL vps-deploy-9router-fixture-crash
 touch "$fixture/publisher-release"; wait "$publisher"; publisher=
 for _ in {1..20}; do
