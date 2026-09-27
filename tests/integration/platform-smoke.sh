@@ -143,7 +143,7 @@ poll() { local id=$1 outcome
     outcome=$(printf '{"version":1,"op":"status","app":"9router","request_id":"%s"}' "$id" | ssh_request)
     case "$(python3 -c 'import json,sys;print(json.load(sys.stdin)["status"])' <<< "$outcome")" in
       complete) printf '%s\n' "$outcome"; return 0 ;;
-      failed|recovery_required) echo "$outcome" >&2; return 1 ;;
+      failed|recovery_required) echo "$outcome" >&2; journalctl -u "vps-deploy-9router-$id" --no-pager -n 25 >&2; return 1 ;;
     esac
     sleep 1
   done
