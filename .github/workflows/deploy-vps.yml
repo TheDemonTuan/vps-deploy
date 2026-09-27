@@ -58,7 +58,6 @@ jobs:
         working-directory: source
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
@@ -72,9 +71,10 @@ jobs:
           umask 077
           sshdir="$(mktemp -d)"
           trap 'rm -rf "$sshdir"' EXIT
-          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          test -n "$DEPLOY_SSH_KEY"
           printf '%s\n' "$DEPLOY_SSH_KEY" > "$sshdir/key"
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$sshdir/known_hosts"
+          # Public host key: ED25519 SHA256:e3LV9csFdtQi0+fs+GkRX1T8RFCYNy7afFgSm8nyfc4.
+          printf '%s\n' '134.185.89.192 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA754IShwuzQAEHyEvFSNs2b8NkkeO9SaeB2TVpNpVWw' > "$sshdir/known_hosts"
           ssh-keygen -lf "$sshdir/known_hosts" | cut -d' ' -f 2
           export DEPLOY_KEY_FILE="$sshdir/key" DEPLOY_KNOWN_HOSTS_FILE="$sshdir/known_hosts"
           python3 ../platform/scripts/ssh-request.py --operation deploy --component "$COMPONENT" --image "$IMAGE_REF" \
