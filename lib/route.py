@@ -108,7 +108,7 @@ def render(profile, slot, generation):
 def publish(path, raw, before):
     import tempfile
     require(digest(checked_file(path)) == before, 'ROUTE_CAS')
-    expected_context = command('/usr/bin/stat', '-c', '%C', str(path)).strip()
+    expected_context = command('/usr/bin/stat', '-c', '%C', str(path), check=False).strip()
     fd, name = tempfile.mkstemp(prefix='.9router-', suffix='.tmp', dir=str(path.parent))
     try:
         owner = path.stat()
@@ -118,9 +118,10 @@ def publish(path, raw, before):
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
-        if expected_context != '?' and command('/usr/bin/stat', '-c', '%C', name).strip() != expected_context:
-            command('/usr/bin/chcon', '--reference=' + str(path), name)
-        require(command('/usr/bin/stat', '-c', '%C', name).strip() == expected_context, 'ROUTE_CONTEXT')
+        if expected_context and expected_context != '?':
+            if command('/usr/bin/stat', '-c', '%C', name, check=False).strip() != expected_context:
+                command('/usr/bin/chcon', '--reference=' + str(path), name)
+            require(command('/usr/bin/stat', '-c', '%C', name, check=False).strip() == expected_context, 'ROUTE_CONTEXT')
         require(digest(checked_file(path)) == before, 'ROUTE_CAS')
         os.replace(name, path)
         fsync_dir(path.parent)
