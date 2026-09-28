@@ -74,6 +74,7 @@ class RoutePolicy(unittest.TestCase):
                 target.chmod(0o600)
                 with self.assertRaisesRegex(Failure, 'ROUTE_UNREADABLE'):
                     route.preflight(directory, PROFILE)
+                target.chmod(0o644)
             with patch.object(route, 'docker', return_value='corrupted'):
                 with self.assertRaisesRegex(Failure, 'TRAEFIK_UNREADABLE'):
                     route.preflight(directory, PROFILE)
