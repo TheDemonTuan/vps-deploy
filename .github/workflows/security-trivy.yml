@@ -87,11 +87,13 @@ jobs:
       - name: Install pinned Trivy engine
         run: |
           sudo bash platform/scripts/install-trivy.sh /usr/local/bin
+      - name: Ensure Trivy cache dir exists
+        run: mkdir -p ~/.cache/trivy
       - name: Restore Trivy DB cache
         uses: actions/cache/restore@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.cache/trivy
-          key: trivy-db-${{ runner.os }}-${{ steps.date.outputs.date || github.run_id }}
+          key: trivy-db-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             trivy-db-${{ runner.os }}-
       - name: Log in to GHCR for private image scan
@@ -198,10 +200,11 @@ jobs:
         if: always()
         with:
           path: ~/.cache/trivy
-          key: trivy-db-${{ runner.os }}-${{ steps.date.outputs.date || github.run_id }}
+          key: trivy-db-${{ runner.os }}-${{ github.run_id }}
       - name: Upload Trivy & SBOM reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: trivy-reports-${{ inputs.app }}-${{ inputs.scan-mode }}
           path: ${{ runner.temp }}/trivy-reports/
+          if-no-files-found: ignore

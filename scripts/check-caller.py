@@ -45,14 +45,14 @@ def main():
     source, platform_sha = env["SOURCE_SHA"], env["PLATFORM_REF"]
     if not re.fullmatch(r"[0-9a-f]{40}", source) or not re.fullmatch(r"[0-9a-f]{40}", platform_sha):
         raise ValueError("invalid revision")
-    if source != env["CALLER_SHA"] or (workflow != "build-docker.yml" and env["ACTION_REF"] != platform_sha):
+    if source != env["CALLER_SHA"] or (workflow == "deploy/action.yml" and env.get("ACTION_REF") != platform_sha):
         raise ValueError("caller revision or action pin mismatch")
     platform = pathlib.Path("platform")
     registration = app_registration(platform, env["APP"])
     registered_host = registration["host"]
     host_registration(platform, registered_host)
     allowed_refs = registration["caller"].get("refs") or [registration["caller"]["ref"]]
-    if (workflow != "build-docker.yml" and registered_host != env["HOST"]) or registration["caller"]["repository"] != env["CALLER_REPO"] or env["CALLER_REF"] not in allowed_refs or registration["caller"]["config"] != env["CONFIG"]:
+    if (workflow == "deploy/action.yml" and registered_host != env.get("HOST")) or registration["caller"]["repository"] != env["CALLER_REPO"] or env["CALLER_REF"] not in allowed_refs or registration["caller"]["config"] != env["CONFIG"]:
         raise ValueError("caller binding mismatch")
     policy = registration["manifest"]
     if workflow == "build-docker.yml":
