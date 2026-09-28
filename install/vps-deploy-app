@@ -1,0 +1,3 @@
+#!/bin/sh
+[ "$(id -u)" -eq 0 ] && [ "$#" -eq 0 ] || exit 1
+exec /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root LANG=C /opt/vps-deploy/releases/@RELEASE@/bin/deployctl @ACTION@ --app @APP@

@@ -1,6 +1,12 @@
-name: Deploy 9router on VPS
+name: Deploy registered app on VPS
 description: Environment-scoped, pinned deployment transport
 inputs:
+  app:
+    description: Registered app ID
+    required: true
+  host:
+    description: Registered host ID
+    required: true
   operation:
     description: deploy, status, rollback, or reconcile
     required: true
@@ -22,9 +28,32 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Reject untrusted caller before checkout
+    - name: Reject mutable platform checkout
       shell: bash
       env:
+        SOURCE_SHA: ${{ inputs.source-sha }}
+        PLATFORM_REF: ${{ inputs.platform-ref }}
+        ACTION_REF: ${{ github.action_ref }}
+        CALLER_SHA: ${{ github.sha }}
+        APP: ${{ inputs.app }}
+        HOST: ${{ inputs.host }}
+      run: |
+        set -euo pipefail
+        [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" ]]
+        [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ && "$ACTION_REF" == "$PLATFORM_REF" ]]
+        [[ "$APP" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
+        [[ "$HOST" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: TheDemonTuan/vps-deploy
+        ref: ${{ inputs.platform-ref }}
+        path: platform
+        persist-credentials: false
+    - name: Validate registered caller before source checkout
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        HOST: ${{ inputs.host }}
         CALLER_REPO: ${{ github.repository }}
         CALLER_REF: ${{ github.ref }}
         CALLER_SHA: ${{ github.sha }}
@@ -37,50 +66,46 @@ runs:
         IMAGE_REF: ${{ inputs.image-ref }}
       run: |
         set -euo pipefail
-        [[ "$CALLER_REPO" == TheDemonTuan/9router && "$CALLER_REF" == refs/heads/master && "$CONFIG" == .deploy/app.yml ]]
-        [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" ]]
-        [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ && "$ACTION_REF" == "$PLATFORM_REF" ]]
-        [[ "$COMPONENT" == app || "$COMPONENT" == rtk ]]
-        case "$OPERATION" in
-          deploy)
-            if [[ "$COMPONENT" == app ]]; then
-              [[ "$IMAGE_REF" =~ ^ghcr\.io/thedemontuan/9router@sha256:[0-9a-f]{64}$ ]]
-            else
-              [[ "$IMAGE_REF" =~ ^ghcr\.io/thedemontuan/rtk-sidecar@sha256:[0-9a-f]{64}$ ]]
-            fi ;;
-          status|reconcile) [[ -z "$IMAGE_REF" ]] ;;
-          rollback) [[ "$COMPONENT" == app && -z "$IMAGE_REF" ]] ;;
-          *) exit 1 ;;
-        esac
+        sudo apt-get update
+        sudo apt-get install -y python3-yaml
+        python3 platform/scripts/check-caller.py deploy/action.yml --preflight
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
-        repository: TheDemonTuan/9router
+        repository: ${{ github.repository }}
         ref: ${{ inputs.source-sha }}
         path: source
         persist-credentials: false
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        repository: TheDemonTuan/vps-deploy
-        ref: ${{ inputs.platform-ref }}
-        path: platform
-        persist-credentials: false
-    - name: Validate immutable caller and profile
+    - name: Validate immutable caller and manifest
       shell: bash
       env:
-        SOURCE_SHA: ${{ inputs.source-sha }}
-        PLATFORM_REF: ${{ inputs.platform-ref }}
-        CONFIG: ${{ inputs.config }}
-      run: python3 platform/scripts/check-caller.py deploy/action.yml
-    - name: Submit request and verify strict status
-      shell: bash
-      working-directory: source
-      env:
+        APP: ${{ inputs.app }}
+        HOST: ${{ inputs.host }}
+        CALLER_REPO: ${{ github.repository }}
+        CALLER_REF: ${{ github.ref }}
+        CALLER_SHA: ${{ github.sha }}
+        ACTION_REF: ${{ github.action_ref }}
         SOURCE_SHA: ${{ inputs.source-sha }}
         PLATFORM_REF: ${{ inputs.platform-ref }}
         CONFIG: ${{ inputs.config }}
         OPERATION: ${{ inputs.operation }}
         COMPONENT: ${{ inputs.component }}
         IMAGE_REF: ${{ inputs.image-ref }}
+      run: python3 platform/scripts/check-caller.py deploy/action.yml
+    - name: Submit request and verify strict status
+      shell: bash
+      working-directory: source
+      env:
+        APP: ${{ inputs.app }}
+        HOST: ${{ inputs.host }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
+        PLATFORM_REF: ${{ inputs.platform-ref }}
+        CONFIG: ${{ inputs.config }}
+        OPERATION: ${{ inputs.operation }}
+        COMPONENT: ${{ inputs.component }}
+        IMAGE_REF: ${{ inputs.image-ref }}
+        DEPLOY_HOST: ${{ env.DEPLOY_HOST || '' }}
+        DEPLOY_PORT: ${{ env.DEPLOY_PORT || '' }}
+        DEPLOY_USER: ${{ env.DEPLOY_USER || '' }}
       run: |
         set -euo pipefail
         umask 077
@@ -88,12 +113,8 @@ runs:
         trap 'rm -rf "$sshdir"' EXIT
         test -n "${DEPLOY_SSH_KEY:-}"
         printf '%s\n' "$DEPLOY_SSH_KEY" > "$sshdir/key"
-        # Public host key: ED25519 SHA256:e3LV9csFdtQi0+fs+GkRX1T8RFCYNy7afFgSm8nyfc4.
-        printf '%s\n' '134.185.89.192 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA754IShwuzQAEHyEvFSNs2b8NkkeO9SaeB2TVpNpVWw' > "$sshdir/known_hosts"
-        [[ "$(ssh-keygen -lf "$sshdir/known_hosts")" == *'SHA256:e3LV9csFdtQi0+fs+GkRX1T8RFCYNy7afFgSm8nyfc4'* ]]
-        export DEPLOY_KEY_FILE="$sshdir/key" DEPLOY_KNOWN_HOSTS_FILE="$sshdir/known_hosts"
-        args=(--operation "$OPERATION" --component "$COMPONENT" --source-sha "$SOURCE_SHA"
-              --platform-ref "$PLATFORM_REF" --config "$CONFIG"
+        args=(--app "$APP" --host "$HOST" --operation "$OPERATION" --component "$COMPONENT"
+              --source-sha "$SOURCE_SHA" --platform-ref "$PLATFORM_REF" --config "$CONFIG"
               --request-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${COMPONENT}")
         if [[ "$OPERATION" == deploy ]]; then args+=(--image "$IMAGE_REF"); fi
-        python3 ../platform/scripts/ssh-request.py "${args[@]}"
+        DEPLOY_KEY_FILE="$sshdir/key" python3 ../platform/scripts/ssh-request.py "${args[@]}"

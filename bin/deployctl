@@ -7,9 +7,10 @@ import sys
 import time
 from pathlib import Path
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lib'))
-from core import APP, Failure, SHA, atomic, digest, host, load, lock, paths, registered, request, require, save, verify_request
-from operations import cleanup, reconcile, rtk_deploy, transaction, matching, rtk_wait
+from core import Failure, SHA, app_registration, atomic, digest, host, host_registration, load, lock, paths, registered, registration_id, request, require, save, trusted_path, verify_request
+from operations import cleanup, environment, reconcile, rtk_deploy, transaction, matching, rtk_wait
 import route
 
 
@@ -17,12 +18,12 @@ def receipt_dir(state_dir, req_id):
     return state_dir / 'requests' / req_id
 
 
-def unit(req_id):
-    return 'vps-deploy-9router-' + req_id
+def unit(app, req_id):
+    return 'vps-deploy-' + app + '@' + req_id + '.service'
 
 
-def unit_active(req_id):
-    proc = subprocess.run(['/usr/bin/systemctl', 'is-active', '--quiet', unit(req_id)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def unit_active(app, req_id):
+    proc = subprocess.run(['/usr/bin/systemctl', 'is-active', '--quiet', unit(app, req_id)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return proc.returncode == 0
 
 
@@ -30,47 +31,75 @@ def result(req_id, status, phase, error_code=None):
     return {'request_id': req_id, 'status': status, 'phase': phase, 'error_code': error_code}
 
 
-def get_receipt(state_dir, req_id):
+def get_receipt(state_dir, app, req_id):
     directory = receipt_dir(state_dir, req_id)
     terminal = directory / 'result.json'
-    if terminal.exists():
+    if terminal.exists() or terminal.is_symlink():
+        trusted_path(terminal)
         return load(terminal)
-    if (directory / 'started').exists():
-        return result(req_id, 'running' if unit_active(req_id) else 'recovery_required', 'started')
+    if (directory / 'started').exists() or (directory / 'started').is_symlink():
+        trusted_path(directory / 'started')
+        return result(req_id, 'running' if unit_active(app, req_id) else 'recovery_required', 'started')
     return result(req_id, 'queued', 'queued')
 
 
 def submit(req, cfg, state_dir, locks):
-    profile = host(cfg)
-    release = verify_request(req, cfg, profile)
-    req_id = req['request_id']
-    directory = receipt_dir(state_dir, req_id)
-    with lock(locks / '9router-submit.lock', 10):
+    app = req['app']
+    directory = receipt_dir(state_dir, req['request_id'])
+    with lock(locks / (app + '@submit.lock'), 10):
+        profile = load_profile(cfg, app)
+        req = request(__import__('core').json_bytes(req), profile)
+        release = verify_request(req, cfg, profile)
+        trusted_path(state_dir, directory=True)
+        trusted_path(state_dir / 'requests', directory=True)
         data = __import__('core').json_bytes(req)
-        if directory.exists():
-            require((directory / 'request.json').is_file() and (directory / 'request.json').read_bytes() == data, 'REQUEST_CONFLICT')
-            receipt = get_receipt(state_dir, req_id)
-            if receipt['status'] != 'queued' or unit_active(req_id):
+        if directory.exists() or directory.is_symlink():
+            trusted_path(directory, directory=True)
+            previous = directory / 'request.json'
+            trusted_path(previous)
+            require(previous.read_bytes() == data, 'REQUEST_CONFLICT')
+            receipt = get_receipt(state_dir, app, req['request_id'])
+            if receipt['status'] != 'queued' or unit_active(app, req['request_id']):
                 return receipt
         else:
             directory.mkdir(mode=0o700)
             __import__('core').fsync_dir(directory.parent)
             atomic(directory / 'request.json', data)
         __import__('core').fault(profile, 'receipt_saved')
-        command = ['/usr/bin/systemd-run', '--unit=' + unit(req_id), '--property=Type=exec', '--property=RuntimeMaxSec=900', '--property=TimeoutStopSec=60', '--property=KillMode=mixed', str(release / 'bin/deployctl'), 'run', '--app', APP, '--request-id', req_id]
+        command = ['/usr/bin/systemd-run', '--unit=' + unit(app, req['request_id']), '--property=Type=exec', '--property=RuntimeMaxSec=900', '--property=TimeoutStopSec=60', '--property=KillMode=mixed', str(release / 'bin/deployctl'), 'run', '--app', app, '--request-id', req['request_id']]
         proc = subprocess.run(command, capture_output=True)
-        if proc.returncode and not unit_active(req_id):
-            terminal = result(req_id, 'failed', 'dispatch', 'SYSTEMD_DISPATCH_FAILED')
+        if proc.returncode and not unit_active(app, req['request_id']):
+            terminal = result(req['request_id'], 'failed', 'dispatch', 'SYSTEMD_DISPATCH_FAILED')
             save(directory / 'result.json', terminal)
             return terminal
-        return result(req_id, 'running', 'dispatched')
+        return result(req['request_id'], 'running', 'dispatched')
 
 
-def state_status(state_dir, req_id, cfg):
+def load_profile(cfg, app):
+    trusted_path(cfg, directory=True)
+    trusted_path(cfg / 'host.json')
+    selected = load(cfg / 'host.json')
+    require(type(selected.get('platform_ref')) is str and SHA.fullmatch(selected['platform_ref']), 'PLATFORM_MISMATCH')
+    release = Path('/opt/vps-deploy/releases') / selected['platform_ref']
+    trusted_path(release, directory=True)
+    require(Path(__file__).absolute() == release / 'bin/deployctl', 'PLATFORM_MISMATCH')
+    trusted_path(release / 'bin/deployctl')
+    registration = app_registration(release, app)
+    record = host_registration(release, registration['host'])
+    profile = host(cfg, registration, record)
+    registered(cfg, registration)
+    environment(profile, cfg, '')
+    return profile
+
+
+def state_status(state_dir, req_id, cfg, profile):
     existing = receipt_dir(state_dir, req_id) if req_id else None
-    entry = get_receipt(state_dir, req_id) if existing and existing.is_dir() else result(req_id, 'complete', 'status')
+    if existing and (existing.exists() or existing.is_symlink()):
+        trusted_path(existing, directory=True)
+    entry = get_receipt(state_dir, profile['app'], req_id) if existing and existing.is_dir() else result(req_id, 'complete', 'status')
+    require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')
+    trusted_path(state_dir / 'state.json')
     state = load(state_dir / 'state.json')
-    profile = host(cfg)
     healthy = False
     observed = None
     try:
@@ -81,10 +110,11 @@ def state_status(state_dir, req_id, cfg):
         pass
     rtk_healthy = None
     if existing and (existing / 'request.json').is_file():
-        previous_request = request((existing / 'request.json').read_bytes(), (profile['image_repository'], profile['rtk_image_repository']))
+        trusted_path(existing / 'request.json')
+        previous_request = request((existing / 'request.json').read_bytes(), profile)
         if previous_request.get('component') == 'rtk':
             try:
-                rtk_wait('9router-rtk-rtk-1', state['rtk']['current'], timeout=2)
+                rtk_wait(profile, profile['app'] + '-rtk-rtk-1', state['rtk']['current'], timeout=2)
                 rtk_healthy = True
             except Failure:
                 rtk_healthy = False
@@ -95,18 +125,20 @@ def state_status(state_dir, req_id, cfg):
     return entry
 
 
-def run(req_id, cfg, state_dir, locks):
+def run(req_id, cfg, state_dir, locks, profile):
     directory = receipt_dir(state_dir, req_id)
-    profile = host(cfg)
-    req = request((directory / 'request.json').read_bytes(), (profile['image_repository'], profile['rtk_image_repository']))
+    trusted_path(directory / 'request.json')
+    req = request((directory / 'request.json').read_bytes(), profile)
     require(req['request_id'] == req_id and req['op'] != 'status', 'INVALID_REQUEST')
     release = verify_request(req, cfg, profile)
     try:
-        with lock(locks / '9router.lock'):
+        with lock(locks / (profile['app'] + '@operation.lock')):
             require(not (directory / 'started').exists(), 'RECOVERY_REQUIRED')
             atomic(directory / 'started', b'1')
             __import__('core').fault(profile, 'started')
             try:
+                require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')
+                trusted_path(state_dir / 'state.json')
                 state = load(state_dir / 'state.json')
                 require(state['version'] == 1, 'INVALID_STATE')
                 if state['operation'] and req['op'] != 'reconcile':
@@ -141,51 +173,58 @@ def run(req_id, cfg, state_dir, locks):
     return receipt
 
 
-def adopt(cfg, state_dir, locks):
-    require(not (state_dir / 'state.json').exists(), 'ALREADY_ADOPTED')
-    profile = host(cfg)
-    with lock(locks / '9router.lock'):
-        target, raw, _ = route.preflight(route.dynamic(profile), profile)
-        slot, generation = route.route_state(raw)
-        route.ack(profile, (slot, generation))
-        from core import container, container_digest
-        live = container('9router-' + slot, running=True)
-        image = container_digest(live, profile['image_repository'])
-        __import__('operations').health(slot, image)
-        _, mh = registered(cfg)
-        active = {'slot': slot, 'image': image, 'platform_ref': profile['platform_ref'], 'manifest_sha256': mh}
-        other = 'green' if slot == 'blue' else 'blue'
-        try:
-            previous_obj = container('9router-' + other)
-        except Failure as exc:
-            if exc.code != 'COMMAND_FAILED':
-                raise
-            previous = None
-        else:
-            previous_image = container_digest(previous_obj, profile['image_repository'])
-            previous = dict(active, slot=other, image=previous_image)
-        rtk_container = container('9router-rtk-rtk-1', running=True)
-        rtk_image = container_digest(rtk_container, profile['rtk_image_repository'])
-        rtk_wait('9router-rtk-rtk-1', rtk_image)
-        state = {'version': 1, 'revision': 1, 'active': active, 'previous': previous, 'rtk': {'current': rtk_image, 'previous': None}, 'generation': generation, 'operation': None, 'draining': None}
-        save(state_dir / 'state.json', state)
-        return state_status(state_dir, None, cfg)
+def adopt(cfg, state_dir, locks, profile):
+    with lock(locks / (profile['app'] + '@operation.lock')):
+        require(not (state_dir / 'state.json').exists(), 'ALREADY_ADOPTED')
+        with lock(locks / 'traefik.lock', 60):
+            target, raw, _ = route.preflight(route.dynamic(profile), profile)
+            slot, generation = route.route_state(raw, profile)
+            route.ack(profile, (slot, generation))
+            from core import container, container_digest
+            live = container(profile['app'] + '-' + slot, running=True)
+            image = container_digest(live, profile['image_repository'])
+            __import__('operations').health(profile, slot, image)
+            _, mh = registered(cfg, profile['registration'])
+            active = {'slot': slot, 'image': image, 'platform_ref': profile['platform_ref'], 'manifest_sha256': mh}
+            other = 'green' if slot == 'blue' else 'blue'
+            try:
+                previous_obj = container(profile['app'] + '-' + other)
+            except Failure as exc:
+                if exc.code != 'COMMAND_FAILED':
+                    raise
+                previous = None
+            else:
+                previous_image = container_digest(previous_obj, profile['image_repository'])
+                previous = dict(active, slot=other, image=previous_image)
+            rtk = None
+            if profile['rtk_image_repository'] is not None:
+                name = profile['app'] + '-rtk-rtk-1'
+                rtk_container = container(name, running=True)
+                rtk_image = container_digest(rtk_container, profile['rtk_image_repository'])
+                rtk_wait(profile, name, rtk_image)
+                rtk = {'current': rtk_image, 'previous': None}
+            state = {'version': 1, 'revision': 1, 'active': active, 'previous': previous, 'rtk': rtk, 'generation': generation, 'operation': None, 'draining': None}
+            trusted_path(state_dir, directory=True)
+            save(state_dir / 'state.json', state)
+    return state_status(state_dir, None, cfg, profile)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['submit', 'run', 'status', 'adopt', 'cleanup-drains'])
-    parser.add_argument('--app', choices=[APP])
+    parser.add_argument('--app', required=True)
     parser.add_argument('--request-id')
     parser.add_argument('--strict', action='store_true')
     parser.add_argument('--operator', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     require(os.geteuid() == 0, 'ROOT_REQUIRED')
-    cfg, state_dir, locks = paths(operator=args.operator and args.action != 'submit')
-    if args.action != 'submit':
-        require(args.app == APP, 'INVALID_APP')
+    registration_id(args.app)
+    require(not args.operator or args.action != 'submit', 'INVALID_ARGUMENT')
+    cfg, state_dir, locks = paths(args.app, operator=args.operator)
+    profile = load_profile(cfg, args.app)
+    trusted_path(state_dir, directory=True)
+    trusted_path(locks, directory=True)
     if args.action == 'submit':
-        require(not args.operator and args.app is None, 'INVALID_ARGUMENT')
         import select
         deadline = time.monotonic() + 10
         buffer = bytearray()
@@ -199,28 +238,28 @@ def main():
                 break
             buffer.extend(chunk)
             require(len(buffer) <= 65536, 'REQUEST_TOO_LARGE')
-        raw = bytes(buffer)
-        profile = host(cfg)
-        req = request(raw, (profile['image_repository'], profile['rtk_image_repository']))
+        req = request(bytes(buffer), profile)
         if req['op'] == 'status':
-            response = state_status(state_dir, req.get('request_id'), cfg)
+            response = state_status(state_dir, req.get('request_id'), cfg, profile)
         else:
             response = submit(req, cfg, state_dir, locks)
     elif args.action == 'run':
         from core import REQUEST_ID
         require(args.request_id is not None and REQUEST_ID.fullmatch(args.request_id), 'INVALID_REQUEST_ID')
-        response = run(args.request_id, cfg, state_dir, locks)
+        response = run(args.request_id, cfg, state_dir, locks, profile)
     elif args.action == 'status':
         from core import REQUEST_ID
         require(args.request_id is None or REQUEST_ID.fullmatch(args.request_id), 'INVALID_REQUEST_ID')
-        response = state_status(state_dir, args.request_id, cfg)
+        response = state_status(state_dir, args.request_id, cfg, profile)
     elif args.action == 'adopt':
-        response = adopt(cfg, state_dir, locks)
+        response = adopt(cfg, state_dir, locks, profile)
     else:
-        with lock(locks / '9router.lock'):
+        with lock(locks / (args.app + '@operation.lock')):
+            require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')
+            trusted_path(state_dir / 'state.json')
             state = load(state_dir / 'state.json')
-            cleanup(state, state_dir, host(cfg))
-        response = state_status(state_dir, None, cfg)
+            cleanup(state, state_dir, profile)
+        response = state_status(state_dir, None, cfg, profile)
     print(json.dumps(response, sort_keys=True))
     if args.strict and not response.get('healthy'):
         return 1
@@ -230,7 +269,7 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (Failure, OSError, subprocess.TimeoutExpired) as error:
+    except (Failure, OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired) as error:
         code = error.code if isinstance(error, Failure) else 'HOST_IO_ERROR'
         print(json.dumps({'status': 'failed', 'error_code': code}))
         sys.exit(1)

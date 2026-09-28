@@ -14,6 +14,9 @@ from pathlib import Path
 active = 0
 active_lock = threading.Lock()
 mode = sys.argv[1]
+app_port = int(os.environ.get('APP_PORT', '20128'))
+health_path = os.environ.get('HEALTH_PATH', '/api/health')
+
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -84,10 +87,13 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404)
             return
-        if self.path.startswith('/api/health'):
+        if self.path.split('?', 1)[0] == health_path:
             with active_lock:
                 count = active
             override = Path('/app/data/health-override')
+            if Path('/app/data/health-gate-' + os.environ['DEPLOY_SLOT']).exists():
+                self.send_json({'ok': False}, status=503)
+                return
             signal = override.read_text().strip() if override.exists() else ''
             if signal == 'unknown':
                 count, known = None, False
@@ -128,5 +134,5 @@ if mode == 'tls':
     context.load_cert_chain(sys.argv[2], sys.argv[3])
     httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
 else:
-    httpd = ThreadingHTTPServer(('0.0.0.0', 8080 if mode == 'rtk' else 20128), Handler)
+    httpd = ThreadingHTTPServer(('0.0.0.0', 8080 if mode == 'rtk' else app_port), Handler)
 httpd.serve_forever()

@@ -196,10 +196,9 @@ sequenceDiagram
    - **Deployment branches**: Chọn *Selected branches* -> thêm nhánh mặc định (`master` hoặc `main`).
    - **Environment secrets**: Thêm `DEPLOY_SSH_KEY` (khóa private OpenSSH ED25519 cho ứng dụng này).
    - **Environment variables**:
-     - `DEPLOY_HOST`: Địa chỉ IP VPS (ví dụ `134.185.89.192`).
+     - `DEPLOY_HOST`: Địa chỉ IP hoặc hostname VPS (lưu trong Environment secret/var, không commit public).
      - `DEPLOY_PORT`: Cổng SSH (ví dụ `22`).
-     - `DEPLOY_USER`: Tên user riêng (ví dụ `deploy-my-service`).
-
+     - `DEPLOY_USER`: Tên user riêng của app (`deploy-<app>`).
 ---
 
 ### Giai đoạn 2: Cấu hình trên Platform Repository (`vps-deploy`)
@@ -245,21 +244,41 @@ sequenceDiagram
        name: my-service-data
    ```
 
-2. **Cập nhật allowlist trong core engine (`lib/core.py` và `bin/deployctl`)**:
-   - Thêm `<app>` vào danh sách các app được phép xử lý.
-   - Thêm prefix repository image `ghcr.io/<owner>/<app>` vào allowlist kiểm tra digest.
+2. **Đăng ký ứng dụng trong `registry/<app>.yml`**:
+   Tạo file registry định nghĩa caller repo, nhánh cho phép, manifest policy, runtime env và route:
+   ```yaml
+   version: 1
+   app: my-service
+   host: oracle-main
+   caller:
+     repository: TheDemonTuan/my-service
+     ref: refs/heads/master
+     refs: [refs/heads/master, refs/heads/main]
+     config: .deploy/app.yml
+     build_workflows: [deploy.yml]
+     deploy_workflows: [deploy.yml]
+   manifest:
+     version: 1
+     app: my-service
+     strategy: blue-green
+     image: ghcr.io/thedemontuan/my-service
+     platform: linux/arm64
+     runtime: {port: 8080}
+     health: {path: /api/health, timeout_seconds: 60}
+     route: {timeout_seconds: 30}
+   runtime:
+     allowed_env: [PORT, DEPLOY_SLOT]
+     required_env: []
+   route:
+     generation_header: X-My-Service-Route-Generation
+     required_middlewares: [deny-internal, security-headers]
+   ```
 
-3. **Tạo unit helper trong `install/`**:
-   - Tạo file wrapper `install/vps-deploy-<app>`:
-     ```bash
-     #!/bin/sh
-     exec /opt/vps-deploy/current/bin/deployctl submit --app <app>
-     ```
-   - Tạo service & timer drain:
-     `vps-deploy-<app>-drain.service` gọi `/opt/vps-deploy/current/bin/deployctl cleanup-drains --app <app>`.
-     `vps-deploy-<app>-drain.timer` chạy định kỳ 60s.
+3. **Tạo Traefik adapter tại `apps/<app>/adapter.sh`**:
+   Script nhận 5 tham số (`slot`, `generation`, `dashboard_host`, `dashboard_alias_host`, `api_host`) và xuất cấu hình YAML hợp lệ ra stdout.
 
----
+4. **Cập nhật ánh xạ host tại `hosts/<host>.yml`**:
+   Thêm `<app>` vào mục `apps:` của host tương ứng (`route_name`, `api_host`, `work_dir`, `edge_network`...).
 
 ### Giai đoạn 3: Thiết lập trên máy chủ VPS (Root Operator)
 
@@ -332,6 +351,15 @@ Thực hiện một lần bởi Quản trị viên (Operator) có quyền root:
    ```
    Sau khi key hoạt động, đưa private key vào GitHub Environment `production` trên App repo để pipeline tự động triển khai.
 
+
+### Lưu ý an toàn cơ sở dữ liệu Blue/Green
+
+Hai slot blue/green dùng chung volume dữ liệu (như SQLite hoặc DB container). Deployment engine hỗ trợ rollback route và container ngay lập tức, nhưng **không rollback dữ liệu đã thay đổi**.
+
+Quy tắc bắt buộc khi có migration DB:
+- Mọi thay đổi schema phải backward-compatible (mô hình Expand -> Migrate -> Contract).
+- Code phiên bản mới phải chạy được trên schema cũ, hoặc schema mới phải tương thích hoàn toàn với slot phiên bản cũ khi rollback.
+- Không chạy migration phá vỡ cấu trúc cũ (destructive migration) trong cùng release chuyển giao.
 ---
 
 ## 3. Các thao tác vận hành khẩn cấp (Operator Runbook)

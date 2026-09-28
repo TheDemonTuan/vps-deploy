@@ -2,72 +2,97 @@ import json
 import os
 import re
 import stat
+import sys
 import time
 from pathlib import Path
 
-from core import Failure, command, digest, docker, fsync_dir, parse_yaml, require
+sys.dont_write_bytecode = True
+from core import Failure, command, digest, docker, fsync_dir, parse_yaml, require, trusted_path
 
 
 def dynamic(profile):
-    edge = json.loads(docker('container', 'inspect', 'edge-traefik'))[0]
+    traefik = profile['host_registration']['traefik']
+    edge = json.loads(docker('container', 'inspect', traefik['container']))[0]
     require(edge['State']['Running'], 'TRAEFIK_STOPPED')
-    target = '/etc/traefik/dynamic'
+    target = traefik['mount']
     mounts = edge['Mounts']
     matches = [m for m in mounts if m['Destination'] == target]
     require(len(matches) == 1 and matches[0]['Type'] == 'bind' and not any(m['Destination'].startswith(target + '/') for m in mounts), 'TRAEFIK_MOUNT')
-    directory = Path(profile['dynamic_dir'])
-    require(not directory.is_symlink() and directory.is_dir() and str(directory.resolve()) == matches[0]['Source'] and os.access(directory, os.R_OK | os.W_OK), 'TRAEFIK_MOUNT')
-    require('edge-traefik' in docker('network', 'inspect', profile['edge_network'], '--format', '{{range .Containers}}{{println .Name}}{{end}}').splitlines(), 'TRAEFIK_NETWORK')
+    directory = trusted_path(Path(traefik['dynamic_dir']), directory=True)
+    require(str(directory) == matches[0]['Source'] and os.access(directory, os.R_OK | os.W_OK), 'TRAEFIK_MOUNT')
+    require(traefik['container'] in docker('network', 'inspect', profile['edge_network'], '--format', '{{range .Containers}}{{println .Name}}{{end}}').splitlines(), 'TRAEFIK_NETWORK')
     return directory
 
 
-def checked_file(path):
-    require(not path.is_symlink() and path.is_file(), 'ROUTE_FILE')
-    mode = path.stat().st_mode
-    require(stat.S_ISREG(mode) and mode & 0o444, 'ROUTE_UNREADABLE')
+def checked_file(path, managed=False):
+    trusted_path(path)
+    mode = path.stat().st_mode & 0o777
+    require(mode == 0o644 if managed else bool(mode & 0o044), 'ROUTE_UNREADABLE')
     return path.read_bytes()
 
 
-def route_state(raw):
+def route_state(raw, profile):
     obj = parse_yaml(raw)
+    app = profile['app']
+    header_name = profile['registration']['route']['generation_header']
     try:
-        service = obj['http']['services']['9router-service']['loadBalancer']
+        service = obj['http']['services'][app + '-service']['loadBalancer']
         urls = service['servers']
-        header = obj['http']['middlewares']['9router-route-generation']['headers']['customResponseHeaders']['X-9Router-Route-Generation']
+        header = obj['http']['middlewares'][app + '-route-generation']['headers']['customResponseHeaders'][header_name]
         require(type(urls) is list and len(urls) == 1 and type(urls[0]) is dict and set(urls[0]) == {'url'}, 'ROUTE_SHAPE')
         url = urls[0]['url']
-        found = re.fullmatch(r'http://9router-(blue|green):20128', url)
+        expected = rf'http://{re.escape(app)}-(blue|green):{profile["registration"]["manifest"]["runtime"]["port"]}'
+        found = re.fullmatch(expected, url) if type(url) is str else None
         require(found is not None and type(header) is str and re.fullmatch('[0-9a-f]{32}', header), 'ROUTE_SHAPE')
         return found.group(1), header
     except (KeyError, TypeError):
         raise Failure('ROUTE_SHAPE') from None
 
 
-def preflight(directory, profile):
-    target = directory / profile['route_name']
-    require(not target.is_symlink(), 'ROUTE_SYMLINK')
-    owned = ('9router-service', '9router-api-router', '9router-dashboard-router', '9router-route-generation')
-    hashes = {}
+def route_files(directory):
+    files = {}
     for path in directory.rglob('*'):
         require(not path.is_symlink(), 'ROUTE_SYMLINK')
         if path.is_dir() or path.suffix.lower() not in ('.yml', '.yaml', '.toml'):
             continue
-        raw = checked_file(path)
-        if path != target:
-            require(not any(token.encode() in raw for token in owned), 'ROUTE_COLLISION')
-            if path.suffix.lower() in ('.yml', '.yaml'):
-                parse_yaml(raw)
-            hashes[str(path)] = digest(raw)
-    raw = checked_file(target)
-    route_state(raw)
-    slot, generation = route_state(raw)
+        files[path] = checked_file(path)
+    return files
+
+
+def preflight(directory, profile):
+    trusted_path(directory, directory=True)
+    target = directory / profile['route_name']
+    files = route_files(directory)
+    require(target in files, 'ROUTE_FILE')
+    raw = checked_file(target, managed=True)
+    slot, generation = route_state(raw, profile)
     observed = parse_yaml(raw)['http']
     expected = parse_yaml(render(profile, slot, generation))['http']
     require(observed == expected, 'ROUTE_SECURITY_SHAPE')
-    require(docker('exec', 'edge-traefik', 'cat', '/etc/traefik/dynamic/' + profile['route_name']).encode() == raw, 'TRAEFIK_UNREADABLE')
-    shared = b''.join(checked_file(Path(p)) for p in hashes if p.endswith(('.yml', '.yaml')))
-    for name in (b'deny-internal:', b'tunnel-only:', b'public-api-rate-limit:', b'security-headers:'):
-        require(name in shared, 'MIDDLEWARE_MISSING')
+    owned = {name for category in ('routers', 'services', 'middlewares') for name in expected.get(category, {})}
+    shared_middlewares = set()
+    hashes = {}
+    for path, content in files.items():
+        if path == target:
+            continue
+        if path.suffix.lower() in ('.yml', '.yaml'):
+            parsed = parse_yaml(content)
+            http = parsed.get('http', {}) if type(parsed) is dict else {}
+            require(type(http) is dict, 'ROUTE_SHAPE')
+            for category in ('routers', 'services', 'middlewares'):
+                definitions = http.get(category, {})
+                require(type(definitions) is dict, 'ROUTE_SHAPE')
+                require(not owned.intersection(definitions), 'ROUTE_COLLISION')
+            shared_middlewares.update(name for name, definition in http.get('middlewares', {}).items() if type(definition) is dict and definition)
+        else:
+            require(not any(re.search(rb'(?<![A-Za-z0-9_-])' + re.escape(name.encode()) + rb'(?![A-Za-z0-9_-])', content) for name in owned), 'ROUTE_COLLISION')
+        hashes[str(path)] = digest(content)
+    require(set(profile['registration']['route']['required_middlewares']) <= shared_middlewares, 'MIDDLEWARE_MISSING')
+    mount = profile['host_registration']['traefik']['mount']
+    traefik_container = profile['host_registration']['traefik']['container']
+    for path, content in files.items():
+        relative = path.relative_to(directory).as_posix()
+        require(docker('exec', traefik_container, 'cat', mount + '/' + relative).encode() == content, 'TRAEFIK_UNREADABLE')
     return target, raw, hashes
 
 
@@ -76,7 +101,7 @@ def probe(profile):
         trust = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C'}
         if profile.get('fixture_ci'):
             trust['CURL_CA_BUNDLE'] = profile['ca_bundle']
-        line = command('/usr/bin/bash', str(Path(__file__).with_name('traefik.sh')), 'probe', profile['api_host'], timeout=8, env=trust)
+        line = command('/usr/bin/bash', str(Path(__file__).with_name('traefik.sh')), 'probe', profile['api_host'], profile['registration']['manifest']['health']['path'], profile['registration']['route']['generation_header'], timeout=8, env=trust)
         slot, generation = line.strip().split()
         require(slot in ('blue', 'green') and re.fullmatch('[0-9a-f]{32}', generation), 'PUBLIC_HEALTH')
         return slot, generation
@@ -99,17 +124,18 @@ def ack(profile, expected, timeout=30):
 
 
 def render(profile, slot, generation):
-    adapter = Path(__file__).resolve().parent.parent / 'apps/9router/adapter.sh'
+    adapter = Path('/opt/vps-deploy/releases') / profile['platform_ref'] / 'apps' / profile['app'] / 'adapter.sh'
+    trusted_path(adapter)
     raw = command('/usr/bin/bash', str(adapter), slot, generation, profile['dashboard_host'], profile['dashboard_alias_host'], profile['api_host']).encode()
-    require(route_state(raw) == (slot, generation), 'ROUTE_SHAPE')
+    require(route_state(raw, profile) == (slot, generation), 'ROUTE_SHAPE')
     return raw
 
 
 def publish(path, raw, before):
     import tempfile
-    require(digest(checked_file(path)) == before, 'ROUTE_CAS')
+    require(digest(checked_file(path, managed=True)) == before, 'ROUTE_CAS')
     expected_context = command('/usr/bin/stat', '-c', '%C', str(path), check=False).strip()
-    fd, name = tempfile.mkstemp(prefix='.9router-', suffix='.tmp', dir=str(path.parent))
+    fd, name = tempfile.mkstemp(prefix='.vps-deploy-', suffix='.tmp', dir=str(path.parent))
     try:
         owner = path.stat()
         os.fchown(fd, owner.st_uid, owner.st_gid)
@@ -122,17 +148,19 @@ def publish(path, raw, before):
             if command('/usr/bin/stat', '-c', '%C', name, check=False).strip() != expected_context:
                 command('/usr/bin/chcon', '--reference=' + str(path), name)
             require(command('/usr/bin/stat', '-c', '%C', name, check=False).strip() == expected_context, 'ROUTE_CONTEXT')
-        require(digest(checked_file(path)) == before, 'ROUTE_CAS')
+        require(digest(checked_file(path, managed=True)) == before, 'ROUTE_CAS')
         os.replace(name, path)
         fsync_dir(path.parent)
-        require(path.stat().st_mode & 0o777 == 0o644 and path.stat().st_uid == owner.st_uid and path.stat().st_gid == owner.st_gid and checked_file(path) == raw, 'ROUTE_PUBLISH')
+        require(path.stat().st_mode & 0o777 == 0o644 and path.stat().st_uid == owner.st_uid and path.stat().st_gid == owner.st_gid and checked_file(path, managed=True) == raw, 'ROUTE_PUBLISH')
     finally:
         if os.path.exists(name):
             os.unlink(name)
 
 
-def unchanged(hashes):
-    require(all(digest(checked_file(Path(p))) == h for p, h in hashes.items()), 'SHARED_ROUTE_CHANGED')
+def unchanged(hashes, directory, own_route_name):
+    current = route_files(directory)
+    current.pop(directory / own_route_name, None)
+    require({str(path): digest(raw) for path, raw in current.items()} == hashes, 'SHARED_ROUTE_CHANGED')
 if __name__ == '__main__':
     import sys
     if len(sys.argv) != 5 or sys.argv[1] != 'publish' or os.geteuid() != 0:
@@ -140,6 +168,8 @@ if __name__ == '__main__':
     try:
         path, source, previous = sys.argv[2:]
         require(Path(path).is_absolute() and Path(source).is_absolute() and re.fullmatch('[0-9a-f]{64}', previous), 'ROUTE_ARGUMENT')
-        publish(Path(path), checked_file(Path(source)), previous)
+        trusted_path(Path(source))
+        require(stat.S_IMODE(Path(source).stat().st_mode) == 0o600, 'ROUTE_CANDIDATE_POLICY')
+        publish(Path(path), Path(source).read_bytes(), previous)
     except (Failure, OSError):
         sys.exit(1)

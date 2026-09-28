@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """Submit a bounded deployment request; SSH disconnect never cancels host work."""
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
+import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
+from core import Failure, app_registration, fixture_authorized, host_registration, manifest, trusted_path
 
 
 def require(pattern, value, name):
@@ -18,6 +26,10 @@ def require(pattern, value, name):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--app", required=True)
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--fixture", action="store_true")
+    parser.add_argument("--platform-root", type=pathlib.Path)
     parser.add_argument("--operation", choices=("deploy", "status", "rollback", "reconcile"), required=True)
     parser.add_argument("--component", choices=("app", "rtk"), default="app")
     parser.add_argument("--image", default="")
@@ -29,35 +41,99 @@ def main():
     require(r"[0-9a-f]{40}", args.source_sha, "source SHA")
     require(r"[0-9a-f]{40}", args.platform_ref, "platform SHA")
     require(r"[A-Za-z0-9][A-Za-z0-9_-]{0,95}", args.request_id, "request ID")
-    if args.config != ".deploy/app.yml":
+    if args.fixture:
+        if os.geteuid() != 0 or not fixture_authorized() or args.host != "fixture-local" or args.platform_root != pathlib.Path("/opt/vps-deploy/releases") / args.platform_ref:
+            raise ValueError("fixture transport not authorized")
+        root = trusted_path(args.platform_root, directory=True)
+    else:
+        if args.platform_root:
+            raise ValueError("fixture release not allowed")
+        root = pathlib.Path(__file__).resolve().parents[1]
+    registration = app_registration(root, args.app)
+    if args.host != registration["host"]:
+        raise ValueError("app-host binding mismatch")
+    host_record = host_registration(root, args.host)
+    if args.config != registration["caller"]["config"]:
         raise ValueError("invalid config path")
-    image_repo = "9router" if args.component == "app" else "rtk-sidecar"
+    policy = registration["manifest"]
+    if args.component == "rtk" and "rtk" not in policy:
+        raise ValueError("unregistered component")
+    repository = policy["image"] if args.component == "app" else policy["rtk"]["image"]
+    if args.fixture:
+        profile = pathlib.Path("/etc/vps-deploy/apps") / args.app / "host.json"
+        selected = json.loads(trusted_path(profile).read_bytes())
+        if selected.get("platform_ref") != args.platform_ref or selected.get("fixture_ci") is not True:
+            raise ValueError("fixture release mismatch")
+        repository = selected["image_repository" if args.component == "app" else "rtk_image_repository"]
+        if not re.fullmatch(r"localhost:5000/[a-z0-9/_-]+", repository):
+            raise ValueError("invalid fixture image repository")
     if args.operation == "deploy":
-        require(r"ghcr\.io/thedemontuan/" + image_repo + r"@sha256:[0-9a-f]{64}", args.image, "image")
+        require(re.escape(repository) + r"@sha256:[0-9a-f]{64}", args.image, "image")
     elif args.image:
         raise ValueError("image not accepted for operation")
     if args.operation == "rollback" and args.component != "app":
         raise ValueError("rollback only accepts app")
     if args.operation != "status":
-        manifest = open(args.config, "rb").read(65537)
-        if len(manifest) > 65536:
+        manifest_bytes = pathlib.Path(args.config).read_bytes()
+        if len(manifest_bytes) > 65536:
             raise ValueError("oversize manifest")
+        manifest(manifest_bytes, registration)
         payload = dict(version=1, op=args.operation, request_id=args.request_id,
-                       app="9router", component=args.component, platform_ref=args.platform_ref,
-                       manifest_sha256=hashlib.sha256(manifest).hexdigest(), source_sha=args.source_sha)
+                       app=args.app, component=args.component, platform_ref=args.platform_ref,
+                       manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(), source_sha=args.source_sha)
         if args.operation == "deploy":
             payload["image"] = args.image
     else:
-        payload = dict(version=1, op="status", app="9router", request_id=args.request_id)
+        payload = dict(version=1, op="status", app=args.app, request_id=args.request_id)
 
-    host = require(r"[A-Za-z0-9.-]+", os.environ["DEPLOY_HOST"], "host")
-    port = require(r"[0-9]{1,5}", os.environ["DEPLOY_PORT"], "port")
-    user = require(r"[a-z][a-z0-9-]*", os.environ["DEPLOY_USER"], "user")
-    key, known = os.environ["DEPLOY_KEY_FILE"], os.environ["DEPLOY_KNOWN_HOSTS_FILE"]
-    ssh = ["ssh", "-i", key, "-p", port, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
-           "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=" + known,
-           "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
-           "-T", user + "@" + host, "deployctl"]
+    identity = host_record["ssh"]
+    hostname = os.environ.get("DEPLOY_HOST") or identity.get("address")
+    if not hostname:
+        raise ValueError("DEPLOY_HOST required")
+    require(r"[A-Za-z0-9_.-]+", hostname, "host address")
+    port = int(os.environ.get("DEPLOY_PORT") or identity.get("port", 22))
+    deploy_user = os.environ.get("DEPLOY_USER") or ("deploy-" + args.app)
+    expected_user = "deploy-" + args.app
+    if deploy_user != expected_user:
+        raise ValueError("invalid DEPLOY_USER: expected %s, got %s" % (expected_user, deploy_user))
+    expected_fingerprint = identity["fingerprint"]
+    if identity.get("host_key"):
+        host_key_raw = identity["host_key"]
+    else:
+        scan_bin = shutil.which("ssh-keyscan") or "ssh-keyscan"
+        scan_proc = subprocess.run([scan_bin, "-p", str(port), "-t", "ed25519", hostname], capture_output=True, text=True, timeout=15, check=False)
+        if scan_proc.returncode != 0 or not scan_proc.stdout.strip():
+            raise RuntimeError("ssh-keyscan failed: %s" % scan_proc.stderr.strip())
+        scanned_lines = [line.strip() for line in scan_proc.stdout.splitlines() if line.strip() and not line.startswith("#")]
+        if not scanned_lines:
+            raise RuntimeError("ssh-keyscan returned no valid host keys")
+        parts = scanned_lines[0].split()
+        if len(parts) < 3 or parts[-2] != "ssh-ed25519":
+            raise ValueError("unexpected ssh-keyscan output format")
+        host_key_raw = parts[-2] + " " + parts[-1]
+    key_type, encoded = host_key_raw.split()
+    try:
+        fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(encoded, validate=True)).digest()).decode().rstrip("=")
+    except (binascii.Error, ValueError):
+        raise ValueError("invalid host key encoding")
+    if key_type != "ssh-ed25519" or fingerprint != expected_fingerprint:
+        raise ValueError("host key fingerprint mismatch: expected %s, got %s" % (expected_fingerprint, fingerprint))
+    key = os.environ["DEPLOY_KEY_FILE"]
+    with tempfile.TemporaryDirectory(prefix="vps-deploy-ssh-") as temporary:
+        known = pathlib.Path(temporary) / "known_hosts"
+        known_host = ("[%s]:%d" % (hostname, port) if port != 22 else hostname)
+        known.write_text(known_host + " " + key_type + " " + encoded + "\n", encoding="ascii")
+        known.chmod(0o600)
+        ssh_bin = shutil.which("ssh") or "ssh"
+        ssh = [ssh_bin, "-F", "/dev/null", "-i", key, "-p", str(port), "-o", "BatchMode=yes",
+               "-o", "IdentitiesOnly=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes",
+               "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes",
+               "-o", "UserKnownHostsFile=" + str(known), "-o", "ConnectTimeout=10",
+               "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+               "-T", deploy_user + "@" + hostname, "deployctl"]
+        return dispatch(args, payload, ssh)
+
+def dispatch(args, payload, ssh):
 
     def call(request):
         result = subprocess.run(ssh, input=json.dumps(request, separators=(",", ":")),
@@ -86,7 +162,7 @@ def main():
     answer = connected(payload)
     if args.operation != "status":
         print(json.dumps({"receipt": answer}, sort_keys=True), flush=True)
-        status_request = dict(version=1, op="status", app="9router", request_id=args.request_id)
+        status_request = dict(version=1, op="status", app=args.app, request_id=args.request_id)
         while answer.get("status") not in ("complete", "failed", "recovery_required"):
             if time.monotonic() >= deadline:
                 raise TimeoutError("host operation still running; request_id=" + args.request_id)
@@ -117,6 +193,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, KeyError, RuntimeError, TimeoutError, subprocess.TimeoutExpired) as error:
+    except (Failure, ValueError, KeyError, TypeError, OSError, RuntimeError, TimeoutError, binascii.Error, subprocess.TimeoutExpired) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)

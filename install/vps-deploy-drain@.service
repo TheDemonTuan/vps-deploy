@@ -1,0 +1,7 @@
+[Unit]
+Description=Clean verified idle %i deployment slot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/vps-deploy-drain-%i
+TimeoutStartSec=120
