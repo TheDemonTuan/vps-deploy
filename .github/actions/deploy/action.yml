@@ -103,6 +103,9 @@ runs:
         OPERATION: ${{ inputs.operation }}
         COMPONENT: ${{ inputs.component }}
         IMAGE_REF: ${{ inputs.image-ref }}
+        DEPLOY_HOST: ${{ env.DEPLOY_HOST || '' }}
+        DEPLOY_PORT: ${{ env.DEPLOY_PORT || '' }}
+        DEPLOY_USER: ${{ env.DEPLOY_USER || '' }}
       run: |
         set -euo pipefail
         umask 077

@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -86,24 +87,51 @@ def main():
         payload = dict(version=1, op="status", app=args.app, request_id=args.request_id)
 
     identity = host_record["ssh"]
-    hostname, port = identity["address"], identity["port"]
-    key_type, encoded = identity["host_key"].split()
-    fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(encoded, validate=True)).digest()).decode().rstrip("=")
-    if key_type != "ssh-ed25519" or fingerprint != identity["fingerprint"]:
-        raise ValueError("host key fingerprint mismatch")
+    hostname = os.environ.get("DEPLOY_HOST") or identity.get("address")
+    if not hostname:
+        raise ValueError("DEPLOY_HOST required")
+    require(r"[A-Za-z0-9_.-]+", hostname, "host address")
+    port = int(os.environ.get("DEPLOY_PORT") or identity.get("port", 22))
+    deploy_user = os.environ.get("DEPLOY_USER") or ("deploy-" + args.app)
+    expected_user = "deploy-" + args.app
+    if deploy_user != expected_user:
+        raise ValueError("invalid DEPLOY_USER: expected %s, got %s" % (expected_user, deploy_user))
+    expected_fingerprint = identity["fingerprint"]
+    if identity.get("host_key"):
+        host_key_raw = identity["host_key"]
+    else:
+        scan_bin = shutil.which("ssh-keyscan") or "ssh-keyscan"
+        scan_proc = subprocess.run([scan_bin, "-p", str(port), "-t", "ed25519", hostname], capture_output=True, text=True, timeout=15, check=False)
+        if scan_proc.returncode != 0 or not scan_proc.stdout.strip():
+            raise RuntimeError("ssh-keyscan failed: %s" % scan_proc.stderr.strip())
+        scanned_lines = [line.strip() for line in scan_proc.stdout.splitlines() if line.strip() and not line.startswith("#")]
+        if not scanned_lines:
+            raise RuntimeError("ssh-keyscan returned no valid host keys")
+        parts = scanned_lines[0].split()
+        if len(parts) < 3 or parts[-2] != "ssh-ed25519":
+            raise ValueError("unexpected ssh-keyscan output format")
+        host_key_raw = parts[-2] + " " + parts[-1]
+    key_type, encoded = host_key_raw.split()
+    try:
+        fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(encoded, validate=True)).digest()).decode().rstrip("=")
+    except (binascii.Error, ValueError):
+        raise ValueError("invalid host key encoding")
+    if key_type != "ssh-ed25519" or fingerprint != expected_fingerprint:
+        raise ValueError("host key fingerprint mismatch: expected %s, got %s" % (expected_fingerprint, fingerprint))
     key = os.environ["DEPLOY_KEY_FILE"]
     with tempfile.TemporaryDirectory(prefix="vps-deploy-ssh-") as temporary:
         known = pathlib.Path(temporary) / "known_hosts"
-        known.write_text(("[%s]:%d" % (hostname, port) if port != 22 else hostname) + " " + identity["host_key"] + "\n", encoding="ascii")
+        known_host = ("[%s]:%d" % (hostname, port) if port != 22 else hostname)
+        known.write_text(known_host + " " + key_type + " " + encoded + "\n", encoding="ascii")
         known.chmod(0o600)
-        ssh = ["ssh", "-F", "/dev/null", "-i", key, "-p", str(port), "-o", "BatchMode=yes",
+        ssh_bin = shutil.which("ssh") or "ssh"
+        ssh = [ssh_bin, "-F", "/dev/null", "-i", key, "-p", str(port), "-o", "BatchMode=yes",
                "-o", "IdentitiesOnly=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes",
                "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes",
                "-o", "UserKnownHostsFile=" + str(known), "-o", "ConnectTimeout=10",
                "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
-               "-T", "deploy-" + args.app + "@" + hostname, "deployctl"]
+               "-T", deploy_user + "@" + hostname, "deployctl"]
         return dispatch(args, payload, ssh)
-
 
 def dispatch(args, payload, ssh):
 

@@ -1,9 +1,7 @@
 version: 1
 host: oracle-main
 ssh:
-  address: 134.185.89.192
   port: 22
-  host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA754IShwuzQAEHyEvFSNs2b8NkkeO9SaeB2TVpNpVWw
   fingerprint: SHA256:e3LV9csFdtQi0+fs+GkRX1T8RFCYNy7afFgSm8nyfc4
 traefik:
   container: edge-traefik

@@ -89,7 +89,10 @@ def preflight(directory, profile):
         hashes[str(path)] = digest(content)
     require(set(profile['registration']['route']['required_middlewares']) <= shared_middlewares, 'MIDDLEWARE_MISSING')
     mount = profile['host_registration']['traefik']['mount']
-    require(docker('exec', profile['host_registration']['traefik']['container'], 'cat', mount + '/' + profile['route_name']).encode() == raw, 'TRAEFIK_UNREADABLE')
+    traefik_container = profile['host_registration']['traefik']['container']
+    for path, content in files.items():
+        relative = path.relative_to(directory).as_posix()
+        require(docker('exec', traefik_container, 'cat', mount + '/' + relative).encode() == content, 'TRAEFIK_UNREADABLE')
     return target, raw, hashes
 
 

@@ -381,6 +381,14 @@ if poll fixture-bad-route 2> "$fixture/bad-route.log"; then echo 'Malformed shar
 if docker container inspect 9router-green >/dev/null 2>&1; then echo 'Candidate started before preflight' >&2; exit 1; fi
 cp "$fixture/shared.saved" "$fixture/dynamic/shared.yml"
 sha256sum -c "$fixture/sentinel.sha" >/dev/null
+# Unreadable sibling dynamic route file fails preflight before candidate container starts
+printf 'http: {}\n' > "$fixture/dynamic/acb.yml"
+chmod 0600 "$fixture/dynamic/acb.yml"
+printf '%s' "$(make_request deploy app fixture-unreadable-sibling "$second")" | ssh_request | assert_json '{"status":"running"}'
+if poll fixture-unreadable-sibling 2> "$fixture/unreadable-sibling.log"; then echo 'Unreadable sibling route accepted' >&2; exit 1; fi
+[[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
+if docker container inspect 9router-green >/dev/null 2>&1; then echo 'Candidate started despite unreadable sibling route' >&2; exit 1; fi
+rm -f "$fixture/dynamic/acb.yml"
 printf '{"version":1,"op":"deploy","app":"9router","component":"app","request_id":"invalid-image","platform_ref":"%s","source_sha":"%040d","manifest_sha256":"%s","image":"localhost:5000/9router:latest"}' "$release_sha" 0 "$(sha256sum "$profile/app.yml" | cut -d' ' -f1)" | ssh_request > "$fixture/rejected.json" || true
 assert_json '{"status":"failed","error_code":"INVALID_IMAGE"}' < "$fixture/rejected.json"
 fault receipt_saved

@@ -96,37 +96,57 @@ class DeployActionBoundary(unittest.TestCase):
         self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "build-docker.yml"],
                                          cwd=self.root, env=env, capture_output=True).returncode, 0)
 
-    def test_transport_ignores_endpoint_environment(self):
-        executable = self.root / "ssh"
+    def test_transport_validates_user_and_fingerprint(self):
+        def make_mock(name, py_body):
+            target = self.root / name
+            target.write_text(f"#!/usr/bin/env python3\n{py_body}\n")
+            target.chmod(0o700)
+            if sys.platform == "win32":
+                cmd = self.root / f"{name}.cmd"
+                cmd.write_text(f"@\"{sys.executable}\" \"{target}\" %*\n")
+        make_mock("ssh-keyscan", "print('target.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA754IShwuzQAEHyEvFSNs2b8NkkeO9SaeB2TVpNpVWw')")
+        make_mock("ssh", "import json, os, sys\nopen(os.environ['SSH_CAPTURE'], 'w').write(json.dumps(sys.argv[1:]))\nprint(json.dumps({'status':'complete','healthy':True,'image':'fixture','configured_generation':'fixture','active':'blue','draining':[]}))")
         captured = self.root / "ssh-argv"
-        executable.write_text("#!/usr/bin/env python3\nimport json, os, sys\n"
-                              "open(os.environ['SSH_CAPTURE'], 'w').write(json.dumps(sys.argv[1:]))\n"
-                              "print(json.dumps({'status':'complete','healthy':True,'image':'fixture',"
-                              "'configured_generation':'fixture','active':'blue','draining':[]}))\n")
-        executable.chmod(0o700)
         summary = self.root / "summary"
         key = self.root / "key"
         key.write_text("fixture-only")
         key.chmod(0o600)
-        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
-               "DEPLOY_HOST": "attacker.example", "DEPLOY_PORT": "1", "DEPLOY_USER": "attacker",
-               "DEPLOY_KEY_FILE": str(key), "GITHUB_STEP_SUMMARY": str(summary), "SSH_CAPTURE": str(captured)}
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
-                                 "--app", "9router", "--host", "oracle-main", "--operation", "status",
-                                 "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
-                                 "--config", self.caller["config"], "--request-id", "fixture-status"],
-                                cwd=self.root / "source", env=env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        bad_env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                   "DEPLOY_HOST": "target.example", "DEPLOY_PORT": "22", "DEPLOY_USER": "attacker",
+                   "DEPLOY_KEY_FILE": str(key), "GITHUB_STEP_SUMMARY": str(summary), "SSH_CAPTURE": str(captured)}
+        res_bad = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
+                                  "--app", "9router", "--host", "oracle-main", "--operation", "status",
+                                  "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
+                                  "--config", self.caller["config"], "--request-id", "fixture-status"],
+                                 cwd=self.root / "source", env=bad_env, capture_output=True, text=True)
+        self.assertNotEqual(res_bad.returncode, 0)
+        self.assertIn("invalid DEPLOY_USER", res_bad.stderr)
+
+        good_env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                    "DEPLOY_HOST": "target.example", "DEPLOY_PORT": "22", "DEPLOY_USER": "deploy-9router",
+                    "DEPLOY_KEY_FILE": str(key), "GITHUB_STEP_SUMMARY": str(summary), "SSH_CAPTURE": str(captured)}
+        res_good = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
+                                   "--app", "9router", "--host", "oracle-main", "--operation", "status",
+                                   "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
+                                   "--config", self.caller["config"], "--request-id", "fixture-status"],
+                                  cwd=self.root / "source", env=good_env, capture_output=True, text=True)
+        self.assertEqual(res_good.returncode, 0, res_good.stderr)
         import json
         argv = json.loads(captured.read_text())
-        self.assertIn("deploy-9router@134.185.89.192", argv)
-        self.assertIn("/dev/null", argv)
+        self.assertIn("deploy-9router@target.example", argv)
         self.assertIn("GlobalKnownHostsFile=/dev/null", argv)
         self.assertIn("ClearAllForwardings=yes", argv)
         self.assertIn("ForwardAgent=no", argv)
-        self.assertNotIn("attacker.example", argv)
         self.assertNotIn("attacker", argv)
 
+        make_mock("ssh-keyscan", "print('target.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP//////////////////////////////////////////')")
+        res_mitm = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
+                                   "--app", "9router", "--host", "oracle-main", "--operation", "status",
+                                   "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
+                                   "--config", self.caller["config"], "--request-id", "fixture-status"],
+                                  cwd=self.root / "source", env=good_env, capture_output=True, text=True)
+        self.assertNotEqual(res_mitm.returncode, 0)
+        self.assertIn("fingerprint mismatch", res_mitm.stderr)
 
 if __name__ == "__main__":
     unittest.main()

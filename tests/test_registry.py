@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from core import Failure, app_registration, exact, host_registration, parse_yaml, resource_collisions, trusted_path
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -4,6 +4,7 @@ host: oracle-main
 caller:
   repository: TheDemonTuan/9router
   ref: refs/heads/master
+  refs: [refs/heads/master, refs/heads/main]
   config: .deploy/app.yml
   build_workflows: [deploy.yml]
   deploy_workflows: [deploy.yml, rtk-sidecar.yml, deploy-ops.yml]

@@ -51,7 +51,8 @@ def main():
     registration = app_registration(platform, env["APP"])
     registered_host = registration["host"]
     host_registration(platform, registered_host)
-    if (workflow != "build-docker.yml" and registered_host != env["HOST"]) or registration["caller"]["repository"] != env["CALLER_REPO"] or registration["caller"]["ref"] != env["CALLER_REF"] or registration["caller"]["config"] != env["CONFIG"]:
+    allowed_refs = registration["caller"].get("refs") or [registration["caller"]["ref"]]
+    if (workflow != "build-docker.yml" and registered_host != env["HOST"]) or registration["caller"]["repository"] != env["CALLER_REPO"] or env["CALLER_REF"] not in allowed_refs or registration["caller"]["config"] != env["CONFIG"]:
         raise ValueError("caller binding mismatch")
     policy = registration["manifest"]
     if workflow == "build-docker.yml":

@@ -45,7 +45,12 @@ class RoutePolicy(unittest.TestCase):
             shared = directory / 'shared.yml'
             shared.write_bytes(b'http:\n  middlewares:\n    security-headers: {headers: {}}\n    deny-internal: {headers: {}}\n')
             shared.chmod(0o644)
-            with patch.object(route, 'docker', return_value=target.read_text()):
+            def mock_docker(*args):
+                if len(args) >= 4 and args[:3] == ('exec', 'edge-traefik', 'cat'):
+                    rel = args[3].replace('/etc/traefik/dynamic/', '')
+                    return (directory / rel).read_text()
+                return ''
+            with patch.object(route, 'docker', side_effect=mock_docker):
                 _, raw, hashes = route.preflight(directory, PROFILE)
                 self.assertEqual(digest(raw), digest(rendered()))
                 route.unchanged(hashes, directory, PROFILE['route_name'])
@@ -68,6 +73,9 @@ class RoutePolicy(unittest.TestCase):
                 shared.unlink()
                 target.chmod(0o600)
                 with self.assertRaisesRegex(Failure, 'ROUTE_UNREADABLE'):
+                    route.preflight(directory, PROFILE)
+            with patch.object(route, 'docker', return_value='corrupted'):
+                with self.assertRaisesRegex(Failure, 'TRAEFIK_UNREADABLE'):
                     route.preflight(directory, PROFILE)
 
     def test_custom_probe_and_duplicate_or_cached_ack(self):

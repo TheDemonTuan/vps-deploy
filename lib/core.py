@@ -1,5 +1,8 @@
 import contextlib
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 import hashlib
 import json
 import os
@@ -117,8 +120,10 @@ def app_registration(release, app):
     require(type(value['version']) is int and value['version'] == 1 and value['app'] == app, 'REGISTRY_POLICY')
     registration_id(value['host'])
     caller = value['caller']
-    fields(caller, {'repository', 'ref', 'config', 'build_workflows', 'deploy_workflows'}, {'repository', 'ref', 'config', 'build_workflows', 'deploy_workflows'})
+    fields(caller, {'repository', 'ref', 'refs', 'config', 'build_workflows', 'deploy_workflows'}, {'repository', 'ref', 'config', 'build_workflows', 'deploy_workflows'})
     require(type(caller['repository']) is str and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', caller['repository']) and type(caller['ref']) is str and re.fullmatch(r'refs/heads/[A-Za-z0-9_./-]+', caller['ref']) and type(caller['config']) is str and re.fullmatch(r'\.[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+\.yml', caller['config']), 'REGISTRY_POLICY')
+    if 'refs' in caller:
+        require(type(caller['refs']) is list and caller['refs'] and all(type(r) is str and re.fullmatch(r'refs/heads/[A-Za-z0-9_./-]+', r) for r in caller['refs']) and caller['ref'] in caller['refs'], 'REGISTRY_POLICY')
     for key in ('build_workflows', 'deploy_workflows'):
         names = caller[key]
         require(type(names) is list and names and all(type(name) is str and re.fullmatch(r'[A-Za-z0-9_-]+\.yml', name) for name in names) and len(names) == len(set(names)), 'REGISTRY_POLICY')
@@ -157,14 +162,17 @@ def host_registration(release, host_id):
     fields(value, {'version', 'host', 'ssh', 'traefik', 'apps'}, {'version', 'host', 'ssh', 'traefik', 'apps'})
     require(type(value['version']) is int and value['version'] == 1 and value['host'] == host_id, 'REGISTRY_POLICY')
     ssh = value['ssh']
-    fields(ssh, {'address', 'port', 'host_key', 'fingerprint'}, {'address', 'port', 'host_key', 'fingerprint'})
-    import ipaddress
-    try:
-        ipaddress.ip_address(ssh['address'])
-    except (ValueError, TypeError):
-        if not (host_id == 'fixture-local' and fixture_authorized() and ssh['address'] == 'localhost'):
-            hostname(ssh['address'])
-    require(type(ssh['port']) is int and 1 <= ssh['port'] <= 65535 and type(ssh['host_key']) is str and re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/]{68}', ssh['host_key']) and type(ssh['fingerprint']) is str and re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}', ssh['fingerprint']), 'REGISTRY_POLICY')
+    fields(ssh, {'address', 'port', 'host_key', 'fingerprint'}, {'port', 'fingerprint'})
+    if 'address' in ssh:
+        import ipaddress
+        try:
+            ipaddress.ip_address(ssh['address'])
+        except (ValueError, TypeError):
+            if not (host_id == 'fixture-local' and fixture_authorized() and ssh['address'] == 'localhost'):
+                hostname(ssh['address'])
+    require(type(ssh['port']) is int and 1 <= ssh['port'] <= 65535 and type(ssh['fingerprint']) is str and re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}', ssh['fingerprint']), 'REGISTRY_POLICY')
+    if 'host_key' in ssh:
+        require(type(ssh['host_key']) is str and re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/]{68}', ssh['host_key']), 'REGISTRY_POLICY')
     traefik = value['traefik']
     fields(traefik, {'container', 'dynamic_dir', 'mount'}, {'container', 'dynamic_dir', 'mount'})
     require(type(traefik['container']) is str and re.fullmatch(r'[a-z0-9][a-z0-9-]*', traefik['container']), 'REGISTRY_POLICY')
@@ -309,7 +317,8 @@ def lock(path, timeout=0):
         deadline = time.monotonic() + timeout
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if fcntl:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:

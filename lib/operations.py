@@ -83,11 +83,11 @@ def anonymous_image(ref):
 
 def pull(release, profile, cfg, ref, slot, rtk=False):
     require(type(ref) is str and ref.startswith(profile['rtk_image_repository'] if rtk else profile['image_repository']), 'INVALID_IMAGE')
-    anonymous_image(ref)
     try:
         return image_id(ref)
     except Failure:
         pass
+    anonymous_image(ref)
     if not rtk:
         command('/usr/bin/bash', str(Path(__file__).with_name('bluegreen.sh')), 'pull', str(release), str(cfg), slot, env=environment(profile, cfg, ref), timeout=650)
         return image_id(ref)

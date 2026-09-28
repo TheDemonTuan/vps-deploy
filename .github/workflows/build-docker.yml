@@ -92,8 +92,14 @@ jobs:
           image = registration['manifest']['image']
           if not image.startswith('ghcr.io/') or registration['manifest']['platform'] != 'linux/arm64':
               raise SystemExit('unsupported production build policy')
+          allowed_ref = registration['caller'].get('ref', 'refs/heads/master')
+          caller_ref = os.environ.get('CALLER_REF', '')
+          tags = [f"{image}:sha-{os.environ['SOURCE_SHA']}"]
+          if caller_ref == allowed_ref:
+              tags.append(f"{image}:latest")
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
               stream.write('REGISTERED_IMAGE=' + image + '\n')
+              stream.write('DOCKER_TAGS=' + ','.join(tags) + '\n')
           PY
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -109,9 +115,7 @@ jobs:
           file: source/Dockerfile
           push: true
           platforms: linux/arm64
-          tags: |
-            ${{ env.REGISTERED_IMAGE }}:sha-${{ inputs.source-sha }}
-            ${{ env.REGISTERED_IMAGE }}:latest
+          tags: ${{ env.DOCKER_TAGS }}
           cache-from: type=gha
           cache-to: type=gha,mode=min,ignore-error=true
           provenance: false
