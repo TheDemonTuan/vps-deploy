@@ -120,11 +120,13 @@ def app_registration(release, app):
     require(type(value['version']) is int and value['version'] == 1 and value['app'] == app, 'REGISTRY_POLICY')
     registration_id(value['host'])
     caller = value['caller']
-    fields(caller, {'repository', 'ref', 'refs', 'config', 'build_workflows', 'deploy_workflows'}, {'repository', 'ref', 'config', 'build_workflows', 'deploy_workflows'})
+    fields(caller, {'repository', 'ref', 'refs', 'config', 'build_workflows', 'deploy_workflows', 'security_workflows'}, {'repository', 'ref', 'config', 'build_workflows', 'deploy_workflows'})
     require(type(caller['repository']) is str and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', caller['repository']) and type(caller['ref']) is str and re.fullmatch(r'refs/heads/[A-Za-z0-9_./-]+', caller['ref']) and type(caller['config']) is str and re.fullmatch(r'\.[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+\.yml', caller['config']), 'REGISTRY_POLICY')
     if 'refs' in caller:
         require(type(caller['refs']) is list and caller['refs'] and all(type(r) is str and re.fullmatch(r'refs/heads/[A-Za-z0-9_./-]+', r) for r in caller['refs']) and caller['ref'] in caller['refs'], 'REGISTRY_POLICY')
-    for key in ('build_workflows', 'deploy_workflows'):
+    for key in ('build_workflows', 'deploy_workflows', 'security_workflows'):
+        if key not in caller and key == 'security_workflows':
+            continue
         names = caller[key]
         require(type(names) is list and names and all(type(name) is str and re.fullmatch(r'[A-Za-z0-9_-]+\.yml', name) for name in names) and len(names) == len(set(names)), 'REGISTRY_POLICY')
     policy = value['manifest']

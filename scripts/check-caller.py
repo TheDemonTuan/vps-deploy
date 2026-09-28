@@ -39,7 +39,7 @@ def checked_sha(directory, expected):
 def main():
     workflow = sys.argv[1] if len(sys.argv) > 1 else None
     preflight = sys.argv[2:] == ["--preflight"]
-    if workflow not in ("build-docker.yml", "deploy/action.yml") or (sys.argv[2:] and not preflight):
+    if workflow not in ("build-docker.yml", "deploy/action.yml", "security-trivy.yml") or (sys.argv[2:] and not preflight):
         raise ValueError("unknown workflow or option")
     env = os.environ
     source, platform_sha = env["SOURCE_SHA"], env["PLATFORM_REF"]
@@ -60,6 +60,19 @@ def main():
             raise ValueError("invalid build inputs")
         callers = registration["caller"]["build_workflows"]
         pin = "TheDemonTuan/vps-deploy/.github/workflows/build-docker.yml@" + platform_sha
+    elif workflow == "security-trivy.yml":
+        mode = env.get("SCAN_MODE", "source")
+        if mode not in ("source", "image"):
+            raise ValueError("invalid scan mode")
+        if mode == "image":
+            image = env.get("IMAGE_REF", "")
+            allowed_images = [policy["image"]]
+            if "rtk" in policy:
+                allowed_images.append(policy["rtk"]["image"])
+            if not any(re.fullmatch(re.escape(repo) + r"@sha256:[0-9a-f]{64}", image) for repo in allowed_images):
+                raise ValueError("invalid scan image reference")
+        callers = registration["caller"].get("security_workflows") or registration["caller"]["build_workflows"]
+        pin = "TheDemonTuan/vps-deploy/.github/workflows/security-trivy.yml@" + platform_sha
     else:
         component, operation, image = env["COMPONENT"], env["OPERATION"], env["IMAGE_REF"]
         if component not in ("app", "rtk") or (component == "rtk" and "rtk" not in policy):

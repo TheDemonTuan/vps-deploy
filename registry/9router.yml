@@ -8,6 +8,7 @@ caller:
   config: .deploy/app.yml
   build_workflows: [deploy.yml]
   deploy_workflows: [deploy.yml, rtk-sidecar.yml, deploy-ops.yml]
+  security_workflows: [deploy.yml]
 manifest:
   version: 1
   app: 9router

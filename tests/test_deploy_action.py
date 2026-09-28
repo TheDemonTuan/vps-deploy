@@ -96,6 +96,22 @@ class DeployActionBoundary(unittest.TestCase):
         self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "build-docker.yml"],
                                          cwd=self.root, env=env, capture_output=True).returncode, 0)
 
+    def test_security_trivy_uses_reusable_workflow(self):
+        pin = "TheDemonTuan/vps-deploy/.github/workflows/security-trivy.yml@" + self.platform_sha
+        self.workflow.write_text("jobs:\n  security:\n    uses: " + pin + "\n")
+        env_src = {**os.environ, **self.env, "SCAN_MODE": "source", "IMAGE_REF": ""}
+        self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
+                                         cwd=self.root, env=env_src, capture_output=True).returncode, 0)
+        env_img = {**os.environ, **self.env, "SCAN_MODE": "image"}
+        self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
+                                         cwd=self.root, env=env_img, capture_output=True).returncode, 0)
+        env_bad_mode = {**os.environ, **self.env, "SCAN_MODE": "invalid"}
+        self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
+                                            cwd=self.root, env=env_bad_mode, capture_output=True).returncode, 0)
+        env_bad_img = {**os.environ, **self.env, "SCAN_MODE": "image", "IMAGE_REF": "ghcr.io/other/repo@sha256:" + "a"*64}
+        self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
+                                            cwd=self.root, env=env_bad_img, capture_output=True).returncode, 0)
+
     def test_transport_validates_user_and_fingerprint(self):
         def make_mock(name, py_body):
             target = self.root / name
