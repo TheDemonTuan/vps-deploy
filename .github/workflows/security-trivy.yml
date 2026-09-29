@@ -21,6 +21,14 @@ on:
         required: false
         type: string
         default: ''
+      platform:
+        required: false
+        type: string
+        default: ''
+      vuln-severity:
+        required: false
+        type: string
+        default: 'HIGH,CRITICAL'
 permissions:
   contents: read
   packages: read
@@ -36,12 +44,14 @@ jobs:
           PLATFORM_REF: ${{ inputs.platform-ref }}
           CALLER_SHA: ${{ github.sha }}
           SCAN_MODE: ${{ inputs.scan-mode }}
+          PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" ]]
           [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ ]]
           [[ "$APP" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
           [[ "$SCAN_MODE" =~ ^(source|image)$ ]]
+          [[ -z "${PLATFORM:-}" || "$PLATFORM" =~ ^[a-z0-9/_-]+$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: TheDemonTuan/vps-deploy
@@ -90,6 +100,7 @@ jobs:
       - name: Ensure Trivy cache dir exists
         run: mkdir -p ~/.cache/trivy
       - name: Restore Trivy DB cache
+        id: trivy-cache
         uses: actions/cache/restore@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.cache/trivy
@@ -109,19 +120,29 @@ jobs:
           SCAN_MODE: ${{ inputs.scan-mode }}
           IMAGE_REF: ${{ inputs.image-ref }}
           APP: ${{ inputs.app }}
+          PLATFORM: ${{ inputs.platform }}
+          VULN_SEVERITY: ${{ inputs.vuln-severity }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/trivy-reports"
           REPORT_DIR="$RUNNER_TEMP/trivy-reports"
 
           COMMON_OPTS=()
-          if [[ -f ".trivyignore" ]]; then
+          if [[ -f ".trivyignore.yaml" ]]; then
+            COMMON_OPTS+=(--ignorefile ".trivyignore.yaml")
+          elif [[ -f ".trivyignore.yml" ]]; then
+            COMMON_OPTS+=(--ignorefile ".trivyignore.yml")
+          elif [[ -f ".trivyignore" ]]; then
             COMMON_OPTS+=(--ignorefile ".trivyignore")
           fi
           if [[ -f "trivy-secret.yaml" ]]; then
             COMMON_OPTS+=(--secret-config "trivy-secret.yaml")
           fi
 
+          IMAGE_OPTS=()
+          if [[ -n "${PLATFORM:-}" ]]; then
+            IMAGE_OPTS+=(--platform "$PLATFORM")
+          fi
           if [[ "$SCAN_MODE" == "source" ]]; then
             echo "::group::Trivy Source Vulnerability, Misconfig & Secret Gate"
             # 1. Human readable console summary
@@ -154,50 +175,49 @@ jobs:
 
             trivy fs "${COMMON_OPTS[@]}" \
               --scanners vuln \
-              --severity CRITICAL \
+              --severity "${VULN_SEVERITY:-HIGH,CRITICAL}" \
               --exit-code 1 \
               .
             echo "::endgroup::"
           elif [[ "$SCAN_MODE" == "image" ]]; then
             echo "::group::Trivy Immutable Image Gate for $IMAGE_REF"
             # 1. Human readable console summary
-            trivy image "${COMMON_OPTS[@]}" \
+            trivy image "${COMMON_OPTS[@]}" "${IMAGE_OPTS[@]}" \
               --scanners vuln,secret,misconfig \
               --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
               --format table \
               "$IMAGE_REF"
 
             # 2. JSON report artifact
-            trivy image "${COMMON_OPTS[@]}" \
+            trivy image "${COMMON_OPTS[@]}" "${IMAGE_OPTS[@]}" \
               --scanners vuln,secret,misconfig \
               --format json \
               --output "$REPORT_DIR/trivy-image-${APP}.json" \
               "$IMAGE_REF"
 
             # 3. CycloneDX SBOM for exact image digest
-            trivy image "${COMMON_OPTS[@]}" \
+            trivy image "${COMMON_OPTS[@]}" "${IMAGE_OPTS[@]}" \
               --format cyclonedx \
               --output "$REPORT_DIR/sbom-image-${APP}.cdx.json" \
               "$IMAGE_REF"
-
             # 4. Strict Gate: Fail if CRITICAL vulnerabilities or HIGH/CRITICAL secrets/misconfigs exist in image
             echo "Running strict image gate..."
-            trivy image "${COMMON_OPTS[@]}" \
+            trivy image "${COMMON_OPTS[@]}" "${IMAGE_OPTS[@]}" \
               --scanners secret,misconfig \
               --severity HIGH,CRITICAL \
               --exit-code 1 \
               "$IMAGE_REF"
 
-            trivy image "${COMMON_OPTS[@]}" \
+            trivy image "${COMMON_OPTS[@]}" "${IMAGE_OPTS[@]}" \
               --scanners vuln \
-              --severity CRITICAL \
+              --severity "${VULN_SEVERITY:-HIGH,CRITICAL}" \
               --exit-code 1 \
               "$IMAGE_REF"
             echo "::endgroup::"
           fi
       - name: Save Trivy DB cache
         uses: actions/cache/save@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
-        if: always()
+        if: always() && steps.trivy-cache.outputs.cache-hit != 'true'
         with:
           path: ~/.cache/trivy
           key: trivy-db-${{ runner.os }}-${{ github.run_id }}

@@ -99,6 +99,7 @@ class DeployActionBoundary(unittest.TestCase):
     def test_security_trivy_uses_reusable_workflow(self):
         pin = "TheDemonTuan/vps-deploy/.github/workflows/security-trivy.yml@" + self.platform_sha
         self.workflow.write_text("jobs:\n  security:\n    uses: " + pin + "\n")
+        (self.root / "source/.github/workflows/rtk-sidecar.yml").write_text("jobs:\n  security:\n    uses: " + pin + "\n")
         base_env = {k: v for k, v in self.env.items() if k not in ("ACTION_REF", "HOST")}
         env_src = {**os.environ, **base_env, "SCAN_MODE": "source", "IMAGE_REF": ""}
         self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
