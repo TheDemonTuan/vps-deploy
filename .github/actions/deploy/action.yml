@@ -43,7 +43,7 @@ runs:
         [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ && "$ACTION_REF" == "$PLATFORM_REF" ]]
         [[ "$APP" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
         [[ "$HOST" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: TheDemonTuan/vps-deploy
         ref: ${{ inputs.platform-ref }}
@@ -69,7 +69,7 @@ runs:
         sudo apt-get update
         sudo apt-get install -y python3-yaml
         python3 platform/scripts/check-caller.py deploy/action.yml --preflight
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ github.repository }}
         ref: ${{ inputs.source-sha }}
