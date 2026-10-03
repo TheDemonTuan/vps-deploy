@@ -34,3 +34,13 @@ Image rollback uses a retained previous container/digest through a new rollback 
 ## Disposable fixture only
 
 `--fixture` is root-only with `/etc/vps-deploy/fixture-ci` owned by root and mode `0600`, host `fixture-local`, assembled release registry/hosts, native localhost images, and a synthetic caller Git commit at `--app-ref`; `--check` still writes nothing. Never create this marker on production. The fixture is not a permission to skip caller manifest policy, release integrity, SSH host-key verification, or per-app isolation.
+
+### GitHub-hosted CGW verification
+
+`.github/workflows/cgw-runtime-ci.yml` builds the exact public app commit from `app_ref` on native `ubuntu-24.04` and `ubuntu-24.04-arm`. The guarded root-only fixture uses an ephemeral loopback OCI registry; it does not publish to GHCR, activate production registrations, use accounts, or upload private state.
+
+Run [37120838018](https://github.com/TheDemonTuan/vps-deploy/actions/runs/37120838018), platform commit `6dfb57053f52c38b9bcdff4c8d4ecf49f2de2ec2`, app commit `b00377d7cbae5516ae7a36020741a4198524df54`, passed both architectures: full 41 Python tests, blue-green shell harness, actual Chromium namespace/renderer sandbox report, authenticated offline browser HTTP fixture, and real Docker/systemd deploy/reconcile with SIGKILL at ten persisted lifecycle phases. Fence admission denial, private snapshot integrity, single writer, commit/resume and rollback assertions passed. No AppArmor teardown, unconfined override, host sysctl change, SYS_ADMIN capability, or browser no-sandbox fallback was used in this run.
+
+The same platform commit passed [Platform verification 37120838027](https://github.com/TheDemonTuan/vps-deploy/actions/runs/37120838027) on both architectures: immutable migration baseline, all 41 current Python tests, adapted blue-green shell harness, actionlint, and disposable Traefik/systemd integration.
+
+The two lifecycle images differ only by OCI labels; this proves stateful switching/recovery, not cross-release schema migration. Renderer process enumeration is unavailable to the unprivileged observer in these sandboxed containers; renderer sandbox evidence comes from `chrome://sandbox` and the actual DOM interaction. Private ChatGPT/Codex, VNC login, authenticated outbound tunnel, and production activation remain separate gates.
