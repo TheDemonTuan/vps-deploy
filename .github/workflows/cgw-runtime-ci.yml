@@ -7,7 +7,7 @@ on:
       app_ref:
         type: string
         required: false
-        default: 'ce0a38e121876e931fae8cfc2f0f4236b283c7ce'
+        default: 'ce0a38e1882677ae89ffb9f4b54a5f51337e6a93'
         description: Reviewed immutable 40-hex TheDemonTuan/9router commit (no tags or branches)
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     env:
-      CGW_APP_REF: ${{ inputs.app_ref || 'ce0a38e121876e931fae8cfc2f0f4236b283c7ce' }}
+      CGW_APP_REF: ${{ inputs.app_ref || 'ce0a38e1882677ae89ffb9f4b54a5f51337e6a93' }}
       CGW_CI_ARCH: ${{ matrix.arch }}
       HTTP_PROXY: ''
       HTTPS_PROXY: ''
