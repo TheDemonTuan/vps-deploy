@@ -111,6 +111,7 @@ run_unit() {
   if systemd-run "${environment[@]}" --unit="$unit" --property=Type=exec --property=RuntimeMaxSec=1800 --property=TimeoutStopSec=60 --property=KillMode=mixed --wait /usr/bin/python3 "${args[@]}"; then
     [[ -z $phase ]]
   else
+    journalctl -u "$unit" --no-pager || true
     [[ -n $phase ]]
     [[ $(systemctl show "$unit" -p ExecMainStatus --value) == 9 ]]
   fi
