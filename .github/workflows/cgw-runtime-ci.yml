@@ -7,12 +7,12 @@ on:
       app_ref:
         type: string
         required: false
-        default: 'ce0a38e1882677ae89ffb9f4b54a5f51337e6a93'
+        default: 'b3ca876a4ba22dd70f03e223d6a2a075d5eecbe5'
         description: Reviewed immutable 40-hex TheDemonTuan/9router commit (no tags or branches)
 permissions:
   contents: read
 concurrency:
-  group: cgw-platform-${{ github.ref }}-${{ inputs.app_ref || 'ce0a38e1' }}
+  group: cgw-platform-${{ github.ref }}-${{ inputs.app_ref || 'b3ca876a' }}
   cancel-in-progress: false
 jobs:
   native-lifecycle:
@@ -27,7 +27,7 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     env:
-      CGW_APP_REF: ${{ inputs.app_ref || 'ce0a38e1882677ae89ffb9f4b54a5f51337e6a93' }}
+      CGW_APP_REF: ${{ inputs.app_ref || 'b3ca876a4ba22dd70f03e223d6a2a075d5eecbe5' }}
       CGW_CI_ARCH: ${{ matrix.arch }}
       HTTP_PROXY: ''
       HTTPS_PROXY: ''
