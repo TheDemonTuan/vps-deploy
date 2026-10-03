@@ -1,15 +1,18 @@
 name: CGW disposable native lifecycle
 on:
+  push:
+    branches: [feat/cgw-runtime]
   workflow_dispatch:
     inputs:
       app_ref:
         type: string
-        required: true
+        required: false
+        default: '77d37ba2eb13beaa2a1d2b4fdd2ebd0b7157862c'
         description: Reviewed immutable 40-hex TheDemonTuan/9router commit (no tags or branches)
 permissions:
   contents: read
 concurrency:
-  group: cgw-platform-${{ github.ref }}-${{ inputs.app_ref }}
+  group: cgw-platform-${{ github.ref }}-${{ inputs.app_ref || '77d37ba2' }}
   cancel-in-progress: false
 jobs:
   native-lifecycle:
@@ -24,7 +27,7 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     env:
-      CGW_APP_REF: ${{ inputs.app_ref }}
+      CGW_APP_REF: ${{ inputs.app_ref || '77d37ba2eb13beaa2a1d2b4fdd2ebd0b7157862c' }}
       CGW_CI_ARCH: ${{ matrix.arch }}
       HTTP_PROXY: ''
       HTTPS_PROXY: ''
