@@ -44,7 +44,7 @@ rtk_healthy() {
 compose_app() {
   local release="$1" config="$2"; shift 2
   local args=(--env-file "$config/runtime.env" -p "$COMPOSE_PROJECT" -f "$release/apps/$APP_ID/docker-compose.prod.yml")
-  if [[ -n "${CHATGPT_WEB_SOCKET_GID:-}" ]]; then
+  if [[ -n "${CGW_NETWORK:-}" ]]; then
     args+=(-f "$release/apps/$APP_ID/docker-compose.chatgpt-web.yml")
   fi
   timeout 300 docker compose "${args[@]}" --ansi=never --progress=plain "$@"

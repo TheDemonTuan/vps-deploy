@@ -352,6 +352,19 @@ Thực hiện một lần bởi Quản trị viên (Operator) có quyền root:
    Sau khi key hoạt động, đưa private key vào GitHub Environment `production` trên App repo để pipeline tự động triển khai.
 
 
+
+### 4. Thành phần Stateful ChatGPT Web Runtime (`cgw`)
+
+Đối với các ứng dụng có thành phần runtime trình duyệt hoặc stateful harness (như `9router`):
+- Runtime được quản lý dưới Compose project riêng biệt `9router-cgw`, container `9router-cgw-runtime`, volume `9router-cgw-data`.
+- Runtime chạy non-root (`10001:10001`), `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges: true`, shm 1GB, và seccomp profile tương thích user-namespace của Chromium.
+- Giao tiếp giữa gateway và runtime đi qua mạng nội bộ cô lập `9router-cgw` (`internal: true`). Runtime sở hữu mạng egress riêng biệt `9router-cgw-egress` để kết nối ra ngoài, không đi qua Traefik edge.
+- Triển khai runtime sử dụng transaction riêng biệt với durable fence, kiểm tra `physicalIdle: true`, tạo private SQLite snapshot, và resume an toàn sau khi commit. Gateway blue/green không can thiệp vòng đời runtime.
+- Registration của `9router` bao gồm image CGW cố định và caller `chatgpt-web-runtime.yml` trong build/security/deploy allowlists; giữ source gate của `rtk-sidecar.yml`. Caller manifest, mọi `uses` và `platform-ref` phải cutover cùng immutable platform SHA.
+- Reusable `build-docker.yml` nhận `component` tùy chọn (`app` mặc định, hoặc `cgw`). `app` giữ Dockerfile, tag/cache và root image smoke hiện tại. `cgw` chỉ dùng `services/chatgpt-web-runtime/Dockerfile`, app-root context, `APP_REVISION=source-sha`, native ARM64 và tag `sha-<source-sha>`; không có input arbitrary Dockerfile/image/component.
+- CGW build chạy verifier thật trong image non-root sandboxed, tạo compatibility evidence từ offline Chromium/MCP/subagent checks, rồi COPY duy nhất JSON này vào `/opt/cgw/compatibility.json` của final image kế thừa labels/revision. Exact published digest phải qua native image/browser smoke và image Trivy gate trước deploy. Build evidence không chứng minh account login hay live connector readiness; profile mới vẫn Browser-only và Full tiếp tục gated.
+- Gateway CGW env chỉ cho phép URL nội bộ và ba file selectors `CHATGPT_WEB_RUNTIME_TOKEN_FILE`, `CHATGPT_WEB_RUNTIME_ADMIN_TOKEN_FILE`, `CHATGPT_WEB_CLIENT_KEYS_FILE`; không dùng socket env cũ hoặc secrets trực tiếp. `INITIAL_PASSWORD` vẫn bắt buộc; CGW secret-file/native-policy checks chỉ áp dụng khi manifest enroll CGW.
+
 ### Lưu ý an toàn cơ sở dữ liệu Blue/Green
 
 Hai slot blue/green dùng chung volume dữ liệu (như SQLite hoặc DB container). Deployment engine hỗ trợ rollback route và container ngay lập tức, nhưng **không rollback dữ liệu đã thay đổi**.

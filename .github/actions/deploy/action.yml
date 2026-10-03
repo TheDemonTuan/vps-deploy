@@ -11,7 +11,7 @@ inputs:
     description: deploy, status, rollback, or reconcile
     required: true
   component:
-    description: app or rtk
+    description: app, rtk, or registered cgw
     required: true
   source-sha:
     description: Immutable caller source revision

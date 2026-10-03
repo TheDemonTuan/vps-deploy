@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 from core import (Failure, SHA, app_registration, atomic, fixture_authorized,
                   host, host_registration, lock, manifest, registration_id,
                   require, trusted_path)
-from preflight import check as preflight
+from preflight import adopt_cgw, check as preflight
 
 AREAS = ('bin', 'lib', 'apps', 'schema', 'install', 'registry', 'hosts')
 RELEASES = Path('/opt/vps-deploy/releases')
@@ -112,8 +112,8 @@ def profile_data(app, release, binding, host_record, previous):
     profile = dict(binding, platform_ref=release, dynamic_dir=host_record['traefik']['dynamic_dir'])
     if previous:
         previous = dict(previous)
-        for name in ('bridge_socket_root', 'bridge_socket_gid', 'fixture_ci', 'image_repository',
-                     'rtk_image_repository', 'architecture', 'ca_bundle', 'fault_file'):
+        for name in ('fixture_ci', 'image_repository', 'rtk_image_repository',
+                     'architecture', 'ca_bundle', 'fault_file'):
             if name in previous:
                 profile[name] = previous[name]
     return json.dumps(profile, sort_keys=True, separators=(',', ':')).encode()
@@ -144,6 +144,10 @@ def enrolled_collisions(app, binding, host_record):
             }
             if data.get('rtk_network'):
                 resources.update({('network', data['rtk_network']), ('container', name + '-rtk-rtk-1')})
+            if data.get('cgw_network'):
+                resources.update({('network', data['cgw_network']), ('network', data['cgw_network'] + '-egress'),
+                                  ('container', '9router-cgw-runtime'), ('project', '9router-cgw'),
+                                  ('volume', '9router-cgw-data'), ('port', 17842)})
             resources.update(('host', data[key]) for key in ('api_host', 'dashboard_host', 'dashboard_alias_host') if data.get(key))
             return resources
         require(not identity(app, binding) & identity(config.name, old), 'RESOURCE_COLLISION')
@@ -205,7 +209,7 @@ def restore_timers(timers):
             run('/usr/bin/systemctl', 'start', timer, check=False)
 
 
-def activation(args, root, raw, binding, host_record, previous, source_env, expected):
+def activation(args, root, raw, binding, host_record, previous, source_env, expected, *, cgw_transition=False):
     app = args.app
     cfg = CONFIG / app
     state = STATE / app
@@ -269,6 +273,8 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                     old_units = (SYSTEMD / 'vps-deploy-9router-drain.service', SYSTEMD / 'vps-deploy-9router-drain.timer') if app == '9router' else ()
                     for path in (cfg / 'host.json', cfg / 'app.yml', cfg / 'runtime.env', wrapper, drain, sudo, key_file, *old_units):
                         backup(path)
+                    if cgw_transition and (state / 'state.json').exists():
+                        backup(state / 'state.json')
                     if originals[cfg / 'runtime.env'] is None:
                         put(cfg / 'runtime.env', source_env.read_bytes(), 0o600)
                     put(cfg / 'app.yml', raw, 0o600)
@@ -284,6 +290,10 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                     os.replace(temporary, sudo)
                     run('/usr/bin/systemctl', 'daemon-reload')
                     if (state / 'state.json').exists():
+                        if cgw_transition:
+                            from core import host as checked_host
+                            profile = checked_host(cfg, app_registration(destination, app), host_record)
+                            adopt_cgw(destination, cfg, state, profile)
                         run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
                     run('/usr/bin/bash', str(destination / 'install/install-key.sh'), '--app', app, str(args.public_key))
                     was_enabled = any(enabled for _, enabled, _ in timers)
@@ -336,6 +346,7 @@ def main():
     profile_path = cfg / 'host.json'
     previous = json.loads(profile_path.read_bytes()) if optional_trusted(profile_path) else None
     binding = host_record['apps'][args.app]
+    cgw_transition = False
     if previous:
         require(type(previous) is dict and type(previous.get('platform_ref')) is str and SHA.fullmatch(previous['platform_ref']), 'HOST_POLICY')
         installed = RELEASES / previous['platform_ref']
@@ -344,11 +355,14 @@ def main():
             old_registration = app_registration(installed, args.app)
             old_host = host_registration(installed, old_registration['host'])
             host(cfg, old_registration, old_host)
+            cgw_transition = 'cgw' in registration['manifest'] and 'cgw' not in old_registration['manifest']
         else:
             require(args.app == '9router' and (installed / 'bin/deployctl').is_file(), 'APP_NOT_REGISTERED')
             for name in ('api_host', 'dashboard_host', 'dashboard_alias_host', 'work_dir', 'compose_project', 'edge_network', 'rtk_network', 'route_name', 'dynamic_dir'):
                 expected_value = host_record['traefik']['dynamic_dir'] if name == 'dynamic_dir' else binding[name]
                 require(previous.get(name) == expected_value, 'APP_BINDING_MISMATCH')
+            require(not previous.get('cgw_network'), 'CGW_TRANSITION_POLICY')
+            cgw_transition = 'cgw' in registration['manifest']
     enrolled_collisions(args.app, binding, host_record)
     source_env = cfg / 'runtime.env' if optional_trusted(cfg / 'runtime.env') else Path(binding['work_dir']) / '.env'
     if source_env == cfg / 'runtime.env':
@@ -358,7 +372,7 @@ def main():
         trusted_path(source_env.parent.parent, directory=True)
         require(source_env.stat().st_uid in (0, source_env.parent.stat().st_uid) and not source_env.parent.stat().st_mode & 0o022, 'UNSAFE_RUNTIME_ENV')
     require(stat.S_IMODE(source_env.stat().st_mode) == 0o600, 'UNSAFE_RUNTIME_ENV')
-    composed = preflight(root, args.app, registration, binding, source_env, previous)
+    composed = preflight(root, args.app, registration, binding, source_env, previous, cgw_transition=cgw_transition)
     selected_volumes = {mount['source'] for service in composed['services'].values() for mount in service.get('volumes', []) if mount.get('type') == 'volume'}
     from core import container
     for enrolled in CONFIG.iterdir() if CONFIG.exists() else ():
@@ -386,7 +400,7 @@ def main():
     if args.check:
         print('CHECK_OK')
         return
-    activation(args, root, raw, binding, host_record, previous, source_env, expected)
+    activation(args, root, raw, binding, host_record, previous, source_env, expected, cgw_transition=cgw_transition)
     print('INSTALLED', args.app, args.release)
 
 

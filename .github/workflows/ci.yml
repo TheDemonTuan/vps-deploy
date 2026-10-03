@@ -1,8 +1,9 @@
 name: Platform verification
 on:
   push:
-    branches: [main]
+    branches: [main, feat/cgw-runtime, integrate/cgw-production]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

@@ -242,12 +242,16 @@ release = pathlib.Path(release)
 reg = release/'registry/9router.yml'
 value = yaml.safe_load(reg.read_text())
 value['host'] = 'fixture-local'
+# This separate gateway/RTK migration VM intentionally has no browser runtime.
+# CGW activation and real singleton lifecycle run in cgw-runtime-ci.yml instead.
+value['manifest'].pop('cgw', None)
 reg.write_text(yaml.safe_dump(value, sort_keys=False))
 host = yaml.safe_load((release/'hosts/oracle-main.yml').read_text())
 host['host'] = 'fixture-local'
 host['ssh'].update(address='127.0.0.1', port=int(port))
 host['traefik']['dynamic_dir'] = work+'/dynamic'
 host['apps']['9router'].update(api_host=api, dashboard_host='dashboard.platform-smoke.test', dashboard_alias_host='legacy.platform-smoke.test', work_dir=work+'/work')
+host['apps']['9router'].pop('cgw_network', None)
 host['apps']['demo'] = dict(api_host='demo.fixture.test', dashboard_host='', dashboard_alias_host='', work_dir=work+'/demo', compose_project='demo', edge_network='edge-demo', route_name='demo.yml')
 (release/'hosts/fixture-local.yml').write_text(yaml.safe_dump(host, sort_keys=False))
 PY

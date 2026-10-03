@@ -39,7 +39,7 @@ class DeployActionBoundary(unittest.TestCase):
         workflows.mkdir(parents=True)
         self.workflow = workflows / "deploy.yml"
         self.workflow.write_text("jobs:\n  build:\n    uses: approved\n")
-        for name in ("rtk-sidecar.yml", "deploy-ops.yml"):
+        for name in ("rtk-sidecar.yml", "deploy-ops.yml", "chatgpt-web-runtime.yml"):
             (workflows / name).write_text("jobs:\n  deploy:\n    steps:\n      - uses: approved\n")
         for directory in (platform, source):
             subprocess.run(["git", "init", "-q", str(directory)], check=True)
@@ -53,7 +53,7 @@ class DeployActionBoundary(unittest.TestCase):
                         OPERATION="deploy", COMPONENT="app", IMAGE_REF=registration["manifest"]["image"] + "@sha256:" + "b" * 64)
         self.pin = "TheDemonTuan/vps-deploy/.github/actions/deploy@" + self.platform_sha
         self.workflow.write_text("jobs:\n  deploy:\n    steps:\n      - uses: " + self.pin + "\n")
-        for name in ("rtk-sidecar.yml", "deploy-ops.yml"):
+        for name in ("rtk-sidecar.yml", "deploy-ops.yml", "chatgpt-web-runtime.yml"):
             (workflows / name).write_text("jobs:\n  deploy:\n    steps:\n      - uses: " + self.pin + "\n")
         # Recommit source after inserting the platform pin, then bind caller SHA.
         subprocess.run(["git", "-C", str(source), "add", "."], check=True)
@@ -76,6 +76,8 @@ class DeployActionBoundary(unittest.TestCase):
                         {"OPERATION": "rollback", "COMPONENT": "rtk", "IMAGE_REF": ""}):
             with self.subTest(changes=changes):
                 self.assertNotEqual(self.check(changes, preflight=True).returncode, 0)
+        self.assertEqual(self.check({"COMPONENT": "cgw", "IMAGE_REF": "ghcr.io/thedemontuan/9router-cgw-runtime@sha256:" + "b" * 64}).returncode, 0)
+        self.assertNotEqual(self.check({"COMPONENT": "cgw", "IMAGE_REF": self.env["IMAGE_REF"]}, preflight=True).returncode, 0)
 
     def test_actual_uses_not_comment_or_duplicate(self):
         self.workflow.write_text("# " + self.pin + "\njobs:\n  deploy:\n    uses: attacker/action@" + self.platform_sha + "\n")
@@ -88,18 +90,43 @@ class DeployActionBoundary(unittest.TestCase):
     def test_build_uses_reusable_workflow(self):
         pin = "TheDemonTuan/vps-deploy/.github/workflows/build-docker.yml@" + self.platform_sha
         self.workflow.write_text("jobs:\n  build:\n    uses: " + pin + "\n")
+        (self.root / "source/.github/workflows/chatgpt-web-runtime.yml").write_text("jobs:\n  build:\n    uses: " + pin + "\n")
         env = {**os.environ, **self.env, "OPERATION": "build", "COMPONENT": "app", "IMAGE_REF": ""}
         result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml"], cwd=self.root,
                                 env=env, capture_output=True, text=True)
+        cgw_result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml"], cwd=self.root,
+                                    env={**env, "COMPONENT": "cgw"}, capture_output=True, text=True)
+        self.assertEqual(cgw_result.returncode, 0, cgw_result.stderr)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.workflow.write_text("# " + pin + "\njobs:\n  build:\n    uses: attacker/workflow@" + self.platform_sha + "\n")
         self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "build-docker.yml"],
                                          cwd=self.root, env=env, capture_output=True).returncode, 0)
 
+    def test_build_component_enrollment_and_image_scope(self):
+        base = {"OPERATION": "build", "IMAGE_REF": ""}
+        for component in ("app", "cgw"):
+            result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml", "--preflight"],
+                                    cwd=self.root, env={**os.environ, **self.env, **base, "COMPONENT": component},
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        for change in ({"COMPONENT": "rtk"}, {"COMPONENT": "anything"}, {"COMPONENT": "../cgw"},
+                       {"COMPONENT": "cgw", "IMAGE_REF": "ghcr.io/thedemontuan/9router-cgw-runtime:latest"}):
+            result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml", "--preflight"],
+                                    cwd=self.root, env={**os.environ, **self.env, **base, **change}, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+        path = self.root / "platform/registry/9router.yml"
+        registration = yaml.safe_load(path.read_text())
+        del registration["manifest"]["cgw"]
+        path.write_text(yaml.safe_dump(registration, sort_keys=False))
+        result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml", "--preflight"],
+                                cwd=self.root, env={**os.environ, **self.env, **base, "COMPONENT": "cgw"}, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_security_trivy_uses_reusable_workflow(self):
         pin = "TheDemonTuan/vps-deploy/.github/workflows/security-trivy.yml@" + self.platform_sha
         self.workflow.write_text("jobs:\n  security:\n    uses: " + pin + "\n")
         (self.root / "source/.github/workflows/rtk-sidecar.yml").write_text("jobs:\n  security:\n    uses: " + pin + "\n")
+        (self.root / "source/.github/workflows/chatgpt-web-runtime.yml").write_text("jobs:\n  security:\n    uses: " + pin + "\n")
         base_env = {k: v for k, v in self.env.items() if k not in ("ACTION_REF", "HOST")}
         env_src = {**os.environ, **base_env, "SCAN_MODE": "source", "IMAGE_REF": ""}
         self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
@@ -107,6 +134,11 @@ class DeployActionBoundary(unittest.TestCase):
         env_img = {**os.environ, **base_env, "SCAN_MODE": "image"}
         self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
                                          cwd=self.root, env=env_img, capture_output=True).returncode, 0)
+        cgw_ref = "ghcr.io/thedemontuan/9router-cgw-runtime@sha256:" + "d" * 64
+        self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
+                                         cwd=self.root, env={**env_img, "IMAGE_REF": cgw_ref}, capture_output=True).returncode, 0)
+        self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
+                                            cwd=self.root, env={**env_img, "IMAGE_REF": cgw_ref.replace("@sha256:", ":latest@sha256:")}, capture_output=True).returncode, 0)
         env_bad_mode = {**os.environ, **base_env, "SCAN_MODE": "invalid"}
         self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
                                             cwd=self.root, env=env_bad_mode, capture_output=True).returncode, 0)

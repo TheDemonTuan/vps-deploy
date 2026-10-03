@@ -130,7 +130,7 @@ def app_registration(release, app):
         names = caller[key]
         require(type(names) is list and names and all(type(name) is str and re.fullmatch(r'[A-Za-z0-9_-]+\.yml', name) for name in names) and len(names) == len(set(names)), 'REGISTRY_POLICY')
     policy = value['manifest']
-    fields(policy, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route', 'rtk'}, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route'})
+    fields(policy, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route', 'rtk', 'cgw'}, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route'})
     fixture_image = fixture_authorized() and value['host'] == 'fixture-local' and app == 'demo' and policy['image'] == 'localhost:5000/demo'
     require(type(policy['version']) is int and policy['version'] == 1 and policy['app'] == app and policy['strategy'] == 'blue-green' and policy['platform'] == 'linux/arm64' and type(policy['image']) is str and (re.fullmatch(r'ghcr\.io/[a-z0-9./_-]+', policy['image']) or fixture_image), 'REGISTRY_POLICY')
     for section, keys in (('runtime', {'port'}), ('health', {'path', 'timeout_seconds'}), ('route', {'timeout_seconds'})):
@@ -142,6 +142,9 @@ def app_registration(release, app):
     if 'rtk' in policy:
         fields(policy['rtk'], {'image'}, {'image'})
         require(type(policy['rtk']['image']) is str and re.fullmatch(r'ghcr\.io/[a-z0-9./_-]+', policy['rtk']['image']), 'REGISTRY_POLICY')
+    if 'cgw' in policy:
+        fields(policy['cgw'], {'image'}, {'image'})
+        require(app == '9router' and policy['cgw']['image'] == 'ghcr.io/thedemontuan/9router-cgw-runtime', 'REGISTRY_POLICY')
     runtime = value['runtime']
     fields(runtime, {'allowed_env', 'required_env'}, {'allowed_env', 'required_env'})
     for key in ('allowed_env', 'required_env'):
@@ -184,7 +187,7 @@ def host_registration(release, host_id):
     for app, binding in value['apps'].items():
         registration_id(app)
         required = {'api_host', 'dashboard_host', 'dashboard_alias_host', 'work_dir', 'compose_project', 'edge_network', 'route_name'}
-        fields(binding, required | {'rtk_network'}, required)
+        fields(binding, required | {'rtk_network', 'cgw_network'}, required)
         hostname(binding['api_host'])
         for key in ('dashboard_host', 'dashboard_alias_host'):
             if binding[key]:
@@ -194,6 +197,8 @@ def host_registration(release, host_id):
         require(type(binding['work_dir']) is str and PurePosixPath(binding['work_dir']).is_absolute() and str(PurePosixPath(binding['work_dir'])) == binding['work_dir'] and '..' not in PurePosixPath(binding['work_dir']).parts and binding['compose_project'] == app and binding['edge_network'] == 'edge-' + app and binding['route_name'] == app + '.yml', 'REGISTRY_POLICY')
         if 'rtk_network' in binding:
             require(binding['rtk_network'] == app + '-rtk', 'REGISTRY_POLICY')
+        if 'cgw_network' in binding:
+            require(app == '9router' and binding['cgw_network'] == '9router-cgw', 'REGISTRY_POLICY')
     return resource_collisions(value)
 
 
@@ -226,6 +231,13 @@ def resource_collisions(host_record):
         if 'rtk_network' in binding:
             reserve('network', binding['rtk_network'])
             reserve('container', app + '-rtk-rtk-1')
+        if 'cgw_network' in binding:
+            reserve('network', binding['cgw_network'])
+            reserve('network', binding['cgw_network'] + '-egress')
+            reserve('project', '9router-cgw')
+            reserve('container', '9router-cgw-runtime')
+            reserve('volume', '9router-cgw-data')
+            reserve('port', 17842)
     return host_record
 
 def fixture_authorized():
@@ -265,11 +277,12 @@ def request(raw, profile):
     if 'request_id' in obj:
         require(type(obj['request_id']) is str and REQUEST_ID.fullmatch(obj['request_id']), 'INVALID_REQUEST_ID')
     if op != 'status':
-        require(obj['component'] in (('app', 'rtk') if 'rtk' in profile['registration']['manifest'] else ('app',)) and (op != 'rollback' or obj['component'] == 'app'), 'INVALID_COMPONENT')
+        components = ('app',) + tuple(key for key in ('rtk', 'cgw') if key in profile['registration']['manifest'])
+        require(obj['component'] in components and (op != 'rollback' or obj['component'] == 'app'), 'INVALID_COMPONENT')
         require(all(type(obj[k]) is str and SHA.fullmatch(obj[k]) for k in ('platform_ref', 'source_sha')), 'INVALID_SHA')
         require(type(obj['manifest_sha256']) is str and HASH.fullmatch(obj['manifest_sha256']), 'INVALID_HASH')
         if op == 'deploy':
-            repository = profile['image_repository'] if obj['component'] == 'app' else profile['rtk_image_repository']
+            repository = profile['image_repository'] if obj['component'] == 'app' else profile[obj['component'] + '_image_repository']
             require(type(obj['image']) is str and re.fullmatch(re.escape(repository) + r'@sha256:[0-9a-f]{64}', obj['image']), 'INVALID_IMAGE')
     return obj
 
@@ -399,12 +412,16 @@ def host(config, registration, host_record):
         required.add('rtk_network')
     else:
         require('rtk_network' not in binding, 'REGISTRY_POLICY')
+    if 'cgw' in registration['manifest']:
+        required.add('cgw_network')
+    else:
+        require('cgw_network' not in binding, 'REGISTRY_POLICY')
     fixture = value.get('fixture_ci') is True
     require(not fixture or fixture_authorized(), 'FIXTURE_NOT_AUTHORIZED')
     extras = {'fixture_ci', 'image_repository', 'architecture', 'ca_bundle'} | ({'rtk_image_repository'} if 'rtk_network' in required else set()) if fixture else set()
     if fixture and 'fault_file' in value:
         extras.add('fault_file')
-    fields(value, required | {'bridge_socket_root', 'bridge_socket_gid'} | extras, required | (extras - {'fault_file'}))
+    fields(value, required | extras, required | (extras - {'fault_file'}))
     require(type(value['platform_ref']) is str and SHA.fullmatch(value['platform_ref']), 'PLATFORM_MISMATCH')
     release = Path('/opt/vps-deploy/releases') / value['platform_ref']
     trusted_path(release, directory=True)
@@ -414,14 +431,10 @@ def host(config, registration, host_record):
     trusted_path(release / 'hosts' / (host_record['host'] + '.yml'))
     require(app_registration(release, app) == registration and host_registration(release, host_record['host']) == host_record, 'REGISTRY_POLICY')
     require(all(type(value[key]) is str and value[key] == expected for key, expected in binding.items()) and type(value['dynamic_dir']) is str and value['dynamic_dir'] == host_record['traefik']['dynamic_dir'], 'APP_BINDING_MISMATCH')
-    require(set(value) - extras - {'bridge_socket_root', 'bridge_socket_gid', 'platform_ref', 'dynamic_dir'} == set(binding), 'APP_BINDING_MISMATCH')
+    require(set(value) - extras - {'platform_ref', 'dynamic_dir'} == set(binding), 'APP_BINDING_MISMATCH')
     trusted_path(value['work_dir'], directory=True)
     if fixture:
         require(Path(value['work_dir']).stat().st_mode & 0o777 == 0o700, 'FIXTURE_POLICY')
-    require(('bridge_socket_gid' in value) == ('bridge_socket_root' in value), 'HOST_POLICY')
-    if 'bridge_socket_gid' in value:
-        require(type(value['bridge_socket_gid']) is int and value['bridge_socket_gid'] >= 0 and type(value['bridge_socket_root']) is str and value['bridge_socket_root'].startswith('/run/') and '..' not in Path(value['bridge_socket_root']).parts, 'HOST_POLICY')
-        trusted_path(release / 'apps' / app / 'docker-compose.chatgpt-web.yml')
     if fixture:
         native = {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(os.uname().machine, os.uname().machine)
         fixture_image = 'localhost:5000/' + app
@@ -442,6 +455,16 @@ def host(config, registration, host_record):
         value['image_repository'] = registration['manifest']['image']
         value['rtk_image_repository'] = registration['manifest'].get('rtk', {}).get('image')
         value['architecture'] = 'arm64'
+    value['cgw_image_repository'] = registration['manifest'].get('cgw', {}).get('image')
+    if 'cgw_network' in required:
+        for name in ('cgw-data-token', 'cgw-admin-token', 'cgw-client-keys.json', 'cgw-tunnel-profiles.json', 'cgw.env', 'cgw-seccomp.json'):
+            secret = trusted_path(config / name)
+            info = secret.stat()
+            mode = 0o640 if name not in ('cgw.env', 'cgw-seccomp.json') else 0o600
+            require(info.st_mode & 0o777 == mode and (mode == 0o600 or info.st_gid == 10001), 'CGW_SECRET_POLICY')
+        require((config / 'cgw-data-token').read_bytes() != (config / 'cgw-admin-token').read_bytes(), 'CGW_SECRET_POLICY')
+        from cgw import validate_tunnel_secrets
+        validate_tunnel_secrets(config)
     trusted_path(config / 'app.yml')
     trusted_path(config / 'runtime.env')
     require((config / 'runtime.env').stat().st_mode & 0o777 == 0o600, 'UNSAFE_RUNTIME_ENV')

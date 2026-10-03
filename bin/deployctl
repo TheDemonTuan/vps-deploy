@@ -10,7 +10,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lib'))
 from core import Failure, SHA, app_registration, atomic, digest, host, host_registration, load, lock, paths, registered, registration_id, request, require, save, trusted_path, verify_request
-from operations import cleanup, environment, reconcile, rtk_deploy, transaction, matching, rtk_wait
+from operations import cleanup, environment, reconcile, rtk_deploy, transaction, matching, rtk_wait, cgw_deploy, cgw_diagnostics
 import route
 
 
@@ -66,7 +66,8 @@ def submit(req, cfg, state_dir, locks):
             __import__('core').fsync_dir(directory.parent)
             atomic(directory / 'request.json', data)
         __import__('core').fault(profile, 'receipt_saved')
-        command = ['/usr/bin/systemd-run', '--unit=' + unit(app, req['request_id']), '--property=Type=exec', '--property=RuntimeMaxSec=900', '--property=TimeoutStopSec=60', '--property=KillMode=mixed', str(release / 'bin/deployctl'), 'run', '--app', app, '--request-id', req['request_id']]
+        watchdog = 1800 if req.get('component') == 'cgw' else 900
+        command = ['/usr/bin/systemd-run', '--unit=' + unit(app, req['request_id']), '--property=Type=exec', '--property=RuntimeMaxSec=' + str(watchdog), '--property=TimeoutStopSec=60', '--property=KillMode=mixed', str(release / 'bin/deployctl'), 'run', '--app', app, '--request-id', req['request_id']]
         proc = subprocess.run(command, capture_output=True)
         if proc.returncode and not unit_active(app, req['request_id']):
             terminal = result(req['request_id'], 'failed', 'dispatch', 'SYSTEMD_DISPATCH_FAILED')
@@ -119,9 +120,18 @@ def state_status(state_dir, req_id, cfg, profile):
             except Failure:
                 rtk_healthy = False
             healthy = healthy and rtk_healthy
+    cgw_healthy = None
+    if profile.get('cgw_image_repository'):
+        try:
+            value = cgw_diagnostics(profile, (state.get('cgw') or {}).get('current'))
+            cgw_healthy = value.get('operationFence') is None and bool(state.get('cgw'))
+        except (Failure, OSError, ValueError):
+            cgw_healthy = False
+        healthy = healthy and cgw_healthy
     if state['operation'] and entry['status'] == 'complete':
         entry = result(req_id, 'recovery_required', state['operation']['phase'], 'RECOVERY_REQUIRED')
     entry.update(healthy=healthy, rtk_healthy=rtk_healthy, active=state['active'], previous=state['previous'], platform_ref=profile['platform_ref'], image=state['active']['image'] if state['active'] else None, configured_generation=state['generation'], observed_generation=observed, draining=state['draining'], revision=state['revision'])
+    entry.update(cgw=state.get('cgw'), cgw_healthy=cgw_healthy)
     return entry
 
 
@@ -131,6 +141,11 @@ def run(req_id, cfg, state_dir, locks, profile):
     req = request((directory / 'request.json').read_bytes(), profile)
     require(req['request_id'] == req_id and req['op'] != 'status', 'INVALID_REQUEST')
     release = verify_request(req, cfg, profile)
+    if req['component'] == 'cgw':
+        import signal
+        def terminate(signum, frame):
+            raise Failure('CGW_TERMINATED')
+        signal.signal(signal.SIGTERM, terminate)
     try:
         with lock(locks / (profile['app'] + '@operation.lock')):
             require(not (directory / 'started').exists(), 'RECOVERY_REQUIRED')
@@ -146,8 +161,10 @@ def run(req_id, cfg, state_dir, locks, profile):
                 if req['op'] == 'deploy':
                     if req['component'] == 'app':
                         transaction(req, state, state_dir, cfg, release, profile, locks)
-                    else:
+                    elif req['component'] == 'rtk':
                         rtk_deploy(req, state, state_dir, cfg, release, profile)
+                    else:
+                        cgw_deploy(req, state, state_dir, cfg, release, profile)
                 elif req['op'] == 'rollback':
                     transaction(req, state, state_dir, cfg, release, profile, locks)
                 else:
@@ -204,6 +221,12 @@ def adopt(cfg, state_dir, locks, profile):
                 rtk_wait(profile, name, rtk_image)
                 rtk = {'current': rtk_image, 'previous': None}
             state = {'version': 1, 'revision': 1, 'active': active, 'previous': previous, 'rtk': rtk, 'generation': generation, 'operation': None, 'draining': None}
+            if profile.get('cgw_image_repository'):
+                live_cgw = container('9router-cgw-runtime', running=True)
+                cgw_image = container_digest(live_cgw, profile['cgw_image_repository'])
+                proof = cgw_diagnostics(profile, cgw_image)
+                require(proof.get('operationFence') is None, 'CGW_FENCE')
+                state['cgw'] = {'current': cgw_image, 'previous': None}
             trusted_path(state_dir, directory=True)
             save(state_dir / 'state.json', state)
     return state_status(state_dir, None, cfg, profile)
@@ -211,7 +234,7 @@ def adopt(cfg, state_dir, locks, profile):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['submit', 'run', 'status', 'adopt', 'cleanup-drains'])
+    parser.add_argument('action', choices=['submit', 'run', 'status', 'adopt', 'adopt-cgw', 'cleanup-drains'])
     parser.add_argument('--app', required=True)
     parser.add_argument('--request-id')
     parser.add_argument('--strict', action='store_true')
@@ -253,6 +276,12 @@ def main():
         response = state_status(state_dir, args.request_id, cfg, profile)
     elif args.action == 'adopt':
         response = adopt(cfg, state_dir, locks, profile)
+    elif args.action == 'adopt-cgw':
+        with lock(locks / (args.app + '@operation.lock')):
+            from importlib.machinery import SourceFileLoader
+            parity = SourceFileLoader('cgw_preflight', str(Path(__file__).resolve().parents[1] / 'install/preflight.py')).load_module()
+            parity.adopt_cgw(Path(__file__).resolve().parents[1], cfg, state_dir, profile)
+        response = state_status(state_dir, None, cfg, profile)
     else:
         with lock(locks / (args.app + '@operation.lock')):
             require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')

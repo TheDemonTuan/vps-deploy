@@ -20,7 +20,11 @@ class Registration(unittest.TestCase):
         self.assertEqual(host['apps']['9router']['route_name'], '9router.yml')
         self.assertEqual(app['manifest']['runtime']['port'], 20128)
         from test_core import GOOD
-        exact(parse_yaml(GOOD), app['manifest'])
+        expanded = GOOD + b'cgw: {image: ghcr.io/thedemontuan/9router-cgw-runtime}\n'
+        exact(parse_yaml(expanded), app['manifest'])
+        with self.assertRaisesRegex(Failure, 'MANIFEST_POLICY'):
+            exact(parse_yaml(GOOD), app['manifest'])
+        self.assertEqual(host['apps']['9router']['cgw_network'], '9router-cgw')
 
     def test_unknown_and_unsafe_identifiers(self):
         for app in ('../9router', '9router/', '%i', 'not-enrolled', 'a' * 25):
