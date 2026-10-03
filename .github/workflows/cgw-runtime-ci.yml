@@ -48,9 +48,7 @@ jobs:
           set -euo pipefail
           app="$RUNNER_TEMP/cgw-app-source"
           [[ ! -e "$app" ]] || exit 1
-          git init "$app"
-          git -C "$app" remote add origin https://github.com/TheDemonTuan/9router.git
-          git -C "$app" -c credential.helper= fetch --depth=50 origin refs/heads/feat/cgw-full-harness:refs/remotes/origin/feat/cgw-full-harness
+          git clone --depth 50 --branch feat/cgw-full-harness https://github.com/TheDemonTuan/9router.git "$app"
           git -C "$app" checkout --detach "$CGW_APP_REF"
           [[ "$(git -C "$app" rev-parse HEAD)" == "$CGW_APP_REF" ]] || exit 1
           echo "CGW_CI_APP_DIR=$app" >> "$GITHUB_ENV"
