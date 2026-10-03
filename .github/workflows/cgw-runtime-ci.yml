@@ -7,12 +7,12 @@ on:
       app_ref:
         type: string
         required: false
-        default: 'c5e2e23a30c5075c1a73ca5fe82f8d83d4e0839e'
+        default: 'ce0a38e121876e931fae8cfc2f0f4236b283c7ce'
         description: Reviewed immutable 40-hex TheDemonTuan/9router commit (no tags or branches)
 permissions:
   contents: read
 concurrency:
-  group: cgw-platform-${{ github.ref }}-${{ inputs.app_ref || 'c5e2e23a' }}
+  group: cgw-platform-${{ github.ref }}-${{ inputs.app_ref || 'ce0a38e1' }}
   cancel-in-progress: false
 jobs:
   native-lifecycle:
@@ -27,7 +27,7 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     env:
-      CGW_APP_REF: ${{ inputs.app_ref || 'c5e2e23a30c5075c1a73ca5fe82f8d83d4e0839e' }}
+      CGW_APP_REF: ${{ inputs.app_ref || 'ce0a38e121876e931fae8cfc2f0f4236b283c7ce' }}
       CGW_CI_ARCH: ${{ matrix.arch }}
       HTTP_PROXY: ''
       HTTPS_PROXY: ''
@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           app="$RUNNER_TEMP/cgw-app-source"
           [[ ! -e "$app" ]] || exit 1
-          git clone https://github.com/TheDemonTuan/9router.git "$app"
+          git clone --branch feat/cgw-full-harness https://github.com/TheDemonTuan/9router.git "$app"
           git -C "$app" checkout --detach "$CGW_APP_REF"
           [[ "$(git -C "$app" rev-parse HEAD)" == "$CGW_APP_REF" ]] || exit 1
           echo "CGW_CI_APP_DIR=$app" >> "$GITHUB_ENV"
