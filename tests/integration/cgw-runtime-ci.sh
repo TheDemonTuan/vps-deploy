@@ -56,7 +56,9 @@ base="cgw-ci-base:${CGW_APP_REF}-${CGW_CI_ARCH}"
 images+=("$base")
 docker buildx build --builder default --load --platform "linux/$CGW_CI_ARCH" \
   --build-arg "APP_REVISION=$CGW_APP_REF" -f "$package/Dockerfile" -t "$base" "$app"
-sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+systemctl stop apparmor 2>/dev/null || true
+aa-teardown 2>/dev/null || true
+echo 0 > /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || true
 hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
   --security-opt apparmor=unconfined
   --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
