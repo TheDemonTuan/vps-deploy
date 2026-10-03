@@ -99,23 +99,28 @@ def main():
         raise Failure('CGW_TERMINATED')
     signal.signal(signal.SIGTERM, interrupt)
     def fault(profile, phase):
-        assert_single_writer()
-        if phase == args.crash_phase:
-            persisted = load(state_dir / 'state.json')['operation']
-            require(persisted['phase'] == phase, 'CGW_INTENT_NOT_DURABLE')
-            if phase in ('cgw_quiescing', 'cgw_quiesced', 'cgw_candidate', 'cgw_committed'):
-                ref = persisted['image'] if phase in ('cgw_candidate', 'cgw_committed') else persisted['previous']
-                fence = 'draining' if phase == 'cgw_quiescing' else 'quiesced'
-                proof = cgw.wait_diagnostics(profile, ref, persisted['operationId'], fence, cgw.Budget(timeout=30))
-                require(proof['idle'], 'CGW_NOT_IDLE')
-                # Exercise real server admission while fenced, not a fake readyz.
-                response = core.docker('exec', cgw.NAME, 'bun', '-e', FENCE_PROBE)
-                require(json.loads(response) == {'status': 503, 'code': 'runtime_draining'}, 'CGW_CANDIDATE_ADMITTED')
-            if phase in ('cgw_stopped', 'cgw_snapshot_verified', 'cgw_switching'):
-                cgw.writers_gone(cgw.Budget())
-            if phase in ('cgw_snapshot_verified', 'cgw_switching', 'cgw_candidate', 'cgw_committed'):
-                cgw.verified_snapshot(persisted, cgw.Budget())
-            os.kill(os.getpid(), signal.SIGKILL)
+        try:
+            assert_single_writer()
+            if phase == args.crash_phase:
+                persisted = load(state_dir / 'state.json')['operation']
+                require(persisted['phase'] == phase, 'CGW_INTENT_NOT_DURABLE')
+                if phase in ('cgw_quiescing', 'cgw_quiesced', 'cgw_candidate', 'cgw_committed'):
+                    ref = persisted['image'] if phase in ('cgw_candidate', 'cgw_committed') else persisted['previous']
+                    fence = 'draining' if phase == 'cgw_quiescing' else 'quiesced'
+                    proof = cgw.wait_diagnostics(profile, ref, persisted['operationId'], fence, cgw.Budget(timeout=30))
+                    require(proof['idle'], 'CGW_NOT_IDLE')
+                    # Exercise real server admission while fenced, not a fake readyz.
+                    response = core.docker('exec', cgw.NAME, 'bun', '-e', FENCE_PROBE)
+                    require(json.loads(response) == {'status': 503, 'code': 'runtime_draining'}, 'CGW_CANDIDATE_ADMITTED')
+                if phase in ('cgw_stopped', 'cgw_snapshot_verified', 'cgw_switching'):
+                    cgw.writers_gone(cgw.Budget())
+                if phase in ('cgw_snapshot_verified', 'cgw_switching', 'cgw_candidate', 'cgw_committed'):
+                    cgw.verified_snapshot(persisted, cgw.Budget())
+                os.kill(os.getpid(), signal.SIGKILL)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
     cgw.fault = fault
     with lock(args.directory / 'operation.lock'):
         if args.action == 'adopt':
