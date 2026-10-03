@@ -62,10 +62,24 @@ def assert_single_writer():
 
 FENCE_PROBE = """const fs=require('node:fs');
 const token=fs.readFileSync('/run/secrets/cgw-admin-token','utf8').trim();
-const r=await fetch('http://127.0.0.1:17841/admin/profiles',{method:'POST',
-headers:{authorization:'Bearer '+token,'content-type':'application/json'},
-body:JSON.stringify({profileId:'must-not-be-created'}),signal:AbortSignal.timeout(8000)});
-const v=await r.json();console.log(JSON.stringify({status:r.status,code:v.error?.code}));"""
+let r, lastError;
+for (let i = 0; i < 20; i++) {
+  try {
+    r = await fetch('http://127.0.0.1:17841/admin/profiles', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+      body: JSON.stringify({ profileId: 'must-not-be-created' }),
+      signal: AbortSignal.timeout(3000)
+    });
+    break;
+  } catch (err) {
+    lastError = err;
+    await Bun.sleep(250);
+  }
+}
+if (!r) throw lastError;
+const v = await r.json();
+console.log(JSON.stringify({ status: r.status, code: v.error?.code }));"""
 
 
 def main():
@@ -92,7 +106,7 @@ def main():
             if phase in ('cgw_quiescing', 'cgw_quiesced', 'cgw_candidate', 'cgw_committed'):
                 ref = persisted['image'] if phase in ('cgw_candidate', 'cgw_committed') else persisted['previous']
                 fence = 'draining' if phase == 'cgw_quiescing' else 'quiesced'
-                proof = cgw.diagnostics(profile, ref, persisted['operationId'], fence)
+                proof = cgw.wait_diagnostics(profile, ref, persisted['operationId'], fence, cgw.Budget(timeout=30))
                 require(proof['idle'], 'CGW_NOT_IDLE')
                 # Exercise real server admission while fenced, not a fake readyz.
                 response = core.docker('exec', cgw.NAME, 'bun', '-e', FENCE_PROBE)
