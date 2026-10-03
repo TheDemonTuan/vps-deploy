@@ -1,17 +1,31 @@
-# Optional native ChatGPT Web bridge integration.
-# Keep this override disabled for deployments without a provisioned host bridge.
+# Optional HTTP integration; runtime lifecycle belongs to the separate 9router-cgw project.
 services:
   9router-blue:
-    environment:
-      CHATGPT_WEB_BRIDGE_SOCKET_ROOT: /run/9router-chatgpt-web
-    volumes:
-      - ${CHATGPT_WEB_SOCKET_ROOT:-/run/9router-chatgpt-web}:/run/9router-chatgpt-web:ro
-    group_add:
-      - "${CHATGPT_WEB_SOCKET_GID:?Set CHATGPT_WEB_SOCKET_GID to the host bridge socket group}"
+    group_add: ["10001"]
+    environment: &cgw-env
+      CHATGPT_WEB_RUNTIME_URL: http://cgw-runtime:17841
+      CHATGPT_WEB_RUNTIME_TOKEN_FILE: /run/secrets/cgw-data-token
+      CHATGPT_WEB_RUNTIME_ADMIN_TOKEN_FILE: /run/secrets/cgw-admin-token
+      CHATGPT_WEB_CLIENT_KEYS_FILE: /run/secrets/cgw-client-keys.json
+    volumes: &cgw-secrets
+      - ${CGW_CONFIG_DIR:?}/cgw-data-token:/run/secrets/cgw-data-token:ro
+      - ${CGW_CONFIG_DIR}/cgw-admin-token:/run/secrets/cgw-admin-token:ro
+      - ${CGW_CONFIG_DIR}/cgw-client-keys.json:/run/secrets/cgw-client-keys.json:ro
+    networks:
+      - edge
+      - internal
+      - rtk
+      - cgw
   9router-green:
-    environment:
-      CHATGPT_WEB_BRIDGE_SOCKET_ROOT: /run/9router-chatgpt-web
-    volumes:
-      - ${CHATGPT_WEB_SOCKET_ROOT:-/run/9router-chatgpt-web}:/run/9router-chatgpt-web:ro
-    group_add:
-      - "${CHATGPT_WEB_SOCKET_GID:?Set CHATGPT_WEB_SOCKET_GID to the host bridge socket group}"
+    group_add: ["10001"]
+    environment: *cgw-env
+    volumes: *cgw-secrets
+    networks:
+      - edge
+      - rtk
+      - internal
+      - cgw
+networks:
+  cgw:
+    name: ${CGW_NETWORK:?}
+    external: true

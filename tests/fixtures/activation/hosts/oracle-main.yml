@@ -1,0 +1,20 @@
+version: 1
+host: oracle-main
+ssh:
+  port: 22
+  fingerprint: SHA256:e3LV9csFdtQi0+fs+GkRX1T8RFCYNy7afFgSm8nyfc4
+traefik:
+  container: edge-traefik
+  dynamic_dir: /opt/platform/edge/dynamic
+  mount: /etc/traefik/dynamic
+apps:
+  9router:
+    api_host: 9router-api.tuannguyenviet.site
+    dashboard_host: 9router.tuannguyenviet.site
+    dashboard_alias_host: 9router-admin.tuannguyenviet.site
+    work_dir: /opt/9router
+    compose_project: 9router
+    edge_network: edge-9router
+    rtk_network: 9router-rtk
+    cgw_network: 9router-cgw
+    route_name: 9router.yml

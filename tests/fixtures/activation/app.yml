@@ -1,0 +1,10 @@
+version: 1
+app: 9router
+strategy: blue-green
+image: ghcr.io/thedemontuan/9router
+platform: linux/arm64
+runtime: {port: 20128}
+health: {path: /api/health, timeout_seconds: 60}
+route: {timeout_seconds: 30}
+rtk: {image: ghcr.io/thedemontuan/rtk-sidecar}
+cgw: {image: ghcr.io/thedemontuan/9router-cgw-runtime}

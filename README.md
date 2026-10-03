@@ -352,6 +352,14 @@ Thực hiện một lần bởi Quản trị viên (Operator) có quyền root:
    Sau khi key hoạt động, đưa private key vào GitHub Environment `production` trên App repo để pipeline tự động triển khai.
 
 
+
+### 4. Thành phần Stateful ChatGPT Web Runtime (`cgw`)
+
+Đối với các ứng dụng có thành phần runtime trình duyệt hoặc stateful harness (như `9router`):
+- Runtime được quản lý dưới Compose project riêng biệt `9router-cgw`, container `9router-cgw-runtime`, volume `9router-cgw-data`.
+- Runtime chạy non-root (`10001:10001`), `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges: true`, shm 1GB, và seccomp profile tương thích user-namespace của Chromium.
+- Giao tiếp giữa gateway và runtime đi qua mạng nội bộ cô lập `9router-cgw` (`internal: true`). Runtime sở hữu mạng egress riêng biệt `9router-cgw-egress` để kết nối ra ngoài, không đi qua Traefik edge.
+- Triển khai runtime sử dụng transaction riêng biệt với durable fence, kiểm tra `physicalIdle: true`, tạo private SQLite snapshot, và resume an toàn sau khi commit. Gateway blue/green không can thiệp vòng đời runtime.
 ### Lưu ý an toàn cơ sở dữ liệu Blue/Green
 
 Hai slot blue/green dùng chung volume dữ liệu (như SQLite hoặc DB container). Deployment engine hỗ trợ rollback route và container ngay lập tức, nhưng **không rollback dữ liệu đã thay đổi**.

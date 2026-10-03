@@ -112,8 +112,8 @@ def profile_data(app, release, binding, host_record, previous):
     profile = dict(binding, platform_ref=release, dynamic_dir=host_record['traefik']['dynamic_dir'])
     if previous:
         previous = dict(previous)
-        for name in ('bridge_socket_root', 'bridge_socket_gid', 'fixture_ci', 'image_repository',
-                     'rtk_image_repository', 'architecture', 'ca_bundle', 'fault_file'):
+        for name in ('fixture_ci', 'image_repository', 'rtk_image_repository',
+                     'architecture', 'ca_bundle', 'fault_file'):
             if name in previous:
                 profile[name] = previous[name]
     return json.dumps(profile, sort_keys=True, separators=(',', ':')).encode()
@@ -144,6 +144,10 @@ def enrolled_collisions(app, binding, host_record):
             }
             if data.get('rtk_network'):
                 resources.update({('network', data['rtk_network']), ('container', name + '-rtk-rtk-1')})
+            if data.get('cgw_network'):
+                resources.update({('network', data['cgw_network']), ('network', data['cgw_network'] + '-egress'),
+                                  ('container', '9router-cgw-runtime'), ('project', '9router-cgw'),
+                                  ('volume', '9router-cgw-data'), ('port', 17842)})
             resources.update(('host', data[key]) for key in ('api_host', 'dashboard_host', 'dashboard_alias_host') if data.get(key))
             return resources
         require(not identity(app, binding) & identity(config.name, old), 'RESOURCE_COLLISION')

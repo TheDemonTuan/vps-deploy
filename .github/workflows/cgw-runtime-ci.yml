@@ -1,0 +1,75 @@
+name: CGW disposable native lifecycle
+on:
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        type: string
+        required: true
+        description: Reviewed immutable 40-hex TheDemonTuan/9router commit (no tags or branches)
+permissions:
+  contents: read
+concurrency:
+  group: cgw-platform-${{ github.ref }}-${{ inputs.app_ref }}
+  cancel-in-progress: false
+jobs:
+  native-lifecycle:
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      CGW_APP_REF: ${{ inputs.app_ref }}
+      CGW_CI_ARCH: ${{ matrix.arch }}
+      HTTP_PROXY: ''
+      HTTPS_PROXY: ''
+      ALL_PROXY: ''
+      ENABLE_REQUEST_LOGS: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, same platform pin
+        with:
+          persist-credentials: false
+      - name: Require immutable public app revision and native disposable host
+        run: |
+          set -euo pipefail
+          [[ "$CGW_APP_REF" =~ ^[0-9a-f]{40}$ ]] || { echo 'app_ref must be an exact lowercase 40-hex commit' >&2; exit 1; }
+          case "$CGW_CI_ARCH:$(uname -m)" in amd64:x86_64|arm64:aarch64) ;; *) echo 'Native runner mismatch; emulation forbidden' >&2; exit 1;; esac
+          [[ "$GITHUB_ACTIONS" == true && "$RUNNER_ENVIRONMENT" == github-hosted ]] || exit 1
+      - name: Clone exact public app commit outside platform tests
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/cgw-app-source"
+          [[ ! -e "$app" ]] || exit 1
+          git init "$app"
+          git -C "$app" remote add origin https://github.com/TheDemonTuan/9router.git
+          git -C "$app" -c credential.helper= fetch --depth=1 origin "$CGW_APP_REF"
+          git -C "$app" checkout --detach FETCH_HEAD
+          [[ "$(git -C "$app" rev-parse HEAD)" == "$CGW_APP_REF" ]] || exit 1
+          echo "CGW_CI_APP_DIR=$app" >> "$GITHUB_ENV"
+      - name: Install Linux-only platform dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml curl
+      - name: Full Linux platform unit and shell regressions
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          bash tests/blue-green-reconcile.test.sh
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4, existing runtime pin
+      - name: Build native runtime, prove sandbox, exercise real lifecycle crash matrix
+        timeout-minutes: 150
+        run: |
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" CI=true CGW_DISPOSABLE_VM=1 \
+            CGW_APP_REF="$CGW_APP_REF" CGW_CI_ARCH="$CGW_CI_ARCH" \
+            CGW_CI_APP_DIR="$CGW_CI_APP_DIR" RUNNER_TEMP="$RUNNER_TEMP" \
+            bash tests/integration/cgw-runtime-ci.sh
+      # Only the ephemeral loopback OCI fixture receives pushes. No GHCR credentials,
+      # public image publication, production deployment, live accounts or artifacts.
+      # Generic Traefik/systemd migration integration stays on separate fresh VMs
+      # in ci.yml (push feat/cgw-runtime or workflow_dispatch), never this job.

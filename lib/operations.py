@@ -7,6 +7,7 @@ from pathlib import Path
 
 from core import Failure, atomic, command, container, digest, docker, fault, image_id, lock, require, save, trusted_path
 import route
+from cgw import deploy as cgw_deploy, diagnostics as cgw_diagnostics
 
 
 def environment(profile, config, image, rtk=False):
@@ -23,7 +24,7 @@ def environment(profile, config, image, rtk=False):
             values[key] = value
         require(all(values.get(key) for key in profile['registration']['runtime']['required_env']), 'MISSING_RUNTIME_ENV')
     policy = profile['registration']['manifest']
-    values.update(IMAGE_REF=image, APP_ID=profile['app'], APP_PORT=str(policy['runtime']['port']), HEALTH_PATH=policy['health']['path'], HEALTH_TIMEOUT=str(policy['health']['timeout_seconds']), COMPOSE_PROJECT=profile['compose_project'], DASHBOARD_HOST=profile['dashboard_host'], API_HOST=profile['api_host'], EDGE_NETWORK=profile['edge_network'], RTK_IMAGE=image if rtk else (profile['rtk_image_repository'] or ''), RTK_NETWORK=profile.get('rtk_network', ''), RTK_PROJECT=profile['app'] + '-rtk', CHATGPT_WEB_SOCKET_GID=str(profile.get('bridge_socket_gid', '')), CHATGPT_WEB_SOCKET_ROOT=profile.get('bridge_socket_root', ''))
+    values.update(IMAGE_REF=image, APP_ID=profile['app'], APP_PORT=str(policy['runtime']['port']), HEALTH_PATH=policy['health']['path'], HEALTH_TIMEOUT=str(policy['health']['timeout_seconds']), COMPOSE_PROJECT=profile['compose_project'], DASHBOARD_HOST=profile['dashboard_host'], API_HOST=profile['api_host'], EDGE_NETWORK=profile['edge_network'], RTK_IMAGE=image if rtk else (profile['rtk_image_repository'] or ''), RTK_NETWORK=profile.get('rtk_network', ''), RTK_PROJECT=profile['app'] + '-rtk', CGW_NETWORK=profile.get('cgw_network', ''), CGW_CONFIG_DIR=str(config) if config else '')
     return dict(PATH='/usr/bin:/bin', HOME='/root', LANG='C', **values)
 
 
@@ -34,10 +35,9 @@ def compose(release, profile, config, image, slot=None, rtk=False, *args, timeou
         files = ['-p', profile['app'] + '-rtk', '-f', str(trusted_path(base / 'docker-compose.rtk.yml'))]
     else:
         files = ['--env-file', str(trusted_path(config / 'runtime.env')), '-p', profile['compose_project'], '-f', str(trusted_path(base / 'docker-compose.prod.yml'))]
-        if profile.get('bridge_socket_gid') is not None:
-            socket_dir = trusted_path(profile['bridge_socket_root'], directory=True)
-            matches = [s for s in socket_dir.iterdir() if s.is_socket() and s.stat().st_gid == profile['bridge_socket_gid'] and s.stat().st_mode & 0o777 == 0o660]
-            require(matches, 'BRIDGE_SOCKET')
+        if profile.get('cgw_network'):
+            from cgw import network
+            network(profile)
             files += ['-f', str(trusted_path(base / 'docker-compose.chatgpt-web.yml'))]
     return command('/usr/bin/docker', 'compose', *files, '--ansi=never', '--progress=plain', *args, env=environment(profile, config, image, rtk), timeout=timeout)
 
@@ -292,6 +292,9 @@ def rtk_deploy(req, state, state_dir, cfg, release, profile):
 
 def reconcile(req, state, state_dir, cfg, release, profile, locks):
     intent = state['operation']
+    if req['component'] == 'cgw':
+        from cgw import reconcile as cgw_reconcile
+        return cgw_reconcile(req, state, state_dir, cfg, release, profile)
     if req['component'] == 'rtk':
         if intent and intent['component'] == 'rtk':
             name = profile['app'] + '-rtk-rtk-1'

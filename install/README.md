@@ -12,6 +12,21 @@ Do not run this procedure until the platform PR's AMD64/ARM64 checks and disposa
 
 Installer retains root-only per-attempt backup copies under `/var/lib/vps-deploy/apps/<app>/install-backups/activation-*` (SHA-256 path tokens paired with `.json` mode/path metadata); independently reviewed external backups remain necessary before the first upgrade.
 
+
+## Upgrade 9router ChatGPT Web runtime (`cgw`)
+
+The ChatGPT Web runtime (`ghcr.io/thedemontuan/9router-cgw-runtime`) is a distinct, singleton stateful service on project `9router-cgw` with persistent storage `/data` (`9router-cgw-data`), host-only VNC port `127.0.0.1:17842`, and internal network `9router-cgw`. Normal gateway Blue/Green deployments (`component: app`) NEVER start, restart, or recreate the runtime.
+
+### CGW Lifecycle Contract
+1. **Timeout Budgets**: Operation budget is 1800s (`RuntimeMaxSec=1800`), caller polling 1860s. Phase subdeadlines: `prepare` <= 300s, `drain` <= 900s, `quiesce` + `snapshot` + `candidate` <= 300s, `recovery`/`resume` <= 240s, with a 60s termination reserve.
+2. **Admission Fence**: A durable fence `{operationId, state: "draining"|"quiesced"}` is persisted in SQLite before starting admission-draining actions. The fence survives process restarts and stops candidate traffic admission during validation.
+3. **Physical Quiescence**: Quiescing requires zero active HTTP requests, zero active browser turns, zero pending MCP calls, and physical settlement of all browser tabs and broker activity (`physicalIdle: true`).
+4. **Private Snapshot**: After stopping the old runtime, the platform verifies all volume writers have exited, creates a byte-for-byte snapshot of `/data`, runs SQLite `PRAGMA integrity_check`, and writes a manifest containing the SHA256 hashes, user version, and monotonic `acceptedRequestCount`.
+5. **Candidate Validation & Commit**: The candidate starts with the durable fence still active. Diagnostics query `/admin/profiles` to verify protocol version 1, schema version 1, and idle status without exposing bearer tokens or credentials. If admission count grew or candidate fails, candidate is stopped and the verified snapshot restored. Once validated, state is committed to `current: <candidate-digest>` and the fence resumed.
+6. **Drain Timeout**: If active browser turns or tool executions do not finish within the 900s drain budget, the platform aborts the upgrade, resumes the old runtime without killing turns, and returns typed error `CGW_DRAIN_BUSY`.
+
+### Production Activation Gate
+Production registry and workflow pins are immutable. Expanding the registry with `cgw` and updating executable workflow pins to include the `cgw` component requires user authorization, an immutable platform release tag, and simultaneous activation across platform and caller repositories.
 ## Image versus engine rollback
 
 Image rollback uses a retained previous container/digest through a new rollback request. It does **not** roll back SQLite schema or app data. Engine rollback is permitted only with no pending intent or unsupported state: pause caller and timer, hold install, selected submit, and selected operation locks (plus legacy locks when reverting 9router), restore selected-app profile/manifest/wrappers/unit and old caller pins, reload systemd, run old strict status, then restore timer. Never overwrite state or dynamic route from backup to conceal divergence. Keep old release, containers, and worktrees available; do not delete shared middleware or another app's files. On SELinux enforcing Oracle Linux, rehearse context-preserving route publication on a disposable enforcing host before any rollout; Ubuntu CI is not SELinux proof.
