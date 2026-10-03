@@ -107,7 +107,7 @@ def main():
                 if phase in ('cgw_quiescing', 'cgw_quiesced', 'cgw_candidate', 'cgw_committed'):
                     ref = persisted['image'] if phase in ('cgw_candidate', 'cgw_committed') else persisted['previous']
                     fence = 'draining' if phase == 'cgw_quiescing' else 'quiesced'
-                    proof = cgw.wait_diagnostics(profile, ref, persisted['operationId'], fence, cgw.Budget(time.time() + 30))
+                    proof = cgw.wait_diagnostics(profile, ref, persisted['operationId'], fence, cgw.Budget())
                     require(proof['idle'], 'CGW_NOT_IDLE')
                     # Exercise real server admission while fenced, not a fake readyz.
                     response = core.docker('exec', cgw.NAME, 'bun', '-e', FENCE_PROBE)
