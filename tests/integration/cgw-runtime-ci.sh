@@ -20,7 +20,7 @@ for network in 9router-cgw 9router-cgw-egress; do
   ! docker network inspect "$network" >/dev/null 2>&1 || { echo "Occupied network: $network" >&2; exit 1; }
 done
 ! docker volume inspect 9router-cgw-data >/dev/null 2>&1 || { echo 'Occupied runtime volume' >&2; exit 1; }
-work=$(mktemp -d /opt/cgw-native-ci.XXXXXX)
+work=$(mktemp -d /tmp/cgw-native-ci.XXXXXX)
 registry="cgw-ci-registry-${GITHUB_RUN_ID}-$$"
 probe="cgw-ci-systemd-${GITHUB_RUN_ID}-$$"
 images=()

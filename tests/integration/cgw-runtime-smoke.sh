@@ -35,7 +35,7 @@ if docker volume inspect 9router-cgw-data >/dev/null 2>&1; then exit 1; fi
 mkdir -p /etc/vps-deploy
 printf 'disposable cgw fixture\n' > /etc/vps-deploy/fixture-ci
 chmod 600 /etc/vps-deploy/fixture-ci
-work=$(mktemp -d /opt/cgw-platform-smoke.XXXXXX)
+work=$(mktemp -d /tmp/cgw-platform-smoke.XXXXXX)
 chmod 700 "$work"
 mkdir -m 700 "$work/config" "$work/state"
 config=$work/config
