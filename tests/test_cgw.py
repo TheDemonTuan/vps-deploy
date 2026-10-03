@@ -79,7 +79,9 @@ class CgwLifecycleTests(unittest.TestCase):
         for name, fn in (('diagnostics', self.runtime.diagnostics), ('admin', self.runtime.admin),
                          ('stop', self.runtime.stop), ('start', self.runtime.start),
                          ('image_id', lambda ref: ref), ('compose', lambda *args: None),
-                         ('fault', lambda *args: None), ('snapshot', lambda *args: ('/private/snapshot', 'hash'))):
+                         ('fault', lambda *args: None), ('snapshot', lambda *args: ('/private/snapshot', 'hash')),
+                         ('inspect', lambda *args: {'Image': self.runtime.image, 'State': {'Running': self.runtime.running, 'Pid': 123 if self.runtime.running else 0, 'Restarting': False}}),
+                         ('writers_gone', lambda *args: None)):
             mock = patch.object(cgw, name, side_effect=fn)
             mock.start()
             self.addCleanup(mock.stop)
