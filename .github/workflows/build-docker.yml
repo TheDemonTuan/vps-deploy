@@ -156,9 +156,9 @@ jobs:
           sudo chown 10001:10001 "$evidence"
           hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
             --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
-            --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
-            --tmpfs /run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
-            --tmpfs /data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700)
+            --tmpfs "/tmp:rw,nosuid,nodev,size=512m,mode=1777"
+            --tmpfs "/run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700"
+            --tmpfs "/data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700")
           raw="cgw-runtime:proof-$SOURCE_SHA"
           docker run "${hardening[@]}" -v "$evidence:/evidence:rw" "$raw" \
             bun scripts/verify-harness-compatibility.ts /evidence/compatibility.json
@@ -200,9 +200,9 @@ jobs:
             package="$GITHUB_WORKSPACE/source/services/chatgpt-web-runtime"
             hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
               --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
-              --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
-              --tmpfs /run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
-              --tmpfs /data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700)
+              --tmpfs "/tmp:rw,nosuid,nodev,size=512m,mode=1777"
+              --tmpfs "/run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700"
+              --tmpfs "/data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700")
             docker run "${hardening[@]}" "$IMAGE_REF" bun scripts/image-smoke.ts --arch arm64
             docker run "${hardening[@]}" "$IMAGE_REF" bun scripts/smoke-offline.ts
           fi
