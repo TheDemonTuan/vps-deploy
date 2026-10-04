@@ -1,3 +1,4 @@
+import hashlib
 import copy
 import json
 import sqlite3
@@ -79,6 +80,9 @@ class CgwLifecycleTests(unittest.TestCase):
         for name, fn in (('diagnostics', self.runtime.diagnostics), ('admin', self.runtime.admin),
                          ('stop', self.runtime.stop), ('start', self.runtime.start),
                          ('image_id', lambda ref: ref), ('compose', lambda *args: None),
+                         ('docker', lambda *args, **kwargs: ''), ('container', lambda *args, **kwargs: {}),
+                         ('browser_directory', lambda *args: self.directory / 'browser'),
+                         ('browser_mount', lambda *args: self.directory / 'browser'),
                          ('fault', lambda *args: None), ('snapshot', lambda *args: ('/private/snapshot', 'hash')),
                          ('inspect', lambda *args: {'Image': self.runtime.image, 'State': {'Running': self.runtime.running, 'Pid': 123 if self.runtime.running else 0, 'Restarting': False}}),
                          ('writers_gone', lambda *args: None)):
@@ -92,6 +96,25 @@ class CgwLifecycleTests(unittest.TestCase):
     def reconcile(self):
         self.state = json.loads((self.directory / 'state.json').read_bytes())
         cgw.reconcile(self.req, self.state, self.directory, self.directory, self.directory, self.profile)
+
+    def test_private_browser_failure_never_drains_or_stops_old_writer(self):
+        for code in ('UNTRUSTED_PATH', 'CGW_BROWSER_MANIFEST', 'CGW_BROWSER_PROOF'):
+            with self.subTest(code=code), patch.object(cgw, 'browser_directory', side_effect=Failure(code)):
+                with self.assertRaisesRegex(Failure, code):
+                    self.deploy()
+                self.assertTrue(self.runtime.running)
+                self.assertEqual(self.runtime.image, OLD)
+                self.assertNotIn('stop', self.runtime.events)
+                self.assertNotIn('/admin/drain', self.runtime.events)
+                self.assertIsNone(self.state['operation'])
+
+    def test_old_browser_mount_mismatch_denies_before_drain(self):
+        with patch.object(cgw, 'browser_mount', side_effect=Failure('CGW_BROWSER_MOUNT')):
+            with self.assertRaisesRegex(Failure, 'CGW_BROWSER_MOUNT'):
+                self.deploy()
+        self.assertNotIn('stop', self.runtime.events)
+        self.assertNotIn('/admin/drain', self.runtime.events)
+        self.assertEqual(self.runtime.image, OLD)
 
     def test_commit_then_resume_and_single_writer(self):
         self.deploy()
@@ -200,6 +223,64 @@ class CgwLifecycleTests(unittest.TestCase):
         self.assertNotIn('stop', self.runtime.events)
         self.assertEqual(self.runtime.image, OLD)
         self.assertIsNone(self.runtime.fence)
+
+
+class CgwBrowserTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cfg = Path(self.tmp.name)
+        self.sha = 'd' * 64
+        self.binary = hashlib.sha256(b'official pinned ELF fixture').hexdigest()
+        self.path = self.cfg / 'cgw-browsers' / self.sha
+        self.path.mkdir(parents=True)
+        self.path.chmod(0o755)
+        (self.path / 'chrome').write_bytes(b'official pinned ELF fixture')
+        (self.path / 'chrome').chmod(0o755)
+        (self.path / 'LICENSE').write_text('retained upstream license')
+        (self.path / 'LICENSE').chmod(0o644)
+        self.proof = dict(version='154.0.8037.92', architecture='arm64', archiveSha256=self.sha,
+                          binarySha256=self.binary, files={'chrome': self.binary,
+                          'LICENSE': hashlib.sha256((self.path / 'LICENSE').read_bytes()).hexdigest()})
+        (self.path / '.cgw-chrome.json').write_text(json.dumps(self.proof))
+        (self.path / '.cgw-chrome.json').chmod(0o644)
+        for name, kwargs in [('browser_manifest', {'return_value': ({'version': self.proof['version']}, 'arm64',
+                                           {'sha256': self.sha, 'binarySha256': self.binary})}),
+                             ('trusted_path', {'side_effect': lambda path, **kw: path})]:
+            mock = patch.object(cgw, name, **kwargs)
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def test_pin_selects_archive_directory_and_full_payload(self):
+        self.assertEqual(cgw.browser_directory(self.cfg, NEW, cgw.Budget()), self.path)
+        (self.path / 'LICENSE').write_text('changed')
+        with self.assertRaisesRegex(Failure, 'CGW_BROWSER_PROOF'):
+            cgw.browser_directory(self.cfg, NEW, cgw.Budget())
+
+    def test_missing_binary_proof_mismatch_and_extra_file_fail_closed(self):
+        for mutation in ('missing', 'proof', 'extra'):
+            with self.subTest(mutation=mutation):
+                chrome = self.path / 'chrome'
+                chrome.write_bytes(b'official pinned ELF fixture')
+                chrome.chmod(0o755)
+                (self.path / '.cgw-chrome.json').write_text(json.dumps(self.proof))
+                if mutation == 'missing':
+                    chrome.unlink()
+                elif mutation == 'proof':
+                    (self.path / '.cgw-chrome.json').write_text(json.dumps(dict(self.proof, archiveSha256='e' * 64)))
+                else:
+                    (self.path / 'unlisted').write_text('unexpected payload')
+                with self.assertRaisesRegex(Failure, 'CGW_BROWSER_PROOF'):
+                    cgw.browser_directory(self.cfg, NEW, cgw.Budget())
+
+    def test_unsafe_path_is_rejected_and_mount_must_match_readonly_pin(self):
+        with patch.object(cgw, 'trusted_path', side_effect=Failure('UNTRUSTED_PATH')):
+            with self.assertRaisesRegex(Failure, 'UNTRUSTED_PATH'):
+                cgw.browser_directory(self.cfg, NEW, cgw.Budget())
+        for source, writable in [(str(self.path), True), (str(self.cfg / 'shared-browser'), False)]:
+            live = {'Mounts': [{'Destination': '/opt/cgw-browser', 'Type': 'bind', 'RW': writable, 'Source': source}]}
+            with self.assertRaisesRegex(Failure, 'CGW_BROWSER_MOUNT'):
+                cgw.browser_mount(live, self.cfg, NEW, cgw.Budget())
 
 
 class CgwSnapshotTests(unittest.TestCase):

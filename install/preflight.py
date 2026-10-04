@@ -123,10 +123,12 @@ def adopt_cgw(root, config, state_dir, profile):
 
 
 def runtime_parity(root, config, binding):
-    from cgw import NAME, REPOSITORY, VOLUME
+    from cgw import NAME, REPOSITORY, VOLUME, Budget, browser_mount
     live = container(NAME, running=True)
     ref = container_digest(live, REPOSITORY)
-    env = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'CGW_CONFIG_DIR': str(config), 'CGW_IMAGE': ref}
+    browser = browser_mount(live, config, ref, Budget())
+    env = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'CGW_CONFIG_DIR': str(config),
+           'CGW_IMAGE': ref, 'CGW_BROWSER_DIR': str(browser)}
     result = subprocess.run(['/usr/bin/docker', 'compose', '-p', '9router-cgw', '-f',
         str(root / 'apps/9router/docker-compose.cgw-runtime.yml'), 'config', '--format', 'json'],
         env=env, capture_output=True, timeout=30)

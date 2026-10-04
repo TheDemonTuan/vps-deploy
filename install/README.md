@@ -34,11 +34,42 @@ The production registration now enrolls CGW. Activate the expanded caller manife
 
 Before installer `--check`, provision the singleton runtime at the exact scanned digest, its internal/egress networks, read-only secret mounts, native sandbox seccomp, tmpfs and 1GB shm. Config files under the selected app config directory are `cgw-data-token`, `cgw-admin-token`, `cgw-client-keys.json`, `cgw-tunnel-profiles.json` (root-owned mode 0640, group 10001), plus `cgw.env` and `cgw-seccomp.json` (root-owned mode 0600). Data/admin tokens must differ. Existing `INITIAL_PASSWORD` remains required; normalize only the allowed runtime env names after a private operator backup, never log values. An empty operator client/tunnel inventory and no account are valid unconfigured state, not Full readiness. No public viewer/CDP or relaxed sandbox is permitted.
 
+The public runtime image is browserless. Official Google Chrome for Testing is downloaded directly from Google into a **private, root-owned, version-bound** host directory, never built from source, redistributed in an image, or stored in `cgw-data`. Before first enrollment or any runtime upgrade, provision the candidate's own manifest pin separately as root. Retain the old image's browser directory for rollback; never replace a shared mutable browser path. Example (review `CGW_IMAGE` as the exact scanned digest and select the installed config directory first):
+
+```bash
+: "${CGW_IMAGE:?Export the exact reviewed and scanned runtime digest first}"
+export CGW_CONFIG_DIR=/etc/vps-deploy/apps/9router
+sudo --preserve-env=CGW_IMAGE,CGW_CONFIG_DIR bash <<'SH'
+set -euo pipefail
+umask 077
+docker pull "$CGW_IMAGE"
+private=$(mktemp -d)
+cid=$(docker create --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --entrypoint /bin/true "$CGW_IMAGE")
+trap 'docker rm "$cid" >/dev/null 2>&1 || true; rm -rf "$private"' EXIT
+docker cp "$cid:/opt/cgw/image-build-manifest.json" "$private/manifest.json"
+docker cp "$cid:/opt/cgw/scripts/install-browser.py" "$private/install-browser.py"
+install -d -m 0755 "$CGW_CONFIG_DIR/cgw-browsers"
+python3 - "$private" "$CGW_CONFIG_DIR" <<'PY'
+import json, platform, subprocess, sys
+from pathlib import Path
+private, config = map(Path, sys.argv[1:])
+arch = {'aarch64': 'arm64', 'x86_64': 'amd64'}[platform.machine()]
+pin = json.loads((private / 'manifest.json').read_text())['browser']['platforms'][arch]
+assert len(pin['sha256']) == 64 and all(c in '0123456789abcdef' for c in pin['sha256'])
+subprocess.run(['python3', str(private / 'install-browser.py'), '--manifest', str(private / 'manifest.json'),
+                '--arch', arch, '--output', str(config / 'cgw-browsers' / pin['sha256'])], check=True)
+print('CGW_BROWSER_DIR=' + str(config / 'cgw-browsers' / pin['sha256']))
+PY
+SH
+```
+
+Set `CGW_BROWSER_DIR` to that printed archive-SHA directory for the first manual Compose `up`. Compose requires it and binds it read-only at `/opt/cgw-browser`, with `CGW_CHROMIUM_EXECUTABLE=/opt/cgw-browser/chrome`; a missing source cannot be auto-created. Installer preflight/adoption proves live bind identity and sandbox parity. Managed lifecycle resolves each candidate/retained image's manifest in its own account-free, network-disabled container, validates root ownership, non-writable/non-symlink paths, proof and every payload hash **before draining/stopping the old writer**, and supplies the matching bind to Compose. Missing, unsafe or mismatched bundles fail closed; deploy/reconcile never download a browser. Startup additionally validates the image-bound Chrome binary; exact-image smoke validates the complete bundle. These offline proofs do not assert login or Full readiness.
+
 For a verified old selected profile whose installed registration has no CGW (or a verified legacy 9router engine/profile without CGW network), first enrollment compares live gateway slots against canonical **base** Compose; it still requires the fully provisioned runtime, authenticated diagnostics, secret policy and native runtime parity. It does not restart the old live gateway to pretend new-overlay parity. Once enrolled, every later installer check requires full CGW overlay parity; a missing network/secret cannot use the transition. The next normal gateway deploy attaches the new overlay.
 
 During activation, under selected and legacy operation locks, first enrollment backs up the selected deployment state along with configuration. If state already exists, it proves current gateway identity/route and runtime digest, unfenced physical idle and strict runtime parity, then adopts only `cgw: {current: <digest>, previous: null}` and advances the state revision before final strict status. Active/previous gateway, route generation, private app data and receipts are preserved. Existing CGW state is never overwritten. Any later activation/key-install failure restores the exact backed-up state bytes and config. `--check` remains read-only; it does not adopt. Unknown pending work or fenced/busy runtime blocks adoption.
 
-The CGW release build uses native ARM64, fixed runtime Dockerfile and `APP_REVISION=source-sha`. It runs `verify-harness-compatibility.ts` in the hardened raw image; only the actual generated protocol/upstream/boolean evidence is copied to `/opt/cgw/compatibility.json` in a label-preserving derivative. The published `sha-<source-sha>` final digest is smoke-tested under the same sandbox policy and must pass the existing Trivy image gate. This establishes offline build compatibility only: real ChatGPT/Codex login, outbound connector readiness and per-profile Full smoke remain separate operator gates.
+The CGW release build uses native ARM64, fixed runtime Dockerfile and `APP_REVISION=source-sha`. It downloads the pinned official browser privately with the app installer and mounts it read-only for `verify-harness-compatibility.ts` and exact published-image smoke; only the actual generated protocol/upstream/boolean evidence is copied to `/opt/cgw/compatibility.json` in a label-preserving derivative. The published `sha-<source-sha>` final digest must pass the existing Trivy image gate **and** unsuppressed private-bundle filesystem/SPDX HIGH/CRITICAL gates. Reports contain metadata only; Chrome payload, licenses, account and runtime state are never uploaded or included in public images. This establishes offline build compatibility only: real ChatGPT/Codex login, outbound connector readiness and per-profile Full smoke remain separate operator gates.
 
 ## Image versus engine rollback
 

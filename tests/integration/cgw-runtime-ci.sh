@@ -52,12 +52,16 @@ assert hashlib.sha256((p/'security/seccomp.json').read_bytes()).hexdigest() == m
 policy=json.loads((p/'security/seccomp.json').read_bytes())
 assert policy['defaultAction'] in ('SCMP_ACT_ERRNO','SCMP_ACT_KILL','SCMP_ACT_KILL_PROCESS')
 PY
+browser="$work/browser"
+python3 "$package/scripts/install-browser.py" --manifest "$package/image-build-manifest.json" \
+  --arch "$CGW_CI_ARCH" --output "$browser"
 base="cgw-ci-base:${CGW_APP_REF}-${CGW_CI_ARCH}"
 images+=("$base")
 docker buildx build --builder default --load --platform "linux/$CGW_CI_ARCH" \
   --build-arg "APP_REVISION=$CGW_APP_REF" -f "$package/Dockerfile" -t "$base" "$app"
 hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
   --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
+  --mount "type=bind,src=$browser,dst=/opt/cgw-browser,readonly"
   --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
   --tmpfs /run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
   --tmpfs /data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700)
@@ -81,12 +85,13 @@ done
 [[ $ready == 1 ]] || { echo 'Ephemeral loopback registry did not become healthy' >&2; exit 1; }
 # Identical real runtime closure, different OCI configs/digests; labels only.
 # This exercises upgrade/rollback, not cross-version schema compatibility.
-printf 'ARG BASE\nFROM ${BASE}\nARG VARIANT\nLABEL cgw.fixture.variant="${VARIANT}"\n' > "$work/Dockerfile"
+mkdir -m 0700 "$work/variants"
+printf 'ARG BASE\nFROM ${BASE}\nARG VARIANT\nLABEL cgw.fixture.variant="${VARIANT}"\n' > "$work/variants/Dockerfile"
 for variant in old new; do
   tag="$repository:$variant"
   images+=("$tag")
   docker buildx build --builder default --load --platform "linux/$CGW_CI_ARCH" \
-    --build-arg "BASE=$base" --build-arg "VARIANT=$variant" -f "$work/Dockerfile" -t "$tag" "$work"
+    --build-arg "BASE=$base" --build-arg "VARIANT=$variant" -f "$work/variants/Dockerfile" -t "$tag" "$work/variants"
   docker push "$tag"
   docker pull "$tag"
   ref=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag")

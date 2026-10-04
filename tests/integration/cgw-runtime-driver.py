@@ -46,7 +46,7 @@ def configure_loopback_fixture(directory):
     def anonymous_fixture(ref):
         if ref.startswith(repository + '@'):
             require(re.fullmatch(re.escape(repository) + r'@sha256:[0-9a-f]{64}', ref), 'INVALID_IMAGE')
-            return  # No GHCR probe: compose still pulls the actual loopback OCI digest.
+            return  # No GHCR probe: lifecycle still pulls the actual loopback OCI digest.
         return original_anonymous(ref)
     cgw.REPOSITORY = repository
     core.image_id = cgw.image_id = native_image_id
@@ -84,7 +84,7 @@ console.log(JSON.stringify({ status: r.status, code: v.error?.code }));"""
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['adopt', 'deploy', 'reconcile', 'assert'])
+    parser.add_argument('action', choices=['browser', 'adopt', 'deploy', 'reconcile', 'assert'])
     parser.add_argument('--directory', type=Path, required=True)
     parser.add_argument('--image', required=True)
     parser.add_argument('--operation-id', default='cgw-vm-upgrade')
@@ -95,6 +95,26 @@ def main():
     cfg, state_dir = args.directory / 'config', args.directory / 'state'
     profile = dict(cgw_image_repository=cgw.REPOSITORY, cgw_network='9router-cgw')
     req = dict(component='cgw', request_id=args.operation_id, image=args.image)
+    if args.action == 'browser':
+        # Explicit fixture provisioning; production lifecycle never downloads.
+        browser, architecture, pin = cgw.browser_manifest(args.image, cgw.Budget())
+        parent = cfg / 'cgw-browsers'
+        parent.mkdir(mode=0o755, exist_ok=True)
+        extracted = args.directory / 'browser-installer'
+        extracted.mkdir(mode=0o700, exist_ok=True)
+        manifest = extracted / 'manifest.json'
+        installer = extracted / 'install-browser.py'
+        cid = core.docker('create', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+                          '--security-opt', 'no-new-privileges:true', '--entrypoint', '/bin/true', args.image).strip()
+        try:
+            core.docker('cp', cid + ':/opt/cgw/image-build-manifest.json', str(manifest))
+            core.docker('cp', cid + ':/opt/cgw/scripts/install-browser.py', str(installer))
+        finally:
+            core.docker('rm', cid)
+        core.command('/usr/bin/python3', str(installer), '--manifest', str(manifest), '--arch', architecture,
+                     '--output', str(parent / pin['sha256']), timeout=300)
+        print(cgw.browser_directory(cfg, args.image, cgw.Budget()))
+        return
     def interrupt(signum, frame):
         raise Failure('CGW_TERMINATED')
     signal.signal(signal.SIGTERM, interrupt)

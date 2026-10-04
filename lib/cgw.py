@@ -1,4 +1,5 @@
 """CGW's single-writer, durable-fence upgrade transaction (not a gateway deploy)."""
+import hashlib
 import json
 import math
 import os
@@ -33,9 +34,74 @@ class Budget:
         return max(1, min(ceiling, math.ceil(left)))
 
 
+def browser_manifest(image, budget):
+    """Read only the image's public pin, with no host state or network attached."""
+    require(re.fullmatch(re.escape(REPOSITORY) + r'@sha256:[0-9a-f]{64}', image or ''), 'INVALID_IMAGE')
+    image_id(image)
+    raw = docker('run', '--rm', '--pull', 'never', '--read-only', '--network', 'none',
+                 '--user', '10001:10001', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
+                 '--entrypoint', 'bun', image, '-e',
+                 "process.stdout.write(require('node:fs').readFileSync('/opt/cgw/image-build-manifest.json','utf8'))",
+                 timeout=budget.remaining())
+    try:
+        require(len(raw) <= 65536, 'CGW_BROWSER_MANIFEST')
+        browser = json.loads(raw)['browser']
+        architecture = {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(os.uname().machine)
+        pin = browser['platforms'][architecture]
+        require(browser['distribution'] == 'google-chrome-for-testing' and
+                browser['installRoot'] == '/opt/cgw-browser' and
+                re.fullmatch(r'[0-9]+(?:\.[0-9]+){3}', browser['version']) and
+                all(re.fullmatch(r'[0-9a-f]{64}', pin[key]) for key in ('sha256', 'binarySha256')),
+                'CGW_BROWSER_MANIFEST')
+        return browser, architecture, pin
+    except (KeyError, TypeError, ValueError):
+        raise Failure('CGW_BROWSER_MANIFEST') from None
+
+
+def browser_directory(cfg, image, budget):
+    """Version-bound immutable private payload; never install or replace it here."""
+    browser, architecture, pin = browser_manifest(image, budget)
+    directory = trusted_path(cfg / 'cgw-browsers' / pin['sha256'], directory=True)
+    try:
+        proof = load(trusted_path(directory / '.cgw-chrome.json'))
+        require(proof['version'] == browser['version'] and proof['architecture'] == architecture and
+                proof['archiveSha256'] == pin['sha256'] and proof['binarySha256'] == pin['binarySha256'] and
+                isinstance(proof['files'], dict) and proof['files'].get('chrome') == pin['binarySha256'],
+                'CGW_BROWSER_PROOF')
+        actual = {}
+        for path in directory.rglob('*'):
+            budget.remaining()
+            trusted_path(path, directory=path.is_dir())
+            readable = 0o005 if path.is_dir() else 0o004
+            require(path.stat().st_mode & readable == readable, 'CGW_BROWSER_PROOF')
+            if path.is_file() and path != directory / '.cgw-chrome.json':
+                checksum = hashlib.sha256()
+                with path.open('rb') as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                        budget.remaining()
+                        checksum.update(chunk)
+                actual[path.relative_to(directory).as_posix()] = checksum.hexdigest()
+        require(actual == proof['files'], 'CGW_BROWSER_PROOF')
+        require((directory / 'chrome').stat().st_mode & 0o111 and directory.stat().st_mode & 0o005 == 0o005,
+                'CGW_BROWSER_PROOF')
+    except (KeyError, TypeError, ValueError, OSError):
+        raise Failure('CGW_BROWSER_PROOF') from None
+    return directory
+
+
+def browser_mount(value, cfg, image, budget):
+    directory = browser_directory(cfg, image, budget)
+    mounts = [row for row in value.get('Mounts', []) if row.get('Destination') == '/opt/cgw-browser']
+    require(len(mounts) == 1 and mounts[0].get('Type') == 'bind' and mounts[0].get('RW') is False and
+            mounts[0].get('Source') == str(directory), 'CGW_BROWSER_MOUNT')
+    return directory
+
+
 def compose(release, cfg, image, budget, *args):
     require(re.fullmatch(re.escape(REPOSITORY) + r'@sha256:[0-9a-f]{64}', image or ''), 'INVALID_IMAGE')
-    env = dict(PATH='/usr/bin:/bin', HOME='/root', LANG='C', CGW_IMAGE=image, CGW_CONFIG_DIR=str(cfg))
+    browser = browser_directory(cfg, image, budget)
+    env = dict(PATH='/usr/bin:/bin', HOME='/root', LANG='C', CGW_IMAGE=image,
+               CGW_CONFIG_DIR=str(cfg), CGW_BROWSER_DIR=str(browser))
     return command('/usr/bin/docker', 'compose', '-p', '9router-cgw', '-f',
                    str(trusted_path(release / 'apps/9router/docker-compose.cgw-runtime.yml')),
                    '--ansi=never', '--progress=plain', *args, env=env, timeout=budget.remaining())
@@ -250,6 +316,8 @@ def resume_old(state, state_dir, cfg, release, profile, budget):
 def restore(state, state_dir, cfg, release, profile, budget):
     intent = state['operation']
     require(intent['phase'] not in ('cgw_committed', 'cgw_resumed'), 'RECOVERY_REQUIRED')
+    # Validate the retained old pin before stopping a candidate or restoring data.
+    browser_directory(cfg, intent['previous'], budget)
     # A crashed/unreachable candidate's admission ledger cannot be inferred from
     # the old snapshot. Re-open the same candidate fenced to obtain durable proof.
     if not intent.get('restoreProven'):
@@ -295,6 +363,7 @@ def deploy(req, state, state_dir, cfg, release, profile):
     previous, ref = state['cgw']['current'], req['image']
     budget = Budget()
     if previous == ref:
+        browser_mount(container(NAME, ref, running=True), cfg, ref, budget)
         value = diagnostics(profile, ref, budget=budget)
         require(value.get('operationFence') is None, 'CGW_FENCE')
         return
@@ -308,8 +377,12 @@ def deploy(req, state, state_dir, cfg, release, profile):
         budget.phase(300)
         from operations import anonymous_image
         anonymous_image(ref)
-        compose(release, cfg, ref, budget, 'pull', 'cgw-runtime')
+        # Pull without Compose: its required browser bind is validated only after
+        # the candidate's exact image manifest is available locally.
+        docker('pull', ref, timeout=budget.remaining())
         image_id(ref)
+        browser_directory(cfg, ref, budget)
+        browser_mount(container(NAME, previous, running=True), cfg, previous, budget)
         phase(state, state_dir, 'cgw_draining', profile)
         admin('/admin/drain', {'operationId': req['request_id']}, budget)
         try:

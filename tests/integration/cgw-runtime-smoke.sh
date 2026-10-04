@@ -82,13 +82,17 @@ PY
 # No public publication or production registry/profile changes in this fixture.
 docker pull "$CGW_SMOKE_OLD_IMAGE"
 docker pull "$CGW_SMOKE_NEW_IMAGE"
+export CGW_BROWSER_DIR
+CGW_BROWSER_DIR=$(python3 "$root/tests/integration/cgw-runtime-driver.py" browser --directory "$work" --image "$CGW_SMOKE_OLD_IMAGE")
+python3 "$root/tests/integration/cgw-runtime-driver.py" browser --directory "$work" --image "$CGW_SMOKE_NEW_IMAGE"
 docker compose -p 9router-cgw -f "$root/apps/9router/docker-compose.cgw-runtime.yml" up -d --pull never cgw-runtime
 python3 "$root/tests/integration/cgw-runtime-driver.py" adopt --directory "$work" --image "$CGW_SMOKE_OLD_IMAGE"
-# Bundled browser/MCP/HTTP fixture is run in separate isolated containers by CI,
+# Private browser/MCP/HTTP fixture runs in separate isolated containers by CI,
 # never concurrently with the runtime's /data writer here.
 if [[ ${CGW_CI_LOOPBACK:-} != 1 ]]; then
   hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
     --security-opt "seccomp=$CGW_SMOKE_SECCOMP_FILE" --shm-size 1g
+    --mount "type=bind,src=$CGW_BROWSER_DIR,dst=/opt/cgw-browser,readonly"
     --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
     --tmpfs /run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
     --tmpfs /data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700)

@@ -34,7 +34,7 @@ permissions:
   packages: read
 jobs:
   scan:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.scan-mode == 'image' && startsWith(inputs.image-ref, 'ghcr.io/thedemontuan/9router-cgw-runtime@sha256:') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Reject mutable platform checkout
@@ -213,6 +213,35 @@ jobs:
               --severity "${VULN_SEVERITY:-HIGH,CRITICAL}" \
               --exit-code 1 \
               "$IMAGE_REF"
+            if [[ "$IMAGE_REF" == ghcr.io/thedemontuan/9router-cgw-runtime@sha256:* ]]; then
+              [[ "$(uname -m)" == aarch64 ]]
+              # Resolve the browser pin from the exact image, not a mutable host
+              # directory or account state. Extract without executing the image.
+              private="$RUNNER_TEMP/cgw-browser-security"
+              mkdir -m 0700 "$private"
+              docker pull "${IMAGE_OPTS[@]}" "$IMAGE_REF"
+              extraction=$(docker create --network none --read-only --cap-drop ALL \
+                --security-opt no-new-privileges:true --entrypoint /bin/true "$IMAGE_REF")
+              trap 'docker rm "$extraction" >/dev/null 2>&1 || true' EXIT
+              docker cp "$extraction:/opt/cgw/image-build-manifest.json" "$private/manifest.json"
+              docker cp "$extraction:/opt/cgw/scripts/install-browser.py" "$private/install-browser.py"
+              docker rm "$extraction"
+              trap - EXIT
+              python3 "$private/install-browser.py" --manifest "$private/manifest.json" \
+                --arch arm64 --output "$private/browser"
+              # Metadata reports only are publishable; the Chrome archive,
+              # payload, and private fixture state stay on this disposable runner.
+              trivy fs --ignorefile /dev/null --scanners vuln,secret,misconfig \
+                --format json --output "$REPORT_DIR/trivy-browser-${APP}.json" "$private/browser"
+              trivy fs --ignorefile /dev/null --scanners secret,misconfig \
+                --severity HIGH,CRITICAL --exit-code 1 "$private/browser"
+              trivy fs --ignorefile /dev/null --scanners vuln \
+                --severity HIGH,CRITICAL --exit-code 1 "$private/browser"
+              trivy sbom --ignorefile /dev/null --format json \
+                --output "$REPORT_DIR/trivy-browser-sbom-${APP}.json" "$private/browser/browser.spdx.json"
+              trivy sbom --ignorefile /dev/null --severity HIGH,CRITICAL --exit-code 1 \
+                "$private/browser/browser.spdx.json"
+            fi
             echo "::endgroup::"
           fi
       - name: Save Trivy DB cache
