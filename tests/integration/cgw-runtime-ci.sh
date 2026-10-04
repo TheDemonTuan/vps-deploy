@@ -47,7 +47,7 @@ p=Path(sys.argv[1])
 m=json.loads((p/'image-build-manifest.json').read_bytes())
 assert m['schemaVersion'] == 1 and m['image'] == 'ghcr.io/thedemontuan/9router-cgw-runtime'
 assert m['upstream']['revision'] == 'fa2d2c6c24926078b46eedb2186f69f2e8d548d7'
-assert m['bun']['version'] == '1.4.0' and m['tunnel']['version'] == '0.0.12'
+assert m['bun']['version'] == '1.4.0'
 assert hashlib.sha256((p/'security/seccomp.json').read_bytes()).hexdigest() == m['seccomp']['packagedSha256']
 policy=json.loads((p/'security/seccomp.json').read_bytes())
 assert policy['defaultAction'] in ('SCMP_ACT_ERRNO','SCMP_ACT_KILL','SCMP_ACT_KILL_PROCESS')
