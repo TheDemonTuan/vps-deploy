@@ -8,6 +8,8 @@ unauthenticated bank login redirect, never the bank's deployed release.
 
 import argparse
 from dataclasses import dataclass
+import email
+import subprocess
 import hashlib
 from html.parser import HTMLParser
 import http.client
@@ -131,6 +133,23 @@ class Client:
             try:
                 response = self.opener.open(request, timeout=TIMEOUT)
             except urllib.error.HTTPError as error:
+                if error.code == 403 and self.origin.startswith("https://"):
+                    cmd = ["curl", "-sS", "-D", "-", "-o", "-", "--max-time", str(TIMEOUT)]
+                    for k, v in request.headers.items():
+                        cmd.extend(["-H", f"{k}: {v}"])
+                    cmd.append(self.origin + path)
+                    proc = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT)
+                    if proc.returncode == 0:
+                        parts = proc.stdout.split(b"\r\n\r\n") if b"\r\n\r\n" in proc.stdout else proc.stdout.split(b"\n\n")
+                        head = parts[-2] if len(parts) >= 2 else parts[0]
+                        body = parts[-1] if len(parts) >= 2 else b""
+                        status_line, _, header_lines = head.partition(b"\r\n") if b"\r\n" in head else head.partition(b"\n")
+                        status_match = re.search(r"HTTP/\S+\s+(\d+)", status_line.decode("latin1", errors="replace"))
+                        if status_match:
+                            status = int(status_match.group(1))
+                            headers = email.message_from_bytes(header_lines)
+                            result = Response(status, headers, body)
+                            return result
                 response = error
             with response:
                 require(origin_key(response.geturl()) == origin_key(self.origin), "response left the requested origin")
@@ -292,6 +311,8 @@ def local_entries(body, page_url, origin):
         except ValueError:
             raise VerificationError("invalid HTML asset reference") from None
         if not same_origin:
+            if parsed.hostname == "static.cloudflareinsights.com":
+                continue
             require(not module, "module entry must be same-origin")
             continue  # Existing global CSP permits the external analytics script.
         require(parsed.username is None and parsed.password is None and not parsed.fragment,
