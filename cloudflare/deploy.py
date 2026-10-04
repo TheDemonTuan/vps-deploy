@@ -2,6 +2,7 @@
 """Resolve registered CI artifacts, validate bytes, and invoke platform-owned adapters."""
 import argparse
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -306,6 +308,36 @@ def save(path, value):
         stream.write('\n')
 
 
+def wait_static_release(origin, sha, evidence, timeout=45):
+    spec = importlib.util.spec_from_file_location('acb_release_readiness', ROOT / 'acb/verify-frontend.py')
+    verifier = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = verifier
+    spec.loader.exec_module(verifier)
+    deadline = time.monotonic() + timeout
+    observations = []
+    while True:
+        ready = False
+        try:
+            response = verifier.Client(origin).get('/__release?smoke=' + sha)
+            ready = (response.status == 200 and response.mime() == 'text/plain' and
+                     response.body == (sha + '\n').encode() and
+                     'no-store' in verifier.cache_directives(response))
+            classification = ('crowdsec_challenge' if b'crowdsec' in response.body.lower() else
+                              'html' if response.mime() == 'text/html' else 'other')
+            observation = {'status': response.status, 'mime': response.mime(), 'body_class': classification}
+        except verifier.VerificationError:
+            observation = {'transport': 'unavailable'}
+        observations.append(observation)
+        result = {'expected_sha': sha, 'ready': ready, 'observations': observations}
+        save(evidence, result)
+        if ready:
+            return result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Failure('Static release did not converge to the exact expected identity; routes must be restored')
+        time.sleep(min(2, remaining))
+
+
 def execute(api, config, selection, summary, version_id=None, monitor_version_id=None):
     mode, sha = selection['mode'], selection['sha']
     if mode == 'survey':
@@ -367,11 +399,13 @@ def execute(api, config, selection, summary, version_id=None, monitor_version_id
             # Align the unexposed service with the verified artifact before any
             # traffic switch. Bootstrap rejects already-routed services.
             subprocess.run([sys.executable, str(adapter), '--mode', 'bootstrap', '--sha', sha, '--summary', str(summary.resolve())], cwd=staging, env=env, check=True)
+            readiness = None
             try:
                 for host, snapshot in zip(('viewer', 'bank'), snapshots):
                     subprocess.run([sys.executable, routes_bin, 'apply', '--host', host, '--snapshot', str(snapshot)], cwd=staging, env=env, check=True)
                     verification = [sys.executable, verify_bin, '--sha', sha]
                     if host == 'viewer':
+                        readiness = wait_static_release('https://transactions.tuannguyenviet.site', sha, summary.parent / 'readiness.json')
                         verification += ['--origin', 'https://transactions.tuannguyenviet.site', '--mode', 'static', '--surface', 'viewer', '--artifact', str(artifact / 'dist')]
                     else:
                         verification += ['--origin', 'https://bank.tuannguyenviet.site', '--mode', 'access']
@@ -384,7 +418,8 @@ def execute(api, config, selection, summary, version_id=None, monitor_version_id
                     raise Failure('Cutover publication did not confirm public checks')
                 receipt.update(mode='cutover', status='pending_owner_acceptance', routes_verified=True,
                                owner_browser_checks_passed=False, metadata_migration_authorized=False,
-                               traffic_note='Routes switched; authenticated owner acceptance is required before VPS metadata migration or frontend removal.')
+                               release_readiness=readiness,
+                               traffic_note='Routes switched; authenticated owner acceptance or explicit owner waiver is required before VPS metadata migration or frontend removal.')
                 save(summary, receipt)
             except (Failure, OSError, ValueError, subprocess.SubprocessError) as error:
                 restored = []
