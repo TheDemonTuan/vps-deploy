@@ -69,7 +69,7 @@ jobs:
           REQUEST_SHA: ${{ inputs.sha }}
           VERSION_ID: ${{ inputs.version_id }}
           MONITOR_VERSION_ID: ${{ inputs.monitor_version_id }}
-          SCHEDULED: ${{ github.event_name == 'schedule' }}
+          SCHEDULED: ${{ github.event_name == 'schedule' || github.event_name == 'push' }}
         run: |
           python3 - <<'PY'
           import json, os, subprocess
