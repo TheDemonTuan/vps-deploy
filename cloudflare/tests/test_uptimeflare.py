@@ -102,6 +102,14 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(self.api.calls, [])
         self.assertEqual(self.api.live, self.api.original)
 
+    def test_unreachable_current_public_surface_prevents_upload_and_switch(self):
+        with patch.object(adapter, 'upload', side_effect=self.api.upload) as upload, patch.object(adapter, 'smoke', side_effect=adapter.DeployError('Public readiness failed: HTTP 403')):
+            with self.assertRaises(adapter.DeployError):
+                adapter.execute(self.api, self.root, SHA, 'publish', self.summary)
+            upload.assert_not_called()
+        self.assertEqual(self.api.calls, [])
+        self.assertEqual(self.api.live, self.api.original)
+
     def test_publishes_both_compiled_versions_without_infrastructure_mutation(self):
         self.publish()
         self.assertEqual(self.summary["status"], "success")
@@ -136,6 +144,8 @@ class TransitionTests(unittest.TestCase):
     def test_rollback_does_not_overwrite_another_operators_deployment(self):
         drift_id = new_id()
         def drift(web, monitor):
+            if web != SHA:
+                return {'http': 'passed'}
             self.api.live[adapter.WEB] = {"id": new_id(), "versions": [{"version_id": drift_id, "percentage": 100}], "annotations": {"workers/message": "operator"}}
             raise adapter.DeployError("Health mismatch")
         with self.assertRaises(adapter.DeployError):
@@ -147,6 +157,8 @@ class TransitionTests(unittest.TestCase):
     def test_same_version_redeployment_is_still_ownership_drift(self):
         changed = {}
         def redeploy(web, monitor):
+            if web != SHA:
+                return {'http': 'passed'}
             self.api.live[adapter.WEB]["id"] = new_id()
             changed.update(self.api.live[adapter.WEB])
             return {"http": "passed"}

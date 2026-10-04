@@ -265,7 +265,7 @@ def public_get(path):
                 raise DeployError("Public readiness response exceeds size limit")
             return response.status, response.headers, body
     except urllib.error.HTTPError as exc:
-        raise DeployError(f"Public readiness failed: HTTP {exc.code}") from None
+        raise DeployError(f"Public readiness {path.split('?')[0]} failed: HTTP {exc.code}") from None
     except OSError:
         raise DeployError("Public readiness request failed") from None
 
@@ -337,6 +337,7 @@ def execute(api, root, sha, mode, summary, version_id=None, monitor_version_id=N
                 raise DeployError("Rollback requires exact web and monitor UUIDs")
             validate_version(worker, api.version(worker, candidates[worker]), infrastructure, sha, paired=True)
     else:
+        summary['baseline_verification'] = smoke(previous_shas[WEB], previous_shas[MONITOR] if previous_shas[WEB] else None)
         validate_artifact(root, sha)
         summary["artifact_manifest_sha256"] = hashlib.sha256((root / "SHA256SUMS").read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory(prefix="uptimeflare-central-") as temp:
