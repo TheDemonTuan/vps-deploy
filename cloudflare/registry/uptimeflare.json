@@ -1,0 +1,12 @@
+{
+  "app": "uptimeflare",
+  "repository": "TheDemonTuan/tuan-uptimeflare",
+  "workflow": "deploy.yml",
+  "branch": "main",
+  "manual_branches": ["main", "feat/central-cloudflare-artifacts"],
+  "artifact_prefix": "cloudflare-uptimeflare-",
+  "automatic": true,
+  "zone_name": "tuannguyenviet.site",
+  "workers": ["uptimeflare-web", "uptimeflare_worker"],
+  "frontend_paths": [""]
+}

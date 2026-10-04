@@ -1,0 +1,23 @@
+{
+  "name": "uptimeflare-web",
+  "main": "entry.mjs",
+  "compatibility_date": "2026-09-27",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "no_bundle": true,
+  "find_additional_modules": true,
+  "preview_urls": false,
+  "keep_vars": true,
+  "rules": [
+    {"type": "ESModule", "globs": ["entry.mjs", "runtime/**/*.js", "runtime/**/*.mjs"], "fallthrough": false},
+    {"type": "CommonJS", "globs": ["runtime/**/*.cjs"], "fallthrough": false},
+    {"type": "CompiledWasm", "globs": ["runtime/**/*.wasm"], "fallthrough": false},
+    {"type": "Data", "globs": ["runtime/**/*.bin"], "fallthrough": false},
+    {"type": "Text", "globs": ["runtime/**/*.txt", "runtime/**/*.html", "runtime/**/*.json"], "fallthrough": false}
+  ],
+  "assets": {"directory": "assets", "binding": "ASSETS", "run_worker_first": ["/__release", "/__monitor_release"]},
+  "services": [
+    {"binding": "WORKER_SELF_REFERENCE", "service": "uptimeflare-web"},
+    {"binding": "MONITOR_WORKER", "service": "uptimeflare_worker"}
+  ],
+  "d1_databases": [{"binding": "UPTIMEFLARE_D1", "database_name": "uptimeflare_d1", "database_id": "431a0d2e-6413-4e80-9d27-1ee933f14f05"}]
+}

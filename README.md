@@ -398,3 +398,29 @@ Khi cần kiểm tra hoặc xử lý trực tiếp trên VPS với quyền root:
   ```bash
   /opt/vps-deploy/current/bin/deployctl cleanup-drains --app 9router
   ```
+
+## Cloudflare releases: ACB and uptimeflare
+
+`.github/workflows/cloudflare-deploy.yml` owns Cloudflare deployment. Registered source repositories build and verify immutable artifacts without Cloudflare credentials; this repository verifies successful whole-workflow CI, branch/head eligibility, GitHub ZIP digest, exhaustive SHA256SUMS and manifest identity before executing only platform-owned adapters. No source npm scripts, OpenNext config, Terraform or uploaded deploy scripts run with the token.
+
+- Registry: `cloudflare/registry/{acb,uptimeflare}.json`. Adding an app requires a reviewed registration and trusted adapter, not copying keys into its source repository.
+- Central secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Existing uptimeflare values were moved as GitHub sealed-box ciphertext; plaintext was not downloaded. `UPTIMEFLARE_D1_ID` is a central variable fixed to `431a0d2e-6413-4e80-9d27-1ee933f14f05`.
+- Runtime rotation envelopes are stored centrally as `UPTIMEFLARE_CF_ACCESS_CLIENT_ID`, `UPTIMEFLARE_CF_ACCESS_CLIENT_SECRET`, `UPTIMEFLARE_BESZEL_ACCESS_CLIENT_ID`, `UPTIMEFLARE_BESZEL_ACCESS_CLIENT_SECRET`, `UPTIMEFLARE_TELEGRAM_BOT_TOKEN`, `UPTIMEFLARE_TELEGRAM_CHAT_ID`. Ordinary releases preserve existing Worker secrets without reading or rewriting these GitHub values.
+- Token permissions: account Workers Scripts edit, D1 read and Durable Objects read for uptimeflare. ACB additionally requires zone read and Workers Routes access for `tuannguyenviet.site`; a token that previously deployed uptimeflare is not evidence of these zone permissions.
+- Jobs use environment `production`, per-app non-cancelling concurrency and full trusted-controller CI. The five-minute schedule selects successful `push`/`main` artifacts; GitHub schedules can be delayed. Repeated current-SHA publication verifies HTTP and does not upload or switch versions.
+- Public source artifact access is proven with the central built-in `GITHUB_TOKEN`. Private source onboarding needs a separately scoped artifact-read credential; no per-app Cloudflare token is required.
+- ACB automatic publication remains disabled until owner-browser acceptance and its approved VPS/static-hosting cutover. `bootstrap` creates only unexposed static assets: no routes, public preview or backend/VPS state changes.
+- uptimeflare publishes `uptimeflare_worker` and `uptimeflare-web` as a checked pair. Existing every-minute Cron, exact RemoteChecker namespace and D1 database are read/verified, never migrated or restored. HTTP checks exercise both SHA markers, actual Next HTML/JS/CSS and D1-backed `/api/data`. Candidate failure restores only owned exact prior versions; deployment drift forbids overwrite. Legacy untagged recovery reports prior SHA as unverified.
+
+Manual operations run from this repository:
+
+```sh
+gh workflow run cloudflare-deploy.yml -R TheDemonTuan/vps-deploy -f app=uptimeflare -f mode=survey
+gh workflow run cloudflare-deploy.yml -R TheDemonTuan/vps-deploy -f app=uptimeflare -f mode=check
+gh workflow run cloudflare-deploy.yml -R TheDemonTuan/vps-deploy -f app=uptimeflare -f mode=publish -f source_run_id=<successful-source-run>
+gh workflow run cloudflare-deploy.yml -R TheDemonTuan/vps-deploy -f app=uptimeflare -f mode=rollback -f sha=<expected-source-sha> -f version_id=<web-uuid> -f monitor_version_id=<monitor-uuid>
+gh workflow run cloudflare-deploy.yml -R TheDemonTuan/vps-deploy -f app=acb -f mode=bootstrap -f source_run_id=<successful-source-run>
+```
+
+Receipts distinguish source validation, upload, active version and public checks; ACB Access redirect checks never claim an authenticated bank-browser SHA. Rollback requires exact registered Worker UUID(s) and matching expected SHA, not latest/list order. Backend rollback never reads or changes these frontend versions.
+

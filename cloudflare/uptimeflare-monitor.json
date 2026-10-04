@@ -1,0 +1,21 @@
+{
+  "name": "uptimeflare_worker",
+  "main": "entry.mjs",
+  "compatibility_date": "2025-04-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "no_bundle": true,
+  "find_additional_modules": true,
+  "preview_urls": false,
+  "keep_vars": true,
+  "rules": [
+    {"type": "ESModule", "globs": ["entry.mjs", "runtime/**/*.js", "runtime/**/*.mjs"], "fallthrough": false},
+    {"type": "CommonJS", "globs": ["runtime/**/*.cjs"], "fallthrough": false},
+    {"type": "CompiledWasm", "globs": ["runtime/**/*.wasm"], "fallthrough": false},
+    {"type": "Data", "globs": ["runtime/**/*.bin"], "fallthrough": false},
+    {"type": "Text", "globs": ["runtime/**/*.txt", "runtime/**/*.html", "runtime/**/*.json"], "fallthrough": false}
+  ],
+  "d1_databases": [{"binding": "UPTIMEFLARE_D1", "database_name": "uptimeflare_d1", "database_id": "431a0d2e-6413-4e80-9d27-1ee933f14f05"}],
+  "durable_objects": {"bindings": [{"name": "REMOTE_CHECKER_DO", "class_name": "RemoteChecker"}]},
+  "triggers": {"crons": ["* * * * *"]},
+  "observability": {"enabled": true, "logs": {"enabled": true, "invocation_logs": true}}
+}

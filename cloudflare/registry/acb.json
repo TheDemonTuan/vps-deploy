@@ -1,0 +1,12 @@
+{
+  "app": "acb",
+  "repository": "TheDemonTuan/acb-transaction-webhook",
+  "workflow": "deploy.yml",
+  "branch": "main",
+  "manual_branches": ["main", "migration/cloudflare-static-assets"],
+  "artifact_prefix": "frontend-dist-",
+  "automatic": false,
+  "zone_name": "tuannguyenviet.site",
+  "workers": ["acb-web"],
+  "frontend_paths": ["web/", ".github/workflows/", "scripts/verify.sh", "deploy/cloudflare-routes.py", "deploy/verify-frontend.py", "deploy/tests/test_cloudflare_routes.py"]
+}
