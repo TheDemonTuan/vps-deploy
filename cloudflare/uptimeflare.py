@@ -4,6 +4,8 @@
 Versions only: never changes routes, DNS, Cron, Durable Object migrations, or D1 data.
 """
 import argparse
+import base64
+from email.message import Message
 import hashlib
 from html.parser import HTMLParser
 import json
@@ -249,10 +251,10 @@ class Entries(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
-        if tag == "script" and values.get("src"):
-            self.assets.add((values["src"], "js"))
-        if tag == "link" and values.get("rel") == "stylesheet" and values.get("href"):
-            self.assets.add((values["href"], "css"))
+        if tag == 'script' and (values.get('src') or '').startswith('/_next/static/'):
+            self.assets.add((values['src'], 'js'))
+        if tag == 'link' and values.get('rel') == 'stylesheet' and (values.get('href') or '').startswith('/_next/static/'):
+            self.assets.add((values['href'], 'css'))
 
 
 def public_get(path):
@@ -270,14 +272,34 @@ def public_get(path):
         raise DeployError("Public readiness request failed") from None
 
 
+def browser_transport(web_sha, monitor_sha):
+    public_env = {name: value for name, value in os.environ.items()
+                  if not name.startswith(('CLOUDFLARE_', 'UPTIMEFLARE_')) and name not in (*SECRETS, 'GH_TOKEN', 'GITHUB_TOKEN')}
+    result = subprocess.run(['node', str(HERE / 'uptimeflare-http.mjs'), web_sha or '', monitor_sha or ''],
+                            env=public_env, capture_output=True, timeout=90, check=False)
+    if result.returncode:
+        raise DeployError('Actual Chromium public readiness failed; no HTTP fallback accepted')
+    responses = json.loads(result.stdout)
+    def get(path):
+        if path not in responses:
+            raise DeployError('Public browser did not observe a required readiness resource')
+        response = responses[path]
+        headers = Message()
+        for name, value in response['headers'].items():
+            headers[name] = value
+        return response['status'], headers, base64.b64decode(response['body'], validate=True)
+    return get
+
+
 def smoke(web_sha=None, monitor_sha=None):
+    get = browser_transport(web_sha, monitor_sha) if os.environ.get('UPTIMEFLARE_PUBLIC_TRANSPORT') == 'chromium' else public_get
     for path, sha in (("/__release", web_sha), ("/__monitor_release", monitor_sha)):
         if sha is None:
             continue
-        status, headers, body = public_get(path + "?smoke=" + sha)
+        status, headers, body = get(path + "?smoke=" + sha)
         if status != 200 or headers.get_content_type() != "text/plain" or body != (sha + "\n").encode() or "no-store" not in headers.get("Cache-Control", ""):
             raise DeployError("Public runtime release identity mismatch")
-    status, headers, body = public_get("/")
+    status, headers, body = get("/")
     if status != 200 or headers.get_content_type() != "text/html" or b"__NEXT_DATA__" not in body:
         raise DeployError("Public OpenNext HTML readiness failed")
     entries = Entries()
@@ -288,11 +310,11 @@ def smoke(web_sha=None, monitor_sha=None):
         url = urllib.parse.urlsplit(path)
         if url.scheme or url.netloc or not url.path.startswith("/_next/static/"):
             raise DeployError("Unexpected public OpenNext asset origin")
-        status, headers, body = public_get(path)
+        status, headers, body = get(path)
         mime = headers.get_content_type()
         if status != 200 or not body or (kind == "js" and mime not in {"text/javascript", "application/javascript"}) or (kind == "css" and mime != "text/css"):
             raise DeployError("Public OpenNext asset readiness failed")
-    status, headers, body = public_get("/api/data")
+    status, headers, body = get("/api/data")
     if status != 200 or headers.get_content_type() != "application/json":
         raise DeployError("Public D1-backed status API readiness failed")
     try:
