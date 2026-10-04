@@ -352,7 +352,7 @@ def without_edge_beacon(body):
         required = {"src", "integrity", "data-cf-beacon", "crossorigin"}
         if (len(pairs) != len(attrs) or not required <= attrs.keys() or
                 not attrs.keys() <= required | {"defer", "type"} or
-                not re.fullmatch(r"https://static\.cloudflareinsights\.com/beacon\.min\.js(?:/v[0-9a-f]{32})?", attrs["src"]) or
+                not re.fullmatch(r"https://static\.cloudflareinsights\.com/beacon\.min\.js(?:/v[0-9a-f]{32}(?:[0-9]{13})?)?", attrs["src"]) or
                 not re.fullmatch(r"sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}", attrs["integrity"]) or
                 attrs["crossorigin"] != "anonymous" or
                 attrs.get("type", "module") != "module" or
@@ -430,7 +430,7 @@ class Artifact:
                     beacon_guards.append({
                         'extra_attributes': extra,
                         'duplicate_attributes': len(pairs) != len(attrs),
-                        'src_allowed': bool(re.fullmatch(r'https://static\.cloudflareinsights\.com/beacon\.min\.js(?:/v[0-9a-f]{32})?', attrs['src'])),
+                        'src_allowed': bool(re.fullmatch(r'https://static\.cloudflareinsights\.com/beacon\.min\.js(?:/v[0-9a-f]{32}(?:[0-9]{13})?)?', attrs['src'])),
                         'integrity_allowed': bool(re.fullmatch(r'sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}', attrs.get('integrity', ''))),
                         'anonymous_crossorigin': attrs.get('crossorigin') == 'anonymous',
                         'data_present': bool(attrs.get('data-cf-beacon'))})
@@ -439,7 +439,8 @@ class Artifact:
                 f'actual_bytes={len(body)}; artifact_bytes={len(expected)}; '
                 f'beacon_removed={normalized != body}; '
                 f'whitespace_only={normalized.split() == expected.split()}; '
-                f'beacon_types={beacon_types}; beacon_guards={beacon_guards}')
+                f'beacon_types={beacon_types}; beacon_guards={beacon_guards}; '
+                f'cf_security_bootstrap={b"window.__CF$cv$params" in body and b"/cdn-cgi/challenge-platform/scripts/precursor/main.js" in body}')
 
 
 class Verifier:
