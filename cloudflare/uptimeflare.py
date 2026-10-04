@@ -278,7 +278,9 @@ def browser_transport(web_sha, monitor_sha):
     result = subprocess.run(['node', str(HERE / 'uptimeflare-http.mjs'), web_sha or '', monitor_sha or ''],
                             env=public_env, capture_output=True, timeout=90, check=False)
     if result.returncode:
-        raise DeployError('Actual Chromium public readiness failed; no HTTP fallback accepted')
+        failure = re.search(rb'failed at (launch|navigation|read-html|enumerate-resources|validate-resource|fetch-resources) \((HTTP_[0-9]{3}|[A-Z_]+|unclassified)\)', result.stderr)
+        reason = ' at ' + failure[1].decode() + ' (' + failure[2].decode() + ')' if failure else ''
+        raise DeployError('Actual Chromium public readiness failed' + reason + '; no HTTP fallback accepted')
     responses = json.loads(result.stdout)
     def get(path):
         if path not in responses:
