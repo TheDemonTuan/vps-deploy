@@ -425,3 +425,11 @@ gh workflow run cloudflare-deploy.yml -R TheDemonTuan/vps-deploy -f app=acb -f m
 
 Receipts distinguish source validation, upload, active version and public checks; ACB Access redirect checks never claim an authenticated bank-browser SHA. Rollback requires exact registered Worker UUID(s) and matching expected SHA, not latest/list order. Backend rollback never reads or changes these frontend versions.
 
+
+### Observed acceptance boundary (2026-10-04)
+
+- Central credential-free CI and real source artifact/digest/manifest validation passed. uptimeflare source PR #22 and platform PRs #2–#5 are merged. All eight old source secrets and obsolete source D1/migration variables were removed after central account/infrastructure reads proved the encrypted transfer usable; no live Worker secrets were removed. One-time migration workflows and sealed delivery artifact were removed.
+- Read-only central checks confirmed D1 `431a0d2e-6413-4e80-9d27-1ee933f14f05`, namespace `10db02d2c3874aa7b3db1d599cac207c`, every-minute Cron, monitoring version `fd7ce91a-10da-4b85-94ea-fb4e358942f2` and web version `d4eb9307-08ae-4dc1-9d9c-07787a13b9f7`. These legacy versions have no verified source-SHA tag.
+- Actual local Chromium HTML, compiled JS/CSS and D1-backed status API passed. Actual central runner Chromium check `37216355307` failed at public navigation with `HTTP_403`. Publication run `37215987679` refused before upload/traffic mutation at its baseline gate. The blocking security rule is not identified; no Cloudflare policy was changed and no response error was suppressed. Actual publish and live rollback remain unaccepted until this runner can pass the public surface.
+- ACB survey confirmed zone identity but Workers Routes GET returned HTTP 403. Bootstrap run `37214846472` validated its real static artifact and failed before upload. ACB PR #113 remains open: do not deploy the backend-only controller onto the current coupled VPS metadata before authorized hosting cutover, owner-browser acceptance and rollback proof.
+
