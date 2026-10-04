@@ -34,42 +34,24 @@ The production registration now enrolls CGW. Activate the expanded caller manife
 
 Before installer `--check`, provision the singleton runtime at the exact scanned digest, its internal/egress networks, read-only secret mounts, native sandbox seccomp, tmpfs and 1GB shm. Config files under the selected app config directory are `cgw-data-token`, `cgw-admin-token`, `cgw-client-keys.json`, `cgw-tunnel-profiles.json` (root-owned mode 0640, group 10001), plus `cgw.env` and `cgw-seccomp.json` (root-owned mode 0600). Data/admin tokens must differ. Existing `INITIAL_PASSWORD` remains required; normalize only the allowed runtime env names after a private operator backup, never log values. An empty operator client/tunnel inventory and no account are valid unconfigured state, not Full readiness. No public viewer/CDP or relaxed sandbox is permitted.
 
-The public runtime image is browserless. Official Google Chrome for Testing is downloaded directly from Google into a **private, root-owned, version-bound** host directory, never built from source, redistributed in an image, or stored in `cgw-data`. Before first enrollment or any runtime upgrade, provision the candidate's own manifest pin separately as root. Retain the old image's browser directory for rollback; never replace a shared mutable browser path. Example (review `CGW_IMAGE` as the exact scanned digest and select the installed config directory first):
+The public runtime image is browserless. Compose's `browser-init` service uses the **same image** to download the pinned official Google Chrome for Testing directly from Google, verifies its SHA256/provenance, and installs it into Docker-owned cache volume `9router-cgw-browser`. No Chrome or browser installer/Python is required on the host; the deployment engine's existing Python dependency is unchanged. Chrome is never compiled, included in the public OCI image/artifacts, or stored in the account volume. First boot needs only the reviewed digest and existing secret configuration:
 
 ```bash
 : "${CGW_IMAGE:?Export the exact reviewed and scanned runtime digest first}"
 export CGW_CONFIG_DIR=/etc/vps-deploy/apps/9router
-sudo --preserve-env=CGW_IMAGE,CGW_CONFIG_DIR bash <<'SH'
-set -euo pipefail
-umask 077
-docker pull "$CGW_IMAGE"
-private=$(mktemp -d)
-cid=$(docker create --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --entrypoint /bin/true "$CGW_IMAGE")
-trap 'docker rm "$cid" >/dev/null 2>&1 || true; rm -rf "$private"' EXIT
-docker cp "$cid:/opt/cgw/image-build-manifest.json" "$private/manifest.json"
-docker cp "$cid:/opt/cgw/scripts/install-browser.py" "$private/install-browser.py"
-install -d -m 0755 "$CGW_CONFIG_DIR/cgw-browsers"
-python3 - "$private" "$CGW_CONFIG_DIR" <<'PY'
-import json, platform, subprocess, sys
-from pathlib import Path
-private, config = map(Path, sys.argv[1:])
-arch = {'aarch64': 'arm64', 'x86_64': 'amd64'}[platform.machine()]
-pin = json.loads((private / 'manifest.json').read_text())['browser']['platforms'][arch]
-assert len(pin['sha256']) == 64 and all(c in '0123456789abcdef' for c in pin['sha256'])
-subprocess.run(['python3', str(private / 'install-browser.py'), '--manifest', str(private / 'manifest.json'),
-                '--arch', arch, '--output', str(config / 'cgw-browsers' / pin['sha256'])], check=True)
-print('CGW_BROWSER_DIR=' + str(config / 'cgw-browsers' / pin['sha256']))
-PY
-SH
+sudo --preserve-env=CGW_IMAGE,CGW_CONFIG_DIR docker compose -p 9router-cgw \
+  -f apps/9router/docker-compose.cgw-runtime.yml up -d --pull always cgw-runtime
 ```
 
-Set `CGW_BROWSER_DIR` to that printed archive-SHA directory for the first manual Compose `up`. Compose requires it and binds it read-only at `/opt/cgw-browser`, with `CGW_CHROMIUM_EXECUTABLE=/opt/cgw-browser/chrome`; a missing source cannot be auto-created. Installer preflight/adoption proves live bind identity and sandbox parity. Managed lifecycle resolves each candidate/retained image's manifest in its own account-free, network-disabled container, validates root ownership, non-writable/non-symlink paths, proof and every payload hash **before draining/stopping the old writer**, and supplies the matching bind to Compose. Missing, unsafe or mismatched bundles fail closed; deploy/reconcile never download a browser. Startup additionally validates the image-bound Chrome binary; exact-image smoke validates the complete bundle. These offline proofs do not assert login or Full readiness.
+Compose waits for successful browser initialization before starting the runtime. Init is non-root `10001:10001`, read-only root, no added capabilities, `no-new-privileges`, tmpfs `/tmp` and `/run`, limited to 0.5 CPU / 1GB RAM. It alone mounts the browser cache read-write and never mounts `/data` or credentials. Runtime mounts the cache read-only at `/opt/cgw-browser`, keeps `/data` in separate `9router-cgw-data`, and is limited to 1 CPU / 2GB RAM. The image owns its versioned executable env and manifest, currently `/opt/cgw-browser/154.0.8037.92/chrome`; Compose never overrides an older retained image's pin. Native Chrome sandbox policy is unchanged.
+
+For managed upgrades, the engine pulls the candidate and runs `docker compose run --rm --no-deps browser-init` **before draining or stopping the old runtime**. Init failure leaves the old writer serving. After the existing drain/quiesce/snapshot transaction, managed `up --no-deps` starts only the runtime, avoiding a repeated download. Retained immutable version directories remain available for rollback; recovery can initialize/verify a retained image's own pin through Docker before restarting it. Never delete the production cache with `down --volumes`, overwrite version directories, or mount a host browser directory. Installer preflight proves the canonical named read-only cache mount and the existing sandbox, network, secret, viewer and account-volume policy. Runtime startup still validates its image-bound browser proof. Offline proofs do not assert account login or Full readiness.
 
 For a verified old selected profile whose installed registration has no CGW (or a verified legacy 9router engine/profile without CGW network), first enrollment compares live gateway slots against canonical **base** Compose; it still requires the fully provisioned runtime, authenticated diagnostics, secret policy and native runtime parity. It does not restart the old live gateway to pretend new-overlay parity. Once enrolled, every later installer check requires full CGW overlay parity; a missing network/secret cannot use the transition. The next normal gateway deploy attaches the new overlay.
 
 During activation, under selected and legacy operation locks, first enrollment backs up the selected deployment state along with configuration. If state already exists, it proves current gateway identity/route and runtime digest, unfenced physical idle and strict runtime parity, then adopts only `cgw: {current: <digest>, previous: null}` and advances the state revision before final strict status. Active/previous gateway, route generation, private app data and receipts are preserved. Existing CGW state is never overwritten. Any later activation/key-install failure restores the exact backed-up state bytes and config. `--check` remains read-only; it does not adopt. Unknown pending work or fenced/busy runtime blocks adoption.
 
-The CGW release build uses native ARM64, fixed runtime Dockerfile and `APP_REVISION=source-sha`. It downloads the pinned official browser privately with the app installer and mounts it read-only for `verify-harness-compatibility.ts` and exact published-image smoke; only the actual generated protocol/upstream/boolean evidence is copied to `/opt/cgw/compatibility.json` in a label-preserving derivative. The published `sha-<source-sha>` final digest must pass the existing Trivy image gate, private-bundle secret/misconfig gate, and Grype `0.120.0` Chrome CPE HIGH/CRITICAL gate without ignore rules. `scripts/scan-private-browser.py` first requires actual HIGH/CRITICAL matches for a known-vulnerable Chrome version using the same SPDX package shape and database; missing CPE coverage, failed database refresh or scan errors fail closed. Trivy does not support this generic Chrome CPE: an empty Trivy SBOM/filesystem vulnerability report is not browser security evidence. Reports contain metadata only; Chrome payload, licenses, account and runtime state are never uploaded or included in public images. This establishes offline build compatibility only: real ChatGPT/Codex login, outbound connector readiness and per-profile Full smoke remain separate operator gates.
+The CGW release build uses native ARM64, fixed runtime Dockerfile and `APP_REVISION=source-sha`. It initializes an owned Docker cache with the candidate image and mounts it read-only for `verify-harness-compatibility.ts` and exact published-image smoke; only the actual generated protocol/upstream/boolean evidence is copied to `/opt/cgw/compatibility.json` in a label-preserving derivative. The published `sha-<source-sha>` final digest must pass the existing Trivy image gate and covered Grype `0.120.0` Chrome CPE HIGH/CRITICAL gate without ignore rules. `scripts/scan-browser.py` reads only SPDX metadata obtained through Docker and first requires actual HIGH/CRITICAL matches for a known-vulnerable Chrome version using the same package shape and database; missing CPE coverage or scanner/database failure blocks release. Chrome SPDX stays in the versioned cache at `<installRoot>/browser.spdx.json`. CI removes its owned cache volumes/containers; browser files are never mounted from host paths or uploaded as artifacts. Real-account staging remains separate.
 
 ## Image versus engine rollback
 

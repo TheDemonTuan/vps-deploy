@@ -71,7 +71,7 @@ def main(sbom_path, report_path):
         report_path.parent.mkdir(parents=True, exist_ok=True)
         result = scan(sbom_path, report_path, config, env)
         blocked = high_matches(result)
-        print(json.dumps({'gate': 'private-browser-vulnerabilities', 'scanner': 'grype-0.120.0',
+        print(json.dumps({'gate': 'browser-vulnerabilities', 'scanner': 'grype-0.120.0',
                           'version': package['versionInfo'], 'knownVulnerableChromeDetected': True,
                           'highCritical': len(blocked), 'matches': len(result['matches'])}))
         if blocked:

@@ -19,16 +19,20 @@ root=$(realpath "$(dirname "$0")/../..")
 for network in 9router-cgw 9router-cgw-egress; do
   ! docker network inspect "$network" >/dev/null 2>&1 || { echo "Occupied network: $network" >&2; exit 1; }
 done
-! docker volume inspect 9router-cgw-data >/dev/null 2>&1 || { echo 'Occupied runtime volume' >&2; exit 1; }
+for volume in 9router-cgw-data 9router-cgw-browser; do
+  ! docker volume inspect "$volume" >/dev/null 2>&1 || { echo "Occupied runtime volume: $volume" >&2; exit 1; }
+done
 work=$(mktemp -d /tmp/cgw-native-ci.XXXXXX)
 registry="cgw-ci-registry-${GITHUB_RUN_ID}-$$"
 probe="cgw-ci-systemd-${GITHUB_RUN_ID}-$$"
+cache="cgw-ci-browser-${GITHUB_RUN_ID}-$$"
 images=()
 cleanup() {
   set +e
   systemctl stop "$probe" >/dev/null 2>&1
   systemctl reset-failed "$probe" >/dev/null 2>&1
-  docker rm -f "$registry" >/dev/null 2>&1
+  docker rm -f "$registry" "${cache}-init" "${cache}-metadata" "${cache}-runtime" >/dev/null 2>&1
+  docker volume rm "$cache" >/dev/null 2>&1
   for image in "${images[@]}"; do docker image rm "$image" >/dev/null 2>&1; done
   rm -rf -- "$work"
 }
@@ -52,19 +56,31 @@ assert hashlib.sha256((p/'security/seccomp.json').read_bytes()).hexdigest() == m
 policy=json.loads((p/'security/seccomp.json').read_bytes())
 assert policy['defaultAction'] in ('SCMP_ACT_ERRNO','SCMP_ACT_KILL','SCMP_ACT_KILL_PROCESS')
 PY
-browser="$work/browser"
-python3 "$package/scripts/install-browser.py" --manifest "$package/image-build-manifest.json" \
-  --arch "$CGW_CI_ARCH" --output "$browser"
-bash "$root/scripts/install-grype.sh" /usr/local/bin
-python3 "$root/scripts/scan-private-browser.py" --sbom "$browser/browser.spdx.json" \
-  --report "$work/grype-browser.json"
 base="cgw-ci-base:${CGW_APP_REF}-${CGW_CI_ARCH}"
 images+=("$base")
 docker buildx build --builder default --load --platform "linux/$CGW_CI_ARCH" \
   --build-arg "APP_REVISION=$CGW_APP_REF" -f "$package/Dockerfile" -t "$base" "$app"
-hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
-  --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
-  --mount "type=bind,src=$browser,dst=/opt/cgw-browser,readonly"
+docker volume create "$cache"
+docker run --rm --read-only --user 10001:10001 --cap-drop ALL \
+  --name "${cache}-init" \
+  --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
+  --mount "type=volume,src=$cache,dst=/opt/cgw-browser" \
+  --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+  --tmpfs /run:rw,nosuid,nodev,mode=0700,uid=10001,gid=10001 \
+  "$base" python3 scripts/install-browser.py --manifest image-build-manifest.json
+# Read only generated metadata through Docker; Chrome never reaches host storage.
+docker run --rm --read-only --network none --user 10001:10001 --cap-drop ALL \
+  --name "${cache}-metadata" \
+  --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
+  --mount "type=volume,src=$cache,dst=/opt/cgw-browser,readonly" \
+  "$base" bun -e 'const fs=require("node:fs");const m=JSON.parse(fs.readFileSync("image-build-manifest.json","utf8"));process.stdout.write(fs.readFileSync(m.browser.installRoot+"/browser.spdx.json","utf8"))' \
+  > "$work/browser.spdx.json"
+bash "$root/scripts/install-grype.sh" /usr/local/bin
+python3 "$root/scripts/scan-browser.py" --sbom "$work/browser.spdx.json" --report "$work/grype-browser.json"
+hardening=(--rm --read-only --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true
+  --name "${cache}-runtime"
+  --cpus 1 --memory 2g --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
+  --mount "type=volume,src=$cache,dst=/opt/cgw-browser,readonly"
   --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
   --tmpfs /run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
   --tmpfs /data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700)

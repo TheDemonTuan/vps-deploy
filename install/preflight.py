@@ -123,24 +123,25 @@ def adopt_cgw(root, config, state_dir, profile):
 
 
 def runtime_parity(root, config, binding):
-    from cgw import NAME, REPOSITORY, VOLUME, Budget, browser_mount
+    from cgw import NAME, REPOSITORY, VOLUME, BROWSER_VOLUME, cache_mount
     live = container(NAME, running=True)
     ref = container_digest(live, REPOSITORY)
-    browser = browser_mount(live, config, ref, Budget())
+    cache_mount(live)
     env = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'CGW_CONFIG_DIR': str(config),
-           'CGW_IMAGE': ref, 'CGW_BROWSER_DIR': str(browser)}
+           'CGW_IMAGE': ref}
     result = subprocess.run(['/usr/bin/docker', 'compose', '-p', '9router-cgw', '-f',
         str(root / 'apps/9router/docker-compose.cgw-runtime.yml'), 'config', '--format', 'json'],
         env=env, capture_output=True, timeout=30)
     require(result.returncode == 0, 'CGW_COMPOSE_POLICY')
     composed = json.loads(result.stdout)
-    require(set(composed['services']) == {'cgw-runtime'}, 'CGW_COMPOSE_POLICY')
+    require(set(composed['services']) == {'browser-init', 'cgw-runtime'}, 'CGW_COMPOSE_POLICY')
     desired = composed['services']['cgw-runtime']
     host = live['HostConfig']
     require(live['Config'].get('User') == '10001:10001' and host.get('ReadonlyRootfs') is True and
             host.get('Init') is True and host.get('Privileged') is False and
             set(host.get('CapDrop') or []) == {'ALL'} and not host.get('CapAdd') and
             host.get('ShmSize') == 1073741824 and host.get('IpcMode') != 'host' and
+            host.get('NanoCpus') == 1000000000 and host.get('Memory') == 2147483648 and
             host.get('PidMode') != 'host' and host.get('NetworkMode') != 'host', 'CGW_SANDBOX_POLICY')
     security = host.get('SecurityOpt') or []
     require(any(row in ('no-new-privileges', 'no-new-privileges:true') for row in security) and
@@ -156,6 +157,7 @@ def runtime_parity(root, config, binding):
     wanted = {(m['target'], composed['volumes'][m['source']]['name'] if m['type'] == 'volume' else m['source'], m.get('read_only', False)) for m in desired.get('volumes', [])}
     actual = {(m['Destination'], m.get('Name') if m['Type'] == 'volume' else m['Source'], not m['RW']) for m in live['Mounts'] if m['Type'] in ('volume', 'bind')}
     require(wanted == actual and ('/data', VOLUME, False) in actual and
+            ('/opt/cgw-browser', BROWSER_VOLUME, True) in actual and
             not any(m['Destination'] == '/var/run/docker.sock' for m in live['Mounts']), 'CGW_VOLUME_POLICY')
     current = dict(row.split('=', 1) for row in live['Config']['Env'] if '=' in row)
     require(all(current.get(key) == str(value) for key, value in desired.get('environment', {}).items()), 'CGW_COMPOSE_PARITY')

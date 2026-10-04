@@ -215,30 +215,32 @@ jobs:
               "$IMAGE_REF"
             if [[ "$IMAGE_REF" == ghcr.io/thedemontuan/9router-cgw-runtime@sha256:* ]]; then
               [[ "$(uname -m)" == aarch64 ]]
-              # Resolve the browser pin from the exact image, not a mutable host
-              # directory or account state. Extract without executing the image.
-              private="$RUNNER_TEMP/cgw-browser-security"
-              mkdir -m 0700 "$private"
-              docker pull "${IMAGE_OPTS[@]}" "$IMAGE_REF"
-              extraction=$(docker create --network none --read-only --cap-drop ALL \
-                --security-opt no-new-privileges:true --entrypoint /bin/true "$IMAGE_REF")
-              trap 'docker rm "$extraction" >/dev/null 2>&1 || true' EXIT
-              docker cp "$extraction:/opt/cgw/image-build-manifest.json" "$private/manifest.json"
-              docker cp "$extraction:/opt/cgw/scripts/install-browser.py" "$private/install-browser.py"
-              docker rm "$extraction"
-              trap - EXIT
-              python3 "$private/install-browser.py" --manifest "$private/manifest.json" \
-                --arch arm64 --output "$private/browser"
-              # Metadata reports only are publishable; the Chrome archive,
-              # payload, and private fixture state stay on this disposable runner.
-              trivy fs --ignorefile /dev/null --scanners vuln,secret,misconfig \
-                --format json --output "$REPORT_DIR/trivy-browser-${APP}.json" "$private/browser"
-              trivy fs --ignorefile /dev/null --scanners secret,misconfig \
-                --severity HIGH,CRITICAL --exit-code 1 "$private/browser"
+              metadata="$RUNNER_TEMP/cgw-browser-security"
+              mkdir -m 0700 "$metadata"
+              cache="cgw-security-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              docker volume create "$cache"
+              trap 'docker rm -f "${cache}-init" "${cache}-metadata" >/dev/null 2>&1 || true; docker volume rm "$cache" >/dev/null 2>&1 || true' EXIT
+              docker pull "$IMAGE_REF"
+              docker run --rm --read-only --user 10001:10001 --cap-drop ALL \
+                --name "${cache}-init" \
+                --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
+                --mount "type=volume,src=$cache,dst=/opt/cgw-browser" \
+                --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+                --tmpfs /run:rw,nosuid,nodev,mode=0700,uid=10001,gid=10001 \
+                "$IMAGE_REF" python3 scripts/install-browser.py --manifest image-build-manifest.json
+              # Only SPDX metadata crosses Docker's cache boundary; no browser files on host.
+              docker run --rm --read-only --network none --user 10001:10001 --cap-drop ALL \
+                --name "${cache}-metadata" \
+                --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
+                --mount "type=volume,src=$cache,dst=/opt/cgw-browser,readonly" \
+                "$IMAGE_REF" bun -e 'const fs=require("node:fs");const m=JSON.parse(fs.readFileSync("image-build-manifest.json","utf8"));process.stdout.write(fs.readFileSync(m.browser.installRoot+"/browser.spdx.json","utf8"))' \
+                > "$metadata/browser.spdx.json"
               sudo bash "$GITHUB_WORKSPACE/platform/scripts/install-grype.sh" /usr/local/bin
-              python3 "$GITHUB_WORKSPACE/platform/scripts/scan-private-browser.py" \
-                --sbom "$private/browser/browser.spdx.json" \
+              python3 "$GITHUB_WORKSPACE/platform/scripts/scan-browser.py" \
+                --sbom "$metadata/browser.spdx.json" \
                 --report "$REPORT_DIR/grype-browser-${APP}.json"
+              docker volume rm "$cache"
+              trap - EXIT
             fi
             echo "::endgroup::"
           fi

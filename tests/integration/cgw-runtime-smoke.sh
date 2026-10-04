@@ -31,7 +31,9 @@ root=$(realpath "$(dirname "$0")/../..")
 for network in 9router-cgw 9router-cgw-egress; do
   if docker network inspect "$network" >/dev/null 2>&1; then exit 1; fi
 done
-if docker volume inspect 9router-cgw-data >/dev/null 2>&1; then exit 1; fi
+for volume in 9router-cgw-data 9router-cgw-browser; do
+  if docker volume inspect "$volume" >/dev/null 2>&1; then exit 1; fi
+done
 mkdir -p /etc/vps-deploy
 printf 'disposable cgw fixture\n' > /etc/vps-deploy/fixture-ci
 chmod 600 /etc/vps-deploy/fixture-ci
@@ -42,9 +44,12 @@ config=$work/config
 export CGW_CONFIG_DIR=$config
 export CGW_IMAGE=$CGW_SMOKE_OLD_IMAGE
 units=()
+smoke="cgw-lifecycle-smoke-$$"
 cleanup() {
   set +e
   for unit in "${units[@]}"; do systemctl stop "$unit" >/dev/null 2>&1; systemctl reset-failed "$unit" >/dev/null 2>&1; done
+  docker rm -f "$smoke" >/dev/null 2>&1
+  docker ps -aq --filter label=com.docker.compose.project=9router-cgw | xargs -r docker rm -f >/dev/null 2>&1
   docker compose -p 9router-cgw -f "$root/apps/9router/docker-compose.cgw-runtime.yml" down --volumes || true
   rm -f /etc/vps-deploy/fixture-ci
   rm -rf "$work"
@@ -82,17 +87,17 @@ PY
 # No public publication or production registry/profile changes in this fixture.
 docker pull "$CGW_SMOKE_OLD_IMAGE"
 docker pull "$CGW_SMOKE_NEW_IMAGE"
-export CGW_BROWSER_DIR
-CGW_BROWSER_DIR=$(python3 "$root/tests/integration/cgw-runtime-driver.py" browser --directory "$work" --image "$CGW_SMOKE_OLD_IMAGE")
-python3 "$root/tests/integration/cgw-runtime-driver.py" browser --directory "$work" --image "$CGW_SMOKE_NEW_IMAGE"
+# First boot exercises Compose's successful-init dependency; candidate preparation
+# is exercised by the real managed deployment below, before any admission drain.
 docker compose -p 9router-cgw -f "$root/apps/9router/docker-compose.cgw-runtime.yml" up -d --pull never cgw-runtime
 python3 "$root/tests/integration/cgw-runtime-driver.py" adopt --directory "$work" --image "$CGW_SMOKE_OLD_IMAGE"
 # Private browser/MCP/HTTP fixture runs in separate isolated containers by CI,
 # never concurrently with the runtime's /data writer here.
 if [[ ${CGW_CI_LOOPBACK:-} != 1 ]]; then
-  hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
-    --security-opt "seccomp=$CGW_SMOKE_SECCOMP_FILE" --shm-size 1g
-    --mount "type=bind,src=$CGW_BROWSER_DIR,dst=/opt/cgw-browser,readonly"
+  hardening=(--rm --read-only --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true
+    --name "$smoke"
+    --cpus 1 --memory 2g --security-opt "seccomp=$CGW_SMOKE_SECCOMP_FILE" --shm-size 1g
+    --mount type=volume,src=9router-cgw-browser,dst=/opt/cgw-browser,readonly
     --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
     --tmpfs /run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
     --tmpfs /data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700)

@@ -128,14 +128,6 @@ jobs:
           cache-to: type=gha,mode=min,ignore-error=true
           provenance: false
           sbom: false
-      - name: Fetch pinned official browser privately
-        if: inputs.component == 'cgw'
-        run: |
-          set -euo pipefail
-          [[ "$(uname -m)" == aarch64 ]]
-          package="$GITHUB_WORKSPACE/source/services/chatgpt-web-runtime"
-          python3 "$package/scripts/install-browser.py" --manifest "$package/image-build-manifest.json" \
-            --arch arm64 --output "$RUNNER_TEMP/cgw-browser"
       - name: Build native runtime for compatibility proof
         if: inputs.component == 'cgw'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -162,13 +154,24 @@ jobs:
           evidence="$RUNNER_TEMP/cgw-build-evidence"
           mkdir -m 0700 "$evidence"
           sudo chown 10001:10001 "$evidence"
-          hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
-            --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
-            --mount "type=bind,src=$RUNNER_TEMP/cgw-browser,dst=/opt/cgw-browser,readonly"
+          cache="cgw-build-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "CGW_BROWSER_VOLUME=$cache" >> "$GITHUB_ENV"
+          docker volume create "$cache"
+          raw="cgw-runtime:proof-$SOURCE_SHA"
+          docker run --rm --read-only --user 10001:10001 --cap-drop ALL \
+            --name "${cache}-init" \
+            --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
+            --mount "type=volume,src=$cache,dst=/opt/cgw-browser" \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --tmpfs /run:rw,nosuid,nodev,mode=0700,uid=10001,gid=10001 \
+            "$raw" python3 scripts/install-browser.py --manifest image-build-manifest.json
+          hardening=(--rm --read-only --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true
+            --name "${cache}-runtime"
+            --cpus 1 --memory 2g --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
+            --mount "type=volume,src=$cache,dst=/opt/cgw-browser,readonly"
             --tmpfs "/tmp:rw,nosuid,nodev,size=512m,mode=1777"
             --tmpfs "/run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700"
             --tmpfs "/data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700")
-          raw="cgw-runtime:proof-$SOURCE_SHA"
           docker run "${hardening[@]}" -v "$evidence:/evidence:rw" "$raw" \
             bun scripts/verify-harness-compatibility.ts /evidence/compatibility.json
           # Only generated build evidence enters the final layer; no runtime/account state.
@@ -207,9 +210,17 @@ jobs:
             bash .deploy/smoke-image.sh "$IMAGE_REF"
           else
             package="$GITHUB_WORKSPACE/source/services/chatgpt-web-runtime"
-            hardening=(--rm --read-only --network none --cap-drop ALL --security-opt no-new-privileges:true
-              --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
-              --mount "type=bind,src=$RUNNER_TEMP/cgw-browser,dst=/opt/cgw-browser,readonly"
+            docker run --rm --read-only --user 10001:10001 --cap-drop ALL \
+              --name "${CGW_BROWSER_VOLUME}-init" \
+              --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
+              --mount "type=volume,src=$CGW_BROWSER_VOLUME,dst=/opt/cgw-browser" \
+              --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+              --tmpfs /run:rw,nosuid,nodev,mode=0700,uid=10001,gid=10001 \
+              "$IMAGE_REF" python3 scripts/install-browser.py --manifest image-build-manifest.json
+            hardening=(--rm --read-only --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true
+              --name "${CGW_BROWSER_VOLUME}-runtime"
+              --cpus 1 --memory 2g --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
+              --mount "type=volume,src=$CGW_BROWSER_VOLUME,dst=/opt/cgw-browser,readonly"
               --tmpfs "/tmp:rw,nosuid,nodev,size=512m,mode=1777"
               --tmpfs "/run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700"
               --tmpfs "/data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700")
@@ -217,3 +228,10 @@ jobs:
             docker run "${hardening[@]}" "$IMAGE_REF" bun scripts/smoke-offline.ts
           fi
           echo "image-ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+      - name: Remove owned browser cache
+        if: always() && inputs.component == 'cgw'
+        run: |
+          if [[ -n "${CGW_BROWSER_VOLUME:-}" ]]; then
+            docker rm -f "${CGW_BROWSER_VOLUME}-init" "${CGW_BROWSER_VOLUME}-runtime" >/dev/null 2>&1 || true
+            docker volume rm "$CGW_BROWSER_VOLUME"
+          fi

@@ -195,5 +195,68 @@ class RuntimeAdoption(unittest.TestCase):
         self.assertEqual((cfg / 'app.yml').read_bytes(), b'old-manifest')
 
 
+class RuntimePolicy(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = Path(self.tmp.name)
+        (self.config / 'cgw-seccomp.json').write_text(json.dumps({
+            'defaultAction': 'SCMP_ACT_ERRNO',
+            'syscalls': [{'action': 'SCMP_ACT_ALLOW', 'names': ['clone', 'setns', 'unshare']}]}))
+        self.composed = {
+            'services': {'browser-init': {}, 'cgw-runtime': {
+                'environment': {'CGW_DATA_DIR': '/data'},
+                'volumes': [{'type': 'volume', 'source': 'cgw-data', 'target': '/data'},
+                            {'type': 'volume', 'source': 'cgw-browser', 'target': '/opt/cgw-browser',
+                             'read_only': True}]}},
+            'volumes': {'cgw-data': {'name': '9router-cgw-data'},
+                        'cgw-browser': {'name': '9router-cgw-browser'}}}
+        self.live = {
+            'Config': {'User': '10001:10001', 'Env': ['CGW_DATA_DIR=/data']},
+            'HostConfig': {'ReadonlyRootfs': True, 'Init': True, 'Privileged': False,
+                           'CapDrop': ['ALL'], 'CapAdd': [], 'ShmSize': 1073741824,
+                           'NanoCpus': 1000000000, 'Memory': 2147483648,
+                           'IpcMode': 'private', 'PidMode': '', 'NetworkMode': '9router-cgw',
+                           'SecurityOpt': ['no-new-privileges:true', 'seccomp=fixture'],
+                           'Tmpfs': {'/tmp': '', '/run': ''},
+                           'PortBindings': {'5900/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '17842'}]}},
+            'NetworkSettings': {'Networks': {'9router-cgw': {}, '9router-cgw-egress': {}}},
+            'Mounts': [{'Type': 'volume', 'Name': '9router-cgw-data', 'Destination': '/data', 'RW': True},
+                       {'Type': 'volume', 'Name': '9router-cgw-browser', 'Destination': '/opt/cgw-browser',
+                        'RW': False}]}
+
+    def parity(self):
+        with mock.patch('preflight.container', return_value=self.live), \
+             mock.patch('preflight.container_digest', return_value=IMAGE), \
+             mock.patch('preflight.subprocess.run', return_value=SimpleNamespace(
+                 returncode=0, stdout=json.dumps(self.composed).encode())):
+            return preflight.runtime_parity(ROOT, self.config, {})
+
+    def test_named_cache_and_separate_account_volume_adopt(self):
+        self.assertEqual(self.parity(), self.composed)
+
+    def test_writable_anonymous_or_host_browser_cache_denies_adoption(self):
+        original = copy.deepcopy(self.live['Mounts'][1])
+        for mutation in ({'RW': True}, {'Name': 'other'}, {'Type': 'bind', 'Source': '/host/browser'}):
+            with self.subTest(mutation=mutation):
+                self.live['Mounts'][1] = dict(original, **mutation)
+                with self.assertRaisesRegex(Failure, 'CGW_BROWSER_MOUNT'):
+                    self.parity()
+
+    def test_sandbox_or_cpu_memory_limits_cannot_be_relaxed(self):
+        original = copy.deepcopy(self.live['HostConfig'])
+        for mutation in ({'NanoCpus': 0}, {'Memory': 0}, {'Privileged': True}, {'ReadonlyRootfs': False},
+                         {'CapAdd': ['SYS_ADMIN']}, {'SecurityOpt': ['no-new-privileges:true', 'seccomp=unconfined']}):
+            with self.subTest(mutation=mutation):
+                self.live['HostConfig'] = dict(original, **mutation)
+                with self.assertRaisesRegex(Failure, 'CGW_SANDBOX_POLICY'):
+                    self.parity()
+
+    def test_viewer_never_binds_publicly(self):
+        self.live['HostConfig']['PortBindings']['5900/tcp'][0]['HostIp'] = '0.0.0.0'
+        with self.assertRaisesRegex(Failure, 'CGW_VIEWER_POLICY'):
+            self.parity()
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,21 @@
 name: 9router-cgw
 services:
+  browser-init:
+    image: ${CGW_IMAGE:?Digest-only runtime image required}
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    cpus: 0.5
+    mem_limit: 1g
+    command: ["python3", "scripts/install-browser.py", "--manifest", "image-build-manifest.json"]
+    volumes:
+      - cgw-browser:/opt/cgw-browser
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
+      - /run:rw,nosuid,nodev,mode=0700,uid=10001,gid=10001
+    networks: [egress]
   cgw-runtime:
     image: ${CGW_IMAGE:?Digest-only runtime image required}
     container_name: 9router-cgw-runtime
@@ -7,6 +23,11 @@ services:
     user: "10001:10001"
     restart: unless-stopped
     read_only: true
+    cpus: 1.0
+    mem_limit: 2g
+    depends_on:
+      browser-init:
+        condition: service_completed_successfully
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
@@ -19,18 +40,12 @@ services:
       CGW_PORT: "17841"
       CGW_RUNTIME_TOKEN_FILE: /run/secrets/cgw-data-token
       CGW_ADMIN_TOKEN_FILE: /run/secrets/cgw-admin-token
-      CGW_CHROMIUM_EXECUTABLE: /opt/cgw-browser/chrome
       CGW_TUNNEL_PROFILES_FILE: /run/secrets/cgw-tunnel-profiles.json
     ports:
       - "127.0.0.1:17842:5900"
     volumes:
       - cgw-data:/data
-      - type: bind
-        source: ${CGW_BROWSER_DIR:?Verified private pinned browser directory required}
-        target: /opt/cgw-browser
-        read_only: true
-        bind:
-          create_host_path: false
+      - cgw-browser:/opt/cgw-browser:ro
       - ${CGW_CONFIG_DIR}/cgw-data-token:/run/secrets/cgw-data-token:ro
       - ${CGW_CONFIG_DIR}/cgw-admin-token:/run/secrets/cgw-admin-token:ro
       - ${CGW_CONFIG_DIR}/cgw-tunnel-profiles.json:/run/secrets/cgw-tunnel-profiles.json:ro
@@ -50,3 +65,5 @@ networks:
 volumes:
   cgw-data:
     name: 9router-cgw-data
+  cgw-browser:
+    name: 9router-cgw-browser
