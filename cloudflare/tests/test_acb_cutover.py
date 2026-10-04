@@ -173,6 +173,7 @@ class EdgeReadinessTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.evidence = Path(self.temporary.name) / 'readiness.json'
         self.count = 0
+        self.unready_at = {1, 2}
         self.stale = False
         self.cacheable = False
         owner = self
@@ -180,7 +181,7 @@ class EdgeReadinessTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 owner.count += 1
-                converged = owner.count > 2 or owner.stale or owner.cacheable
+                converged = owner.count not in owner.unready_at or owner.stale or owner.cacheable
                 body = ((OLD if owner.stale else SHA) + '\n').encode() if converged else b'<html>CrowdSec Challenge</html>'
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain' if converged else 'text/html')
@@ -206,9 +207,17 @@ class EdgeReadinessTests(unittest.TestCase):
     def test_control_plane_success_waits_for_actual_release_not_html_challenge(self):
         with patch.object(controller.time, 'sleep'):
             result = controller.wait_static_release(self.origin, SHA, self.evidence)
-        self.assertEqual(self.count, 3)
+        self.assertEqual(self.count, 5)
         self.assertTrue(result['ready'])
-        self.assertEqual([item['mime'] for item in result['observations']], ['text/html', 'text/html', 'text/plain'])
+        self.assertEqual([item['mime'] for item in result['observations']], ['text/html', 'text/html', 'text/plain', 'text/plain', 'text/plain'])
+
+    def test_origin_challenge_after_correct_identity_resets_convergence(self):
+        self.unready_at = {1, 2, 4}
+        with patch.object(controller.time, 'sleep'):
+            result = controller.wait_static_release(self.origin, SHA, self.evidence)
+        self.assertTrue(result['ready'])
+        self.assertEqual([item['mime'] for item in result['observations']],
+                         ['text/html', 'text/html', 'text/plain', 'text/html', 'text/plain', 'text/plain', 'text/plain'])
 
     def test_stale_release_or_cacheable_identity_never_passes_at_deadline(self):
         for kind in ('stale', 'cacheable'):

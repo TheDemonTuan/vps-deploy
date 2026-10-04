@@ -315,6 +315,7 @@ def wait_static_release(origin, sha, evidence, timeout=45):
     spec.loader.exec_module(verifier)
     deadline = time.monotonic() + timeout
     observations = []
+    consecutive = 0
     while True:
         ready = False
         try:
@@ -328,9 +329,10 @@ def wait_static_release(origin, sha, evidence, timeout=45):
         except verifier.VerificationError:
             observation = {'transport': 'unavailable'}
         observations.append(observation)
-        result = {'expected_sha': sha, 'ready': ready, 'observations': observations}
+        consecutive = consecutive + 1 if ready else 0
+        result = {'expected_sha': sha, 'ready': consecutive >= 3, 'observations': observations}
         save(evidence, result)
-        if ready:
+        if result['ready']:
             return result
         remaining = deadline - time.monotonic()
         if remaining <= 0:
