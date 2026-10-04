@@ -117,13 +117,23 @@ class FrontendTests(unittest.TestCase):
         self.run_static("viewer")
         self.assertFalse(any(path.startswith("/admin") for path, _ in self.requests))
 
-    def test_edge_beacon_preserves_exact_application_html_and_assets(self):
-        def mutation(path, status, headers, body):
+    def test_timestamped_beacon_does_not_hide_application_tampering(self):
+        beacon = BEACON.replace(b'a' * 32 + b'"', b'a' * 32 + b'1788362987495"')
+        def inject(path, status, headers, body):
             if headers.get("Content-Type", "").startswith("text/html"):
-                body = body.replace(b"</body>", BEACON + b"</body>")
+                body = body.replace(b"</body>", beacon + b"</body>")
             return status, headers, body
-        self.mutate = mutation
-        self.assertIn("edge analytics excluded from HTML comparison", self.run_static("viewer"))
+        self.mutate = inject
+        args = ["--origin", self.origin, "--sha", SHA, "--mode", "static", "--surface", "viewer", "--artifact", str(self.artifact)]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(verify.main(args), 0)
+            def tamper(path, status, headers, body):
+                status, headers, body = inject(path, status, headers, body)
+                if path == "/":
+                    body = body.replace(b'id="root"', b'id="root" data-tampered="true"')
+                return status, headers, body
+            self.mutate = tamper
+            self.assertEqual(verify.main(args), 1)
 
     def test_beacon_cannot_hide_changed_application_html_or_script_bytes(self):
         for target in ("/", "/assets/index-abcdefgh.js"):
