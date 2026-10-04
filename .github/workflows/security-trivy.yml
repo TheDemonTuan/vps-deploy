@@ -233,7 +233,7 @@ jobs:
                 --name "${cache}-metadata" \
                 --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
                 --mount "type=volume,src=$cache,dst=/opt/cgw-browser,readonly" \
-                "$IMAGE_REF" bun -e 'const fs=require("node:fs");const m=JSON.parse(fs.readFileSync("image-build-manifest.json","utf8"));process.stdout.write(fs.readFileSync(m.browser.installRoot+"/browser.spdx.json","utf8"))' \
+                --entrypoint bun "$IMAGE_REF" -e 'const fs=require("node:fs");const m=JSON.parse(fs.readFileSync("image-build-manifest.json","utf8"));process.stdout.write(fs.readFileSync(m.browser.installRoot+"/browser.spdx.json","utf8"))' \
                 > "$metadata/browser.spdx.json"
               sudo bash "$GITHUB_WORKSPACE/platform/scripts/install-grype.sh" /usr/local/bin
               python3 "$GITHUB_WORKSPACE/platform/scripts/scan-browser.py" \

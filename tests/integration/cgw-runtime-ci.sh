@@ -73,7 +73,7 @@ docker run --rm --read-only --network none --user 10001:10001 --cap-drop ALL \
   --name "${cache}-metadata" \
   --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
   --mount "type=volume,src=$cache,dst=/opt/cgw-browser,readonly" \
-  "$base" bun -e 'const fs=require("node:fs");const m=JSON.parse(fs.readFileSync("image-build-manifest.json","utf8"));process.stdout.write(fs.readFileSync(m.browser.installRoot+"/browser.spdx.json","utf8"))' \
+  --entrypoint bun "$base" -e 'const fs=require("node:fs");const m=JSON.parse(fs.readFileSync("image-build-manifest.json","utf8"));process.stdout.write(fs.readFileSync(m.browser.installRoot+"/browser.spdx.json","utf8"))' \
   > "$work/browser.spdx.json"
 bash "$root/scripts/install-grype.sh" /usr/local/bin
 python3 "$root/scripts/scan-browser.py" --sbom "$work/browser.spdx.json" --report "$work/grype-browser.json"
