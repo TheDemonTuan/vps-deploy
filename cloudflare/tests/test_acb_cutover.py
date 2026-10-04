@@ -2,9 +2,11 @@ import hashlib
 import importlib.util
 import io
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -117,6 +119,7 @@ class CutoverTests(unittest.TestCase):
     def execute(self):
         with patch.object(controller, 'account_zone', return_value=ZONE), \
                 patch.object(controller, 'resolve', return_value=self.selection), \
+                patch.object(controller, 'wait_static_release', return_value={'ready': True}), \
                 patch.object(controller.subprocess, 'run', side_effect=self.run_command):
             controller.execute(self.api, self.config, self.selection, self.summary)
 
@@ -162,6 +165,57 @@ class CutoverTests(unittest.TestCase):
             self.execute()
         self.assertEqual(self.routes, {'bank': False, 'viewer': True})
         self.assertEqual(self.active_sha, OLD)
+
+
+class EdgeReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.evidence = Path(self.temporary.name) / 'readiness.json'
+        self.count = 0
+        self.stale = False
+        self.cacheable = False
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                owner.count += 1
+                converged = owner.count > 2 or owner.stale or owner.cacheable
+                body = ((OLD if owner.stale else SHA) + '\n').encode() if converged else b'<html>CrowdSec Challenge</html>'
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain' if converged else 'text/html')
+                self.send_header('Cache-Control', 'public' if owner.cacheable else 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.close)
+        self.origin = 'http://127.0.0.1:' + str(self.server.server_port)
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+    def test_control_plane_success_waits_for_actual_release_not_html_challenge(self):
+        with patch.object(controller.time, 'sleep'):
+            result = controller.wait_static_release(self.origin, SHA, self.evidence)
+        self.assertEqual(self.count, 3)
+        self.assertTrue(result['ready'])
+        self.assertEqual([item['mime'] for item in result['observations']], ['text/html', 'text/html', 'text/plain'])
+
+    def test_stale_release_or_cacheable_identity_never_passes_at_deadline(self):
+        for kind in ('stale', 'cacheable'):
+            self.stale, self.cacheable = kind == 'stale', kind == 'cacheable'
+            with self.subTest(kind=kind), self.assertRaises(controller.Failure):
+                controller.wait_static_release(self.origin, SHA, self.evidence, timeout=0)
+            self.assertFalse(json.loads(self.evidence.read_text())['ready'])
 
 
 class RouteRecoveryTests(unittest.TestCase):

@@ -155,6 +155,7 @@ jobs:
           name: cloudflare-receipt-${{ matrix.app }}-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/receipt.json
+            ${{ runner.temp }}/readiness.json
             ${{ runner.temp }}/*routes.json
           retention-days: 30
           if-no-files-found: warn
