@@ -418,17 +418,28 @@ class Artifact:
             if path == '/index.html':
                 parser.feed(body.decode('utf-8', errors='replace'))
             beacon_types = []
+            beacon_guards = []
             for pairs in parser.attributes:
                 attrs = dict(pairs)
                 if attrs.get('src', '').startswith('https://static.cloudflareinsights.com/beacon.min.js'):
                     kind = attrs.get('type', 'missing')
                     beacon_types.append(kind if kind in {'missing', 'module', 'text/javascript', 'application/javascript'} else 'other')
+                    known = {'src', 'integrity', 'data-cf-beacon', 'crossorigin', 'defer', 'type'}
+                    extra = sorted(name if name in {'async', 'nonce', 'referrerpolicy', 'data-cfasync', 'data-cf-settings'} else 'other'
+                                   for name in attrs.keys() - known)
+                    beacon_guards.append({
+                        'extra_attributes': extra,
+                        'duplicate_attributes': len(pairs) != len(attrs),
+                        'src_allowed': bool(re.fullmatch(r'https://static\.cloudflareinsights\.com/beacon\.min\.js(?:/v[0-9a-f]{32})?', attrs['src'])),
+                        'integrity_allowed': bool(re.fullmatch(r'sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}', attrs.get('integrity', ''))),
+                        'anonymous_crossorigin': attrs.get('crossorigin') == 'anonymous',
+                        'data_present': bool(attrs.get('data-cf-beacon'))})
             raise VerificationError(
                 f'decoded response checksum does not match artifact: path={path}; '
                 f'actual_bytes={len(body)}; artifact_bytes={len(expected)}; '
                 f'beacon_removed={normalized != body}; '
                 f'whitespace_only={normalized.split() == expected.split()}; '
-                f'beacon_types={beacon_types}')
+                f'beacon_types={beacon_types}; beacon_guards={beacon_guards}')
 
 
 class Verifier:
