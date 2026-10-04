@@ -13,7 +13,6 @@ import sys
 import tempfile
 import urllib.error
 import urllib.parse
-from datetime import datetime, timezone
 import urllib.request
 import zipfile
 
@@ -130,9 +129,37 @@ def artifacts(api, config, run):
     return item
 
 
+def resolve_route_restore(api, config, run_id):
+    if config['app'] != 'acb' or type(run_id) is not int or run_id <= 0:
+        raise Failure('Route restoration requires ACB and an explicit central cutover run ID')
+    repository = 'TheDemonTuan/vps-deploy'
+    prefix = '/repos/' + repository
+    run = api.get(prefix + '/actions/runs/' + str(run_id))
+    workflow = api.get(prefix + '/actions/workflows/' + str(run.get('workflow_id', '')))
+    if (run.get('status') != 'completed' or run.get('event') != 'workflow_dispatch' or
+            run.get('head_branch') != 'main' or run.get('head_repository', {}).get('full_name') != repository or
+            workflow.get('path') != '.github/workflows/cloudflare-deploy.yml' or
+            not SHA.fullmatch(run.get('head_sha', ''))):
+        raise Failure('Route snapshots must come from a completed central main-branch dispatch')
+    data = api.get(prefix + '/actions/runs/' + str(run_id) + '/artifacts?per_page=100')
+    if data.get('total_count', 0) > 100 or not isinstance(data.get('artifacts'), list):
+        raise Failure('Incomplete central receipt artifact list')
+    matches = [item for item in data['artifacts'] if item.get('name') == 'cloudflare-receipt-acb-' + str(run_id) and item.get('expired') is False]
+    if len(matches) != 1:
+        raise Failure('Exactly one unexpired central ACB receipt artifact is required')
+    item = matches[0]
+    if (item.get('workflow_run', {}).get('head_sha') != run['head_sha'] or
+            not re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('digest', ''))):
+        raise Failure('Central receipt artifact identity or digest is missing')
+    return {'app': 'acb', 'mode': 'restore-routes', 'sha': run['head_sha'], 'run_id': run_id,
+            'artifact_id': item['id'], 'archive_digest': item['digest']}
+
+
 def resolve(api, config, mode, source_run_id=None, sha=None):
-    if mode == 'bootstrap' and config['app'] != 'acb':
-        raise Failure('Uptimeflare already exists; bootstrap is reserved for unexposed ACB static assets')
+    if mode == 'restore-routes':
+        return resolve_route_restore(api, config, source_run_id)
+    if mode in ('bootstrap', 'cutover') and config['app'] != 'acb':
+        raise Failure('Bootstrap and cutover are reserved for unexposed ACB static assets')
     if mode in ('survey', 'check'):
         return {'app': config['app'], 'mode': mode, 'sha': '', 'run_id': 0}
     if mode == 'rollback':
@@ -297,6 +324,30 @@ def execute(api, config, selection, summary, version_id=None, monitor_version_id
     with tempfile.TemporaryDirectory(prefix='cloudflare-release-') as temporary:
         staging = Path(temporary)
         digest = None
+        if mode == 'restore-routes':
+            if resolve_route_restore(api, config, selection['run_id']) != selection:
+                raise Failure('Central route snapshot artifact changed after the production gate')
+            raw = api.get('/repos/TheDemonTuan/vps-deploy/actions/artifacts/' + str(selection['artifact_id']) + '/zip', binary=True)
+            extract(raw, staging, selection['archive_digest'])
+            snapshots = []
+            for host, hostname in (('bank', 'bank.tuannguyenviet.site'), ('viewer', 'transactions.tuannguyenviet.site')):
+                path = staging / (host + '-routes.json')
+                snapshot = json.loads(path.read_text())
+                if snapshot.get('host') != hostname or snapshot.get('zone_id') != env['CLOUDFLARE_ZONE_ID'] or snapshot.get('schema') != 1:
+                    raise Failure('Central route snapshot host, schema or zone mismatch')
+                output = summary.parent / path.name
+                save(output, snapshot)
+                snapshots.append(output)
+            restored = []
+            for snapshot in snapshots:
+                result = subprocess.run([sys.executable, str(ROOT / 'acb/cloudflare-routes.py'), 'restore', '--snapshot', str(snapshot)], cwd=staging, env=env, check=False)
+                restored.append({'snapshot': snapshot.name, 'restored': result.returncode == 0})
+                save(summary, {'app': 'acb', 'mode': mode, 'status': 'restored' if all(item['restored'] for item in restored) else 'failed',
+                               'snapshot_run_id': selection['run_id'], 'source_archive_digest': selection['archive_digest'],
+                               'route_restoration': restored, 'worker_version_changed': False, 'vps_metadata_changed': False})
+                if result.returncode:
+                    raise Failure('Route snapshot restoration refused; live drift is not overwritten')
+            return
         if mode in ('publish', 'bootstrap', 'cutover'):
             # Resolve again immediately before consuming bytes; reject failed reruns, stale heads and drift.
             checked = resolve(api, config, mode, selection['run_id'])
@@ -310,28 +361,42 @@ def execute(api, config, selection, summary, version_id=None, monitor_version_id
         if mode == 'check' and config['app'] == 'acb':
             command = [sys.executable, str(ROOT / 'acb/cloudflare-routes.py'), 'check']
         elif mode == 'cutover' and config['app'] == 'acb':
-            snapshot_dir = summary.parent
-            viewer_snapshot = snapshot_dir / 'viewer-routes.json'
-            bank_snapshot = snapshot_dir / 'bank-routes.json'
+            snapshots = [summary.parent / (host + '-routes.json') for host in ('viewer', 'bank')]
             routes_bin = str(ROOT / 'acb/cloudflare-routes.py')
             verify_bin = str(ROOT / 'acb/verify-frontend.py')
-            subprocess.run([sys.executable, routes_bin, 'apply', '--host', 'viewer', '--snapshot', str(viewer_snapshot)], cwd=staging, env=env, check=True)
-            subprocess.run([sys.executable, routes_bin, 'apply', '--host', 'bank', '--snapshot', str(bank_snapshot)], cwd=staging, env=env, check=True)
-            subprocess.run([sys.executable, routes_bin, 'check'], cwd=staging, env=env, check=True)
-            subprocess.run([sys.executable, verify_bin, '--origin', 'https://transactions.tuannguyenviet.site', '--sha', sha, '--mode', 'static', '--surface', 'viewer', '--artifact', str(artifact / 'dist')], cwd=staging, env=env, check=True)
-            subprocess.run([sys.executable, verify_bin, '--origin', 'https://bank.tuannguyenviet.site', '--sha', sha, '--mode', 'access'], cwd=staging, env=env, check=True)
-            scripts = cloudflare(f'/accounts/{os.environ["CLOUDFLARE_ACCOUNT_ID"]}/workers/scripts/acb-web/deployments?per_page=1')
-            version_id = scripts['deployments'][0]['versions'][0]['version_id']
-            now = datetime.now(timezone.utc).isoformat()
-            proof = {
-                'hosts': [
-                    {'hostname': 'bank.tuannguyenviet.site', 'release_sha': sha, 'worker_version_id': version_id, 'verified_at': now},
-                    {'hostname': 'transactions.tuannguyenviet.site', 'release_sha': sha, 'worker_version_id': version_id, 'verified_at': now}
-                ]
-            }
-            save(snapshot_dir / 'proof.json', proof)
-            receipt = {'status': 'passed', 'mode': 'cutover', 'worker_version_id': version_id, 'routes_verified': True, 'public_checks_passed': True}
-            save(summary, receipt)
+            # Align the unexposed service with the verified artifact before any
+            # traffic switch. Bootstrap rejects already-routed services.
+            subprocess.run([sys.executable, str(adapter), '--mode', 'bootstrap', '--sha', sha, '--summary', str(summary.resolve())], cwd=staging, env=env, check=True)
+            try:
+                for host, snapshot in zip(('viewer', 'bank'), snapshots):
+                    subprocess.run([sys.executable, routes_bin, 'apply', '--host', host, '--snapshot', str(snapshot)], cwd=staging, env=env, check=True)
+                    verification = [sys.executable, verify_bin, '--sha', sha]
+                    if host == 'viewer':
+                        verification += ['--origin', 'https://transactions.tuannguyenviet.site', '--mode', 'static', '--surface', 'viewer', '--artifact', str(artifact / 'dist')]
+                    else:
+                        verification += ['--origin', 'https://bank.tuannguyenviet.site', '--mode', 'access']
+                    subprocess.run(verification, cwd=staging, env=env, check=True)
+                # The normal publisher confirms both route sets, service
+                # exposure and the active artifact without another upload.
+                subprocess.run([sys.executable, str(adapter), '--mode', 'publish', '--sha', sha, '--summary', str(summary.resolve())], cwd=staging, env=env, check=True)
+                receipt = json.loads(summary.read_text())
+                if receipt.get('status') not in ('passed', 'already_current') or receipt.get('public_checks_passed') is not True:
+                    raise Failure('Cutover publication did not confirm public checks')
+                receipt.update(mode='cutover', status='pending_owner_acceptance', routes_verified=True,
+                               owner_browser_checks_passed=False, metadata_migration_authorized=False,
+                               traffic_note='Routes switched; authenticated owner acceptance is required before VPS metadata migration or frontend removal.')
+                save(summary, receipt)
+            except (Failure, OSError, ValueError, subprocess.SubprocessError) as error:
+                restored = []
+                for snapshot in reversed(snapshots):
+                    if snapshot.exists():
+                        result = subprocess.run([sys.executable, routes_bin, 'restore', '--snapshot', str(snapshot)], cwd=staging, env=env, check=False)
+                        restored.append({'snapshot': snapshot.name, 'restored': result.returncode == 0})
+                receipt = json.loads(summary.read_text()) if summary.exists() else {}
+                receipt.update(status='failed', mode='cutover', route_restoration=restored,
+                               owner_browser_checks_passed=False, metadata_migration_authorized=False)
+                save(summary, receipt)
+                raise Failure('Cutover failed; snapshot restoration results retained in receipt') from error
             command = [sys.executable, '-c', 'pass']
         else:
             command = [sys.executable, str(adapter), '--mode', mode, '--sha', sha, '--summary', str(summary.resolve())]
@@ -354,7 +419,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('resolve', 'execute'))
     parser.add_argument('--app', choices=(*APPS, 'all'), required=True)
-    parser.add_argument('--mode', choices=('publish', 'bootstrap', 'rollback', 'survey', 'check', 'cutover'), default='publish')
+    parser.add_argument('--mode', choices=('publish', 'bootstrap', 'rollback', 'survey', 'check', 'cutover', 'restore-routes'), default='publish')
     parser.add_argument('--source-run-id', type=int)
     parser.add_argument('--sha')
     parser.add_argument('--version-id')
@@ -390,7 +455,7 @@ def main(argv=None):
             if selected['app'] != args.app or selected['mode'] != args.mode:
                 raise Failure('Selection does not match the registered requested app/mode')
             execute(api, registration(args.app), selected, args.output, args.version_id, args.monitor_version_id)
-    except (Failure, OSError, ValueError, KeyError) as error:
+    except (Failure, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         message = str(error) if isinstance(error, Failure) else type(error).__name__
         receipt = {}
         if args.operation == 'execute' and args.output.exists():
