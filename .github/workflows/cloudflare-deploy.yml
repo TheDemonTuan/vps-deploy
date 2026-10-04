@@ -15,7 +15,7 @@ on:
       mode:
         description: Survey is read-only; bootstrap cannot switch ACB routes
         type: choice
-        options: [survey, check, publish, bootstrap, rollback]
+        options: [survey, check, publish, bootstrap, rollback, cutover]
         default: survey
       source_run_id:
         description: Optional successful source CI run; mandatory for manual migration artifacts
@@ -153,6 +153,9 @@ jobs:
         if: always()
         with:
           name: cloudflare-receipt-${{ matrix.app }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/receipt.json
+          path: |
+            ${{ runner.temp }}/receipt.json
+            ${{ runner.temp }}/proof.json
+            ${{ runner.temp }}/*routes.json
           retention-days: 30
           if-no-files-found: warn
