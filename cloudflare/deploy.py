@@ -239,6 +239,8 @@ def cloudflare(suffix):
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             value = json.load(response)
+    except urllib.error.HTTPError as error:
+        raise Failure('Cloudflare GET ' + suffix.split('?')[0] + ' failed (HTTP ' + str(error.code) + ')') from None
     except (urllib.error.URLError, ValueError) as error:
         raise Failure('Cloudflare read failed (' + type(error).__name__ + ')') from None
     if not isinstance(value, dict) or value.get('success') is not True:
@@ -256,14 +258,16 @@ def account_zone(config):
 
 
 def survey(config):
-    zone = account_zone(config)
-    account = os.environ['CLOUDFLARE_ACCOUNT_ID']
+    account = os.environ.get('CLOUDFLARE_ACCOUNT_ID', '')
     scripts = cloudflare('/accounts/' + account + '/workers/scripts')
     names = {item['id'] for item in scripts}
-    routes = cloudflare('/zones/' + zone + '/workers/routes')
-    return {'status': 'read_only', 'app': config['app'], 'workers': {name: name in names for name in config['workers']},
-            'zone_readable': True, 'registered_worker_route_count': sum(item.get('script') in config['workers'] for item in routes),
-            'note': 'No scripts, routes, secrets, triggers, database, or VPS state modified'}
+    result = {'status': 'read_only', 'app': config['app'], 'workers': {name: name in names for name in config['workers']},
+              'note': 'No scripts, routes, secrets, triggers, database, or VPS state modified'}
+    if config['app'] == 'acb':
+        zone = account_zone(config)
+        routes = cloudflare('/zones/' + zone + '/workers/routes')
+        result.update(zone_readable=True, registered_worker_route_count=sum(item.get('script') in config['workers'] for item in routes))
+    return result
 
 
 def save(path, value):
@@ -280,7 +284,8 @@ def execute(api, config, selection, summary, version_id=None, monitor_version_id
         save(summary, survey(config))
         return
     env = os.environ.copy()
-    env['CLOUDFLARE_ZONE_ID'] = account_zone(config)
+    if config['app'] == 'acb':
+        env['CLOUDFLARE_ZONE_ID'] = account_zone(config)
     env['GITHUB_REPOSITORY'] = config['repository']
     env['WRANGLER_BIN'] = str(ROOT / 'node_modules/wrangler/bin/wrangler.js')
     if config['app'] == 'acb':
