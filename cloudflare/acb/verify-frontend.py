@@ -10,7 +10,6 @@ import argparse
 from dataclasses import dataclass
 import email
 import subprocess
-import hashlib
 from html.parser import HTMLParser
 import http.client
 from pathlib import Path
@@ -325,12 +324,55 @@ def local_entries(body, page_url, origin):
     return entries
 
 
+class BeaconTag(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.attributes = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "script":
+            self.attributes.append(attrs)
+
+
+def without_edge_beacon(body):
+    removed = False
+
+    def replace(match):
+        nonlocal removed
+        parser = BeaconTag()
+        try:
+            parser.feed(match.group().decode("utf-8"))
+            parser.close()
+        except (UnicodeError, ValueError):
+            return match.group()
+        if removed or len(parser.attributes) != 1:
+            return match.group()
+        pairs = parser.attributes[0]
+        attrs = dict(pairs)
+        required = {"src", "integrity", "data-cf-beacon", "crossorigin"}
+        if (len(pairs) != len(attrs) or not required <= attrs.keys() or
+                not attrs.keys() <= required | {"defer", "type"} or
+                not re.fullmatch(r"https://static\.cloudflareinsights\.com/beacon\.min\.js(?:/v[0-9a-f]{32})?", attrs["src"]) or
+                not re.fullmatch(r"sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}", attrs["integrity"]) or
+                attrs["crossorigin"] != "anonymous" or
+                attrs.get("type", "module") != "module" or
+                not attrs["data-cf-beacon"]):
+            return match.group()
+        removed = True
+        return b""
+
+    # Remove only one empty, tightly allowlisted edge analytics tag. All other
+    # HTML bytes and every JS/CSS byte remain authoritative.
+    return re.sub(rb"<script\b[^>]*>\s*</script\s*>", replace, body, flags=re.IGNORECASE)
+
+
 class Artifact:
     def __init__(self, directory):
         self.root = Path(directory).resolve()
         require(self.root.is_dir(), "artifact directory does not exist")
         self.bytes_for("/index.html")
         self.immutable = True
+        self.edge_analytics_excluded = False
         # The approved >100-rule fallback intentionally omits *all* immutable
         # rules. Read that decision from the verified artifact, not live headers.
         header_file = self.root / "_headers"
@@ -364,8 +406,13 @@ class Artifact:
             raise VerificationError("cannot read referenced artifact file") from None
 
     def compare(self, path, body):
-        require(hashlib.sha256(body).digest() == hashlib.sha256(self.bytes_for(path)).digest(),
-                "decoded response checksum does not match artifact")
+        expected = self.bytes_for(path)
+        if body != expected and path == "/index.html":
+            normalized = without_edge_beacon(body)
+            if normalized == expected:
+                self.edge_analytics_excluded = True
+                body = normalized
+        require(body == expected, "decoded response checksum does not match artifact")
 
 
 class Verifier:
@@ -450,6 +497,8 @@ class Verifier:
         self.missing()
         checksum = "decoded artifact checksums verified" if self.artifact else "NO artifact checksum comparison (rollback artifact unavailable)"
         cache = "; immutable rules omitted by artifact rule-limit fallback" if self.artifact and not self.artifact.immutable else ""
+        if self.artifact and self.artifact.edge_analytics_excluded:
+            checksum += "; allowlisted edge analytics excluded from HTML comparison"
         return f"PASS {self.surface}: release {self.sha}; HTML, {len(self.assets)} JS/CSS entries, MIME, cache, security and ETag checks; {checksum}{cache}"
 
 

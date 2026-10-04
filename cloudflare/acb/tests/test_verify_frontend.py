@@ -27,6 +27,8 @@ FILES = {"/index.html": HTML, "/__release": (SHA + "\n").encode(),
          "/assets/index-abcdefgh.js": b'console.log("synthetic entry");',
          "/assets/vendor-abcdefgh.js": b'export const fixture = true;',
          "/assets/index-abcdefgh.css": b'body { color: black; }'}
+BEACON = (b'<script defer type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v' + b'a' * 32 +
+          b'" integrity="sha512-YWJj" data-cf-beacon=\'{"token":"synthetic"}\' crossorigin="anonymous"></script>')
 
 
 class FrontendTests(unittest.TestCase):
@@ -114,6 +116,36 @@ class FrontendTests(unittest.TestCase):
     def test_viewer_never_probes_admin(self):
         self.run_static("viewer")
         self.assertFalse(any(path.startswith("/admin") for path, _ in self.requests))
+
+    def test_edge_beacon_preserves_exact_application_html_and_assets(self):
+        def mutation(path, status, headers, body):
+            if headers.get("Content-Type", "").startswith("text/html"):
+                body = body.replace(b"</body>", BEACON + b"</body>")
+            return status, headers, body
+        self.mutate = mutation
+        self.assertIn("edge analytics excluded from HTML comparison", self.run_static("viewer"))
+
+    def test_beacon_cannot_hide_changed_application_html_or_script_bytes(self):
+        for target in ("/", "/assets/index-abcdefgh.js"):
+            with self.subTest(target=target):
+                def mutation(path, status, headers, body):
+                    if path == target:
+                        body = body.replace(b"</body>", BEACON + b"</body>") + b"tampered"
+                    return status, headers, body
+                self.fail_mutation(mutation, "checksum does not match")
+
+    def test_foreign_active_duplicate_or_nonempty_beacon_is_not_excluded(self):
+        variants = [BEACON.replace(b"static.cloudflareinsights.com", b"other.example"),
+                    BEACON.replace(b" defer", b' onload="alert(1)" defer'),
+                    BEACON.replace(b"</script>", b"alert(1)</script>"),
+                    BEACON + BEACON]
+        for beacon in variants:
+            with self.subTest(beacon=beacon):
+                def mutation(path, status, headers, body):
+                    if path == "/":
+                        body = body.replace(b"</body>", beacon + b"</body>")
+                    return status, headers, body
+                self.fail_mutation(mutation, "checksum does not match|same-origin")
 
     def test_rollback_explicitly_does_not_attest_checksums(self):
         summary = verify.Verifier(self.origin, SHA, "viewer").run()
