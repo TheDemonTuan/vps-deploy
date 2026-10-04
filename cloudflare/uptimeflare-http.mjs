@@ -6,9 +6,12 @@ const [webSha = '', monitorSha = ''] = process.argv.slice(2);
 if ([webSha, monitorSha].some(value => value && !/^[0-9a-f]{40}$/.test(value))) {
   throw new Error('Invalid public release identity');
 }
-const browser = await chromium.launch({ headless: true });
-let stage = 'navigation';
+let browser;
+let stage = 'launch';
+let failureCode = 'unclassified';
 try {
+  browser = await chromium.launch({ headless: true });
+  stage = 'navigation';
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.route('**/*', route => {
@@ -17,6 +20,7 @@ try {
   });
   const home = await page.goto(origin + '/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   if (!home || home.status() !== 200 || home.url() !== origin + '/') {
+    failureCode = home ? 'HTTP_' + home.status() : 'NO_RESPONSE';
     throw new Error('Public browser navigation did not return the fixed status page');
   }
   stage = 'read-html';
@@ -50,9 +54,9 @@ try {
   }
   process.stdout.write(JSON.stringify(result));
 } catch (error) {
-  const network = /net::([A-Z_]+)/.exec(String(error))?.[1] || 'unclassified';
+  const network = /net::([A-Z_]+)/.exec(String(error))?.[1] || failureCode;
   process.stderr.write(`Actual Chromium public readiness failed at ${stage} (${network}); no response bodies or credentials logged.\n`);
   process.exitCode = 1;
 } finally {
-  await browser.close();
+  if (browser) await browser.close();
 }
