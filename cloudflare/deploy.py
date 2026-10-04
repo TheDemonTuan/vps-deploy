@@ -13,6 +13,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.parse
+from datetime import datetime, timezone
 import urllib.request
 import zipfile
 
@@ -296,7 +297,7 @@ def execute(api, config, selection, summary, version_id=None, monitor_version_id
     with tempfile.TemporaryDirectory(prefix='cloudflare-release-') as temporary:
         staging = Path(temporary)
         digest = None
-        if mode in ('publish', 'bootstrap'):
+        if mode in ('publish', 'bootstrap', 'cutover'):
             # Resolve again immediately before consuming bytes; reject failed reruns, stale heads and drift.
             checked = resolve(api, config, mode, selection['run_id'])
             if checked != selection:
@@ -308,6 +309,30 @@ def execute(api, config, selection, summary, version_id=None, monitor_version_id
             digest = checksum(artifact, config, sha)
         if mode == 'check' and config['app'] == 'acb':
             command = [sys.executable, str(ROOT / 'acb/cloudflare-routes.py'), 'check']
+        elif mode == 'cutover' and config['app'] == 'acb':
+            snapshot_dir = summary.parent
+            viewer_snapshot = snapshot_dir / 'viewer-routes.json'
+            bank_snapshot = snapshot_dir / 'bank-routes.json'
+            routes_bin = str(ROOT / 'acb/cloudflare-routes.py')
+            verify_bin = str(ROOT / 'acb/verify-frontend.py')
+            subprocess.run([sys.executable, routes_bin, 'apply', '--host', 'viewer', '--snapshot', str(viewer_snapshot)], cwd=staging, env=env, check=True)
+            subprocess.run([sys.executable, routes_bin, 'apply', '--host', 'bank', '--snapshot', str(bank_snapshot)], cwd=staging, env=env, check=True)
+            subprocess.run([sys.executable, routes_bin, 'check'], cwd=staging, env=env, check=True)
+            subprocess.run([sys.executable, verify_bin, '--origin', 'https://transactions.tuannguyenviet.site', '--sha', sha, '--mode', 'static', '--surface', 'viewer', '--artifact', str(artifact / 'dist')], cwd=staging, env=env, check=True)
+            subprocess.run([sys.executable, verify_bin, '--origin', 'https://bank.tuannguyenviet.site', '--sha', sha, '--mode', 'access'], cwd=staging, env=env, check=True)
+            scripts = cloudflare(f'/accounts/{os.environ["CLOUDFLARE_ACCOUNT_ID"]}/workers/scripts/acb-web/deployments?per_page=1')
+            version_id = scripts['deployments'][0]['versions'][0]['version_id']
+            now = datetime.now(timezone.utc).isoformat()
+            proof = {
+                'hosts': [
+                    {'hostname': 'bank.tuannguyenviet.site', 'release_sha': sha, 'worker_version_id': version_id, 'verified_at': now},
+                    {'hostname': 'transactions.tuannguyenviet.site', 'release_sha': sha, 'worker_version_id': version_id, 'verified_at': now}
+                ]
+            }
+            save(snapshot_dir / 'proof.json', proof)
+            receipt = {'status': 'passed', 'mode': 'cutover', 'worker_version_id': version_id, 'routes_verified': True, 'public_checks_passed': True}
+            save(summary, receipt)
+            command = [sys.executable, '-c', 'pass']
         else:
             command = [sys.executable, str(adapter), '--mode', mode, '--sha', sha, '--summary', str(summary.resolve())]
             if config['app'] == 'uptimeflare':
@@ -329,7 +354,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('resolve', 'execute'))
     parser.add_argument('--app', choices=(*APPS, 'all'), required=True)
-    parser.add_argument('--mode', choices=('publish', 'bootstrap', 'rollback', 'survey', 'check'), default='publish')
+    parser.add_argument('--mode', choices=('publish', 'bootstrap', 'rollback', 'survey', 'check', 'cutover'), default='publish')
     parser.add_argument('--source-run-id', type=int)
     parser.add_argument('--sha')
     parser.add_argument('--version-id')
