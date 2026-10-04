@@ -407,12 +407,28 @@ class Artifact:
 
     def compare(self, path, body):
         expected = self.bytes_for(path)
+        normalized = body
         if body != expected and path == "/index.html":
             normalized = without_edge_beacon(body)
             if normalized == expected:
                 self.edge_analytics_excluded = True
                 body = normalized
-        require(body == expected, "decoded response checksum does not match artifact")
+        if body != expected:
+            parser = BeaconTag()
+            if path == '/index.html':
+                parser.feed(body.decode('utf-8', errors='replace'))
+            beacon_types = []
+            for pairs in parser.attributes:
+                attrs = dict(pairs)
+                if attrs.get('src', '').startswith('https://static.cloudflareinsights.com/beacon.min.js'):
+                    kind = attrs.get('type', 'missing')
+                    beacon_types.append(kind if kind in {'missing', 'module', 'text/javascript', 'application/javascript'} else 'other')
+            raise VerificationError(
+                f'decoded response checksum does not match artifact: path={path}; '
+                f'actual_bytes={len(body)}; artifact_bytes={len(expected)}; '
+                f'beacon_removed={normalized != body}; '
+                f'whitespace_only={normalized.split() == expected.split()}; '
+                f'beacon_types={beacon_types}')
 
 
 class Verifier:
