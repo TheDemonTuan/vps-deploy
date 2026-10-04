@@ -235,12 +235,10 @@ jobs:
                 --format json --output "$REPORT_DIR/trivy-browser-${APP}.json" "$private/browser"
               trivy fs --ignorefile /dev/null --scanners secret,misconfig \
                 --severity HIGH,CRITICAL --exit-code 1 "$private/browser"
-              trivy fs --ignorefile /dev/null --scanners vuln \
-                --severity HIGH,CRITICAL --exit-code 1 "$private/browser"
-              trivy sbom --ignorefile /dev/null --format json \
-                --output "$REPORT_DIR/trivy-browser-sbom-${APP}.json" "$private/browser/browser.spdx.json"
-              trivy sbom --ignorefile /dev/null --severity HIGH,CRITICAL --exit-code 1 \
-                "$private/browser/browser.spdx.json"
+              sudo bash "$GITHUB_WORKSPACE/platform/scripts/install-grype.sh" /usr/local/bin
+              python3 "$GITHUB_WORKSPACE/platform/scripts/scan-private-browser.py" \
+                --sbom "$private/browser/browser.spdx.json" \
+                --report "$REPORT_DIR/grype-browser-${APP}.json"
             fi
             echo "::endgroup::"
           fi

@@ -55,6 +55,9 @@ PY
 browser="$work/browser"
 python3 "$package/scripts/install-browser.py" --manifest "$package/image-build-manifest.json" \
   --arch "$CGW_CI_ARCH" --output "$browser"
+bash "$root/scripts/install-grype.sh" /usr/local/bin
+python3 "$root/scripts/scan-private-browser.py" --sbom "$browser/browser.spdx.json" \
+  --report "$work/grype-browser.json"
 base="cgw-ci-base:${CGW_APP_REF}-${CGW_CI_ARCH}"
 images+=("$base")
 docker buildx build --builder default --load --platform "linux/$CGW_CI_ARCH" \
