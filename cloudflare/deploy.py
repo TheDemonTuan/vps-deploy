@@ -291,6 +291,7 @@ def execute(api, config, selection, summary, version_id=None, monitor_version_id
     if config['app'] == 'acb':
         adapter = ROOT / 'acb/release-frontend.py'
     else:
+        env['UPTIMEFLARE_PUBLIC_TRANSPORT'] = 'chromium'
         adapter = ROOT / 'uptimeflare.py'
     with tempfile.TemporaryDirectory(prefix='cloudflare-release-') as temporary:
         staging = Path(temporary)

@@ -111,6 +111,9 @@ jobs:
           cache-dependency-path: cloudflare/package-lock.json
       - name: Install pinned platform tooling without source code or credentials
         run: npm ci --prefix cloudflare --ignore-scripts
+      - name: Install actual public-browser verifier without deployment credentials
+        if: matrix.app == 'uptimeflare' && matrix.mode != 'survey'
+        run: node cloudflare/node_modules/playwright/cli.js install --with-deps chromium
       - name: Invoke only the platform-owned deployment adapter
         env:
           SELECTION: ${{ toJSON(matrix) }}
