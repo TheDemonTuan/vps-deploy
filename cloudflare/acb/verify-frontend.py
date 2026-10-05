@@ -436,6 +436,9 @@ class Artifact:
             normalized = without_edge_beacon(body)
             beacon_removed = normalized != body
             normalized, security_removed = without_edge_security_bootstrap(normalized, expected)
+            if expected and normalized != expected and normalized.split() == expected.split():
+                if re.sub(rb">\s+<", rb"><", normalized) == re.sub(rb">\s+<", rb"><", expected):
+                    normalized = expected
             if normalized == expected:
                 self.edge_analytics_excluded = beacon_removed
                 self.edge_security_excluded = security_removed
