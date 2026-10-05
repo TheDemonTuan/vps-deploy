@@ -16,6 +16,7 @@ retrieval or integrity errors fail closed. Cloudflare credentials stay off VPS.
 import argparse
 import fnmatch
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -24,6 +25,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -312,9 +314,34 @@ class Publisher:
     def routes(self):
         self.runner([sys.executable, str(Path(__file__).with_name('cloudflare-routes.py')), 'check'], self.root)
         self.summary['checks'].append('Cloudflare route check passed')
+    def converge(self, sha, timeout=45):
+        verifier_path = Path(__file__).with_name('verify-frontend.py')
+        spec = importlib.util.spec_from_file_location('acb_release_verifier', verifier_path)
+        vf = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vf)
+        client = vf.Client('https://' + HOSTS[1])
+        deadline = time.monotonic() + timeout
+        consecutive = 0
+        while True:
+            ready = False
+            try:
+                res = client.get('/__release?smoke=' + sha)
+                ready = (res.status == 200 and res.mime() == 'text/plain' and
+                         res.body == (sha + '\n').encode() and
+                         'no-store' in vf.cache_directives(res))
+            except vf.VerificationError:
+                pass
+            consecutive = consecutive + 1 if ready else 0
+            if consecutive >= 3:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ReleaseError(f'Static release did not converge to {sha} within {timeout}s')
+            time.sleep(min(2, remaining))
 
     def verify(self, sha, artifact):
         mode = 'static' if artifact else 'rollback'
+        self.converge(sha)
         command = [sys.executable, str(Path(__file__).with_name('verify-frontend.py')), '--origin',
                    'https://' + HOSTS[1], '--sha', sha, '--mode', mode, '--surface', 'viewer']
         if artifact:

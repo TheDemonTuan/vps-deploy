@@ -138,7 +138,8 @@ class FrontendReleaseTests(unittest.TestCase):
         self.patches = [patch.object(release, 'API_BASE', base), patch.object(release, 'GH_BASE', base),
                         patch.dict(os.environ, {'CLOUDFLARE_API_TOKEN': 'test-only',
                             'CLOUDFLARE_ACCOUNT_ID': 'a' * 32, 'CLOUDFLARE_ZONE_ID': 'b' * 32,
-                            'GH_TOKEN': 'test-only', 'GITHUB_REPOSITORY': 'owner/repo'})]
+                            'GH_TOKEN': 'test-only', 'GITHUB_REPOSITORY': 'owner/repo'}),
+                        patch.object(release.Publisher, 'converge', return_value=None)]
         for item in self.patches:
             item.start()
 
