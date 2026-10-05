@@ -292,15 +292,14 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                     require(run('/usr/sbin/visudo', '-cf', str(temporary), check=False).returncode == 0, 'INVALID_SUDOERS')
                     os.replace(temporary, sudo)
                     run('/usr/bin/systemctl', 'daemon-reload')
+                    registration = app_registration(destination, app)
+                    from core import host as checked_host
+                    profile = checked_host(cfg, registration, host_record)
                     if (state / 'state.json').exists():
                         if cgw_transition:
-                            from core import host as checked_host
-                            profile = checked_host(cfg, app_registration(destination, app), host_record)
                             adopt_cgw(destination, cfg, state, profile)
                         run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
                     else:
-                        from core import host as checked_host
-                        profile = checked_host(cfg, app_registration(destination, app), host_record)
                         if profile['registration']['manifest']['strategy'] == 'recreate':
                             run(str(destination / 'bin/deployctl'), 'adopt', '--app', app)
                             run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
