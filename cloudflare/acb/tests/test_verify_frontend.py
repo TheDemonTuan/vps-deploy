@@ -29,6 +29,10 @@ FILES = {"/index.html": HTML, "/__release": (SHA + "\n").encode(),
          "/assets/index-abcdefgh.css": b'body { color: black; }'}
 BEACON = (b'<script defer type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v' + b'a' * 32 +
           b'" integrity="sha512-YWJj" data-cf-beacon=\'{"token":"synthetic"}\' crossorigin="anonymous"></script>')
+BOOTSTRAP = (b"<script>window.__CF$cv$params={r:'a4566af14c049fe9',t:'MTc5MTE0MDMwMw==',u:'01a1084812f171899f34caceedc09acf',"
+             b"ut:'xUDmNdF__f6h4P8acb8d299M9itzGqM.xLB5XPtqou4-1791140303-1.2.1.1',i:60};"
+             b"(function(){if(!document.body)return;var s=document.createElement('script');"
+             b"s.src='/cdn-cgi/challenge-platform/scripts/precursor/main.js';document.head.appendChild(s);})();</script>")
 
 
 class FrontendTests(unittest.TestCase):
@@ -124,17 +128,33 @@ class FrontendTests(unittest.TestCase):
                 body = body.replace(b"</body>", beacon + b"</body>")
             return status, headers, body
         self.mutate = inject
-        args = ["--origin", self.origin, "--sha", SHA, "--mode", "static", "--surface", "viewer", "--artifact", str(self.artifact)]
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(verify.main(args), 0)
-            def tamper(path, status, headers, body):
-                status, headers, body = inject(path, status, headers, body)
-                if path == "/":
-                    body = body.replace(b'id="root"', b'id="root" data-tampered="true"')
-                return status, headers, body
-            self.mutate = tamper
-            self.assertEqual(verify.main(args), 1)
 
+    def test_edge_security_bootstrap_and_beacon_excluded_without_hiding_tampering(self):
+        def inject(path, status, headers, body):
+            if headers.get("Content-Type", "").startswith("text/html"):
+                body = body.replace(b"</body>", BEACON + b"\n" + BOOTSTRAP + b"</body>")
+            return status, headers, body
+        self.mutate = inject
+        self.assertIn("edge analytics and security bootstrap excluded from HTML comparison", self.run_static("viewer"))
+        def tamper(path, status, headers, body):
+            status, headers, body = inject(path, status, headers, body)
+            if path == "/":
+                body = body.replace(b'id="root"', b'id="root" data-tampered="true"')
+            return status, headers, body
+        self.mutate = tamper
+        self.fail_mutation(tamper, "checksum does not match")
+
+    def test_foreign_or_duplicate_security_bootstrap_is_not_excluded(self):
+        variants = [BOOTSTRAP.replace(b"/cdn-cgi/challenge-platform/scripts/precursor/main.js", b"https://evil.invalid/main.js"),
+                    BOOTSTRAP.replace(b"i:60", b"i:60; eval('alert(1)')"),
+                    BOOTSTRAP + BOOTSTRAP]
+        for bootstrap in variants:
+            with self.subTest(bootstrap=bootstrap):
+                def mutation(path, status, headers, body):
+                    if path == "/":
+                        body = body.replace(b"</body>", bootstrap + b"</body>")
+                    return status, headers, body
+                self.fail_mutation(mutation, "checksum does not match")
     def test_beacon_cannot_hide_changed_application_html_or_script_bytes(self):
         for target in ("/", "/assets/index-abcdefgh.js"):
             with self.subTest(target=target):

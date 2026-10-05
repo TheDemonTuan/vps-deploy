@@ -365,6 +365,24 @@ def without_edge_beacon(body):
     # HTML bytes and every JS/CSS byte remain authoritative.
     return re.sub(rb"<script\b[^>]*>\s*</script\s*>", replace, body, flags=re.IGNORECASE)
 
+def without_edge_security_bootstrap(body):
+    pattern = (
+        rb"<script>\s*"
+        rb"window\.__CF\$cv\$params=\{r:'[0-9a-f]+',t:'[A-Za-z0-9+/=]+',u:'[0-9a-f]{32}',"
+        rb"ut:'[A-Za-z0-9_.-]+',i:\d+\};"
+        rb"\(function\(\)\{if\(!document\.body\)return;var s=document\.createElement\('script'\);"
+        rb"s\.src='/cdn-cgi/challenge-platform/scripts/precursor/main\.js';document\.head\.appendChild\(s\);\}\)\(\);"
+        rb"\s*</script>"
+    )
+    matches = list(re.finditer(pattern, body))
+    if len(matches) != 1:
+        return body, False
+    match = matches[0]
+    start, end = match.start(), match.end()
+    if start > 0 and body[start - 1:start] == b"\n":
+        start -= 1
+    return body[:start] + body[end:], True
+
 
 class Artifact:
     def __init__(self, directory):
@@ -373,7 +391,7 @@ class Artifact:
         self.bytes_for("/index.html")
         self.immutable = True
         self.edge_analytics_excluded = False
-        # The approved >100-rule fallback intentionally omits *all* immutable
+        self.edge_security_excluded = False
         # rules. Read that decision from the verified artifact, not live headers.
         header_file = self.root / "_headers"
         if header_file.is_file():
@@ -410,8 +428,11 @@ class Artifact:
         normalized = body
         if body != expected and path == "/index.html":
             normalized = without_edge_beacon(body)
+            beacon_removed = normalized != body
+            normalized, security_removed = without_edge_security_bootstrap(normalized)
             if normalized == expected:
-                self.edge_analytics_excluded = True
+                self.edge_analytics_excluded = beacon_removed
+                self.edge_security_excluded = security_removed
                 body = normalized
         if body != expected:
             parser = BeaconTag()
@@ -525,8 +546,13 @@ class Verifier:
         self.missing()
         checksum = "decoded artifact checksums verified" if self.artifact else "NO artifact checksum comparison (rollback artifact unavailable)"
         cache = "; immutable rules omitted by artifact rule-limit fallback" if self.artifact and not self.artifact.immutable else ""
-        if self.artifact and self.artifact.edge_analytics_excluded:
-            checksum += "; allowlisted edge analytics excluded from HTML comparison"
+        if self.artifact and (self.artifact.edge_analytics_excluded or self.artifact.edge_security_excluded):
+            excluded = []
+            if self.artifact.edge_analytics_excluded:
+                excluded.append("analytics")
+            if self.artifact.edge_security_excluded:
+                excluded.append("security bootstrap")
+            checksum += f"; allowlisted edge {' and '.join(excluded)} excluded from HTML comparison"
         return f"PASS {self.surface}: release {self.sha}; HTML, {len(self.assets)} JS/CSS entries, MIME, cache, security and ETag checks; {checksum}{cache}"
 
 
