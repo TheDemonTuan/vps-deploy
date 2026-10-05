@@ -212,6 +212,8 @@ def adopt(cfg, state_dir, locks, profile):
             from core import container, container_digest
             live = container(profile['app'] + '-' + slot, running=True)
             image = container_digest(live, profile['image_repository'])
+            _, mh = registered(cfg, profile['registration'])
+            active = {'slot': slot, 'image': image, 'platform_ref': profile['platform_ref'], 'manifest_sha256': mh}
             if slot == 'single':
                 previous = None
             else:
