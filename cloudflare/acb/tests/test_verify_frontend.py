@@ -3,13 +3,19 @@ import contextlib
 import gzip
 import importlib.util
 import io
+import email
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
 from pathlib import Path
+import ssl
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
+from unittest.mock import patch
 
 
 spec = importlib.util.spec_from_file_location("verify_frontend", Path(__file__).parents[1] / "verify-frontend.py")
@@ -71,6 +77,12 @@ class FrontendTests(unittest.TestCase):
                                     "Cache-Control": "public, max-age=31536000, immutable", "ETag": '"fixture"'})
                     if self.headers.get("If-None-Match") and not owner.conditional_200:
                         status, body = 304, b""
+                elif path == "/api/public/v1/transactions":
+                    body = b'{"items":[],"summary":{}}'
+                    headers.update({"Content-Type": "application/json", "Cache-Control": "no-store"})
+                elif path == "/api/public/v1/events":
+                    body = b'event: initial_state\ndata: {"epoch":"ep1","watermark":0}\n\nevent: stream.heartbeat\ndata: {"slot":"green"}\n\n'
+                    headers.update({"Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform"})
                 else:
                     body = HTML
                     headers["Content-Type"] = "text/html; charset=utf-8"
@@ -83,7 +95,10 @@ class FrontendTests(unittest.TestCase):
                         self.send_header(key, item)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
 
             def log_message(self, *args):
                 pass
@@ -102,10 +117,10 @@ class FrontendTests(unittest.TestCase):
     def run_static(self, surface="local"):
         return verify.Verifier(self.origin, SHA, surface, verify.Artifact(self.artifact)).run()
 
-    def fail_mutation(self, mutation, diagnostic):
+    def fail_mutation(self, mutation, diagnostic, surface="local"):
         self.mutate = mutation
         with self.assertRaisesRegex(verify.VerificationError, diagnostic):
-            self.run_static()
+            self.run_static(surface)
 
     def test_static_local_checks_all_entries_and_credentials_without_cookies(self):
         self.assertIn("checksums verified", self.run_static())
@@ -299,7 +314,7 @@ class FrontendTests(unittest.TestCase):
             return 302, headers, b"synthetic sensitive body"
         self.mutate = mutation
         self.assertIn("SHA NOT verified", verify.verify_access(self.origin))
-        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(len(self.requests), 2)
 
     def test_access_rejects_challenge_wrong_status_or_destination(self):
         for status, location in [(200, "https://thedemontuan.cloudflareaccess.com/cdn-cgi/access/login/fixture"),
@@ -354,6 +369,200 @@ class FrontendTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaisesRegex(verify.VerificationError, "unsafe artifact"):
                 artifact.bytes_for(path)
 
+    def test_viewer_probes_api_and_sse_heartbeat(self):
+        summary = self.run_static("viewer")
+        self.assertIn("API JSON and SSE heartbeat verified", summary)
+        paths = [urllib.parse.urlsplit(path).path for path, _ in self.requests]
+        self.assertIn("/api/public/v1/transactions", paths)
+        self.assertIn("/api/public/v1/events", paths)
 
+    def test_local_never_probes_backend(self):
+        self.run_static("local")
+        paths = [urllib.parse.urlsplit(path).path for path, _ in self.requests]
+        self.assertFalse(any(p.startswith("/api/") for p in paths))
+
+    def test_api_swallowed_by_spa_fails(self):
+        def mutation(path, status, headers, body):
+            if urllib.parse.urlsplit(path).path == "/api/public/v1/transactions":
+                headers = {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=0, must-revalidate"}
+                return 200, headers, HTML
+            return status, headers, body
+        self.fail_mutation(mutation, "MIME mismatch", surface="viewer")
+
+    def test_api_malformed_json_or_wrong_shape_fails(self):
+        for bad_body, err in [(b"not-json", "invalid JSON"), (b'{"items":"not-list"}', "items list"), (b'[]', "JSON object")]:
+            with self.subTest(bad_body=bad_body):
+                def mutation(path, status, headers, body):
+                    if urllib.parse.urlsplit(path).path == "/api/public/v1/transactions":
+                        headers["Content-Type"] = "application/json"
+                        headers["Cache-Control"] = "no-store"
+                        return 200, headers, bad_body
+                    return status, headers, body
+                self.fail_mutation(mutation, err, surface="viewer")
+
+    def test_api_empty_items_is_valid(self):
+        def mutation(path, status, headers, body):
+            if urllib.parse.urlsplit(path).path == "/api/public/v1/transactions":
+                headers["Content-Type"] = "application/json"
+                headers["Cache-Control"] = "no-store"
+                return 200, headers, b'{"items":[],"summary":{}}'
+            return status, headers, body
+        self.mutate = mutation
+        self.assertIn("API JSON and SSE heartbeat verified", self.run_static("viewer"))
+
+    def test_sse_wrong_mime_fails(self):
+        def mutation(path, status, headers, body):
+            if urllib.parse.urlsplit(path).path == "/api/public/v1/events":
+                headers = {"Content-Type": "text/plain", "Cache-Control": "no-cache, no-transform"}
+                return 200, headers, b"data: test\n\n"
+            return status, headers, body
+        self.fail_mutation(mutation, "event stream MIME mismatch", surface="viewer")
+
+    def test_sse_missing_heartbeat_or_eof_fails(self):
+        def mutation(path, status, headers, body):
+            if urllib.parse.urlsplit(path).path == "/api/public/v1/events":
+                headers = {"Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform"}
+                return 200, headers, b'event: initial_state\ndata: {"epoch":"ep1","watermark":0}\n\n'
+            return status, headers, body
+        self.fail_mutation(mutation, "stream closed prematurely", surface="viewer")
+
+    def test_sse_malformed_target_frame_fails(self):
+        def mutation(path, status, headers, body):
+            if urllib.parse.urlsplit(path).path == "/api/public/v1/events":
+                headers = {"Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform"}
+                return 200, headers, b'event: initial_state\ndata: {"epoch":"ep1"}\n\nevent: stream.heartbeat\ndata: not-json\n\n'
+            return status, headers, body
+        self.fail_mutation(mutation, "malformed stream.heartbeat payload", surface="viewer")
+
+    def test_sse_deadline_bounded(self):
+        def delayed(path, status, headers, body):
+            if urllib.parse.urlsplit(path).path == "/api/public/v1/events":
+                time.sleep(0.1)
+                return status, headers, body
+            return status, headers, body
+        self.mutate = delayed
+        client = verify.Client(self.origin)
+        with patch.object(verify, "TIMEOUT", 0.03):
+            with self.assertRaisesRegex(verify.VerificationError, "exceeded"):
+                client.stream_events("/api/public/v1/events")
+
+    def test_access_rejects_when_api_status_fails(self):
+        def mutation(path, status, headers, body):
+            p = urllib.parse.urlsplit(path).path
+            if p == "/":
+                headers["Location"] = "https://thedemontuan.cloudflareaccess.com/cdn-cgi/access/login/fixture?opaque=value"
+                return 302, headers, b""
+            elif p == "/api/v1/status":
+                return 200, {"Content-Type": "application/json"}, b"{}"
+            return status, headers, body
+        self.mutate = mutation
+        with self.assertRaisesRegex(verify.VerificationError, "302"):
+            verify.verify_access(self.origin)
+
+    @contextlib.contextmanager
+    def https_server(self, handler_fn):
+        with tempfile.TemporaryDirectory() as d:
+            key = os.path.join(d, "k.pem")
+            crt = os.path.join(d, "c.pem")
+            subprocess.check_call(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                                   "-keyout", key, "-out", crt, "-days", "1",
+                                   "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+                                  stderr=subprocess.DEVNULL)
+            old_cert = os.environ.get("SSL_CERT_FILE")
+            os.environ["SSL_CERT_FILE"] = crt
+
+            class SSLHandler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    handler_fn(self)
+                def log_message(self, *args):
+                    pass
+
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(crt, key)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), SSLHandler)
+            server.socket = ctx.wrap_socket(server.socket, server_side=True)
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+            try:
+                yield f"https://127.0.0.1:{server.server_port}"
+            finally:
+                if old_cert:
+                    os.environ["SSL_CERT_FILE"] = old_cert
+                else:
+                    os.environ.pop("SSL_CERT_FILE", None)
+                server.shutdown()
+                server.server_close()
+                t.join()
+
+    def test_curl_fallback_preserves_crlf_in_body(self):
+        body_content = b"<html>\r\n\r\n<body>preserved\r\n\r\nnewlines</body></html>"
+        def cb(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/html")
+            handler.send_header("Content-Length", str(len(body_content)))
+            handler.end_headers()
+            handler.wfile.write(body_content)
+        with self.https_server(cb) as origin:
+            client = verify.Client(origin)
+            client.opener.open = lambda req, timeout=None: (_ for _ in ()).throw(
+                urllib.error.HTTPError(req.full_url, 403, "Forbidden", email.message_from_string("Server: cloudflare\r\n"), io.BytesIO(b"waf")))
+            res = client.get("/index.html")
+            self.assertEqual(res.body, body_content)
+
+    def test_curl_fallback_oversized_body_rejected(self):
+        body_content = b"x" * 200
+        def cb(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/plain")
+            handler.send_header("Content-Length", str(len(body_content)))
+            handler.end_headers()
+            handler.wfile.write(body_content)
+        with self.https_server(cb) as origin:
+            client = verify.Client(origin)
+            client.opener.open = lambda req, timeout=None: (_ for _ in ()).throw(
+                urllib.error.HTTPError(req.full_url, 403, "Forbidden", email.message_from_string("Server: cloudflare\r\n"), io.BytesIO(b"waf")))
+            with patch.object(verify, "MAX_BODY", 50):
+                with self.assertRaisesRegex(verify.VerificationError, "failed|exceeds"):
+                    client.get("/test")
+
+    def test_curl_fallback_gzip_decompressed(self):
+        raw = b"raw\r\n\r\ngzip-content"
+        compressed = gzip.compress(raw)
+        def cb(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/html")
+            handler.send_header("Content-Encoding", "gzip")
+            handler.send_header("Content-Length", str(len(compressed)))
+            handler.end_headers()
+            handler.wfile.write(compressed)
+        with self.https_server(cb) as origin:
+            client = verify.Client(origin)
+            client.opener.open = lambda req, timeout=None: (_ for _ in ()).throw(
+                urllib.error.HTTPError(req.full_url, 403, "Forbidden", email.message_from_string("Server: cloudflare\r\n"), io.BytesIO(b"waf")))
+            res = client.get("/test")
+            self.assertEqual(res.body, raw)
+
+    def test_curl_fallback_403_twice_fails_safely_no_body_leaked(self):
+        def cb(handler):
+            handler.send_response(403)
+            handler.send_header("Content-Type", "text/html")
+            body = b"SENSITIVE_SECOND_403_BODY"
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body)
+        with self.https_server(cb) as origin:
+            client = verify.Client(origin)
+            client.opener.open = lambda req, timeout=None: (_ for _ in ()).throw(
+                urllib.error.HTTPError(req.full_url, 403, "Forbidden", email.message_from_string("Server: cloudflare\r\n"), io.BytesIO(b"waf")))
+            with self.assertRaises(verify.VerificationError) as caught:
+                client.get("/test")
+            self.assertNotIn("SENSITIVE", str(caught.exception))
+
+    def test_curl_fallback_nonzero_fails_safely(self):
+        client = verify.Client("https://127.0.0.1:1")
+        client.opener.open = lambda req, timeout=None: (_ for _ in ()).throw(
+            urllib.error.HTTPError(req.full_url, 403, "Forbidden", email.message_from_string("Server: cloudflare\r\n"), io.BytesIO(b"waf")))
+        with self.assertRaisesRegex(verify.VerificationError, "failed"):
+            client.get("/test")
 if __name__ == "__main__":
     unittest.main()

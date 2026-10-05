@@ -12,9 +12,11 @@ import email
 import subprocess
 from html.parser import HTMLParser
 import http.client
+import json
 from pathlib import Path
 import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -129,54 +131,89 @@ class Client:
             "Accept-Encoding": "identity", "User-Agent": "acb-frontend-verifier/1", **(headers or {})})
         self.redirects.deadline = time.monotonic() + TIMEOUT
         try:
+            result = None
             try:
                 response = self.opener.open(request, timeout=TIMEOUT)
             except urllib.error.HTTPError as error:
                 if error.code == 403 and self.origin.startswith("https://"):
-                    cmd = ["curl", "-sS", "-D", "-", "-o", "-", "--max-time", str(TIMEOUT)]
-                    for k, v in request.headers.items():
-                        cmd.extend(["-H", f"{k}: {v}"])
-                    cmd.append(self.origin + path)
-                    proc = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT)
-                    if proc.returncode == 0:
-                        parts = proc.stdout.split(b"\r\n\r\n") if b"\r\n\r\n" in proc.stdout else proc.stdout.split(b"\n\n")
-                        head = parts[-2] if len(parts) >= 2 else parts[0]
-                        body = parts[-1] if len(parts) >= 2 else b""
-                        status_line, _, header_lines = head.partition(b"\r\n") if b"\r\n" in head else head.partition(b"\n")
+                    error.close()
+                    remaining = self.redirects.deadline - time.monotonic()
+                    require(remaining > 0, "request exceeded 15 seconds")
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        header_path = Path(tmpdir) / "headers.txt"
+                        body_path = Path(tmpdir) / "body.bin"
+                        cmd = [
+                            "curl", "-q",
+                            "--noproxy", "*",
+                            "-sS",
+                            "--dump-header", str(header_path),
+                            "--output", str(body_path),
+                            "--max-filesize", str(MAX_BODY),
+                            "--max-time", f"{remaining:.3f}",
+                        ]
+                        for k, v in request.headers.items():
+                            cmd.extend(["-H", f"{k}: {v}"])
+                        cmd.append(self.origin + path)
+                        try:
+                            proc = subprocess.run(cmd, capture_output=True, timeout=remaining)
+                        except (subprocess.TimeoutExpired, OSError):
+                            raise VerificationError("HTTP request or response decoding failed") from None
+                        if proc.returncode != 0:
+                            raise VerificationError("HTTP request or response decoding failed")
+                        if not header_path.is_file():
+                            raise VerificationError("HTTP request or response decoding failed")
+                        header_bytes = header_path.read_bytes()
+                        blocks = [b.strip() for b in re.split(rb"\r?\n\r?\n", header_bytes) if b.strip()]
+                        if not blocks:
+                            raise VerificationError("HTTP request or response decoding failed")
+                        final_block = blocks[-1]
+                        status_line, _, header_lines = final_block.partition(b"\r\n") if b"\r\n" in final_block else final_block.partition(b"\n")
                         status_match = re.search(r"HTTP/\S+\s+(\d+)", status_line.decode("latin1", errors="replace"))
-                        if status_match:
-                            status = int(status_match.group(1))
-                            headers = email.message_from_bytes(header_lines)
-                            result = Response(status, headers, body)
-                            return result
-                response = error
-            with response:
-                require(origin_key(response.geturl()) == origin_key(self.origin), "response left the requested origin")
-                status = response.code
-                body = b""
-                # Never read error/redirect bodies, which may contain sensitive data.
-                if status == 200:
-                    chunks = []
-                    size = 0
-                    stream = response.fp if isinstance(response, urllib.error.HTTPError) else response
-                    while True:
-                        remaining = self.redirects.deadline - time.monotonic()
-                        require(remaining > 0, "request exceeded 15 seconds")
-                        # urllib's socket timeout alone resets per read. Bound the
-                        # whole response, including a slowly streamed body.
-                        raw_socket = stream.fp.raw._sock
-                        raw_socket.settimeout(remaining)
-                        chunk = stream.read1(min(65536, MAX_BODY + 1 - size))
-                        if not chunk:
-                            break
-                        size += len(chunk)
-                        require(size <= MAX_BODY, "response exceeds the static asset size limit")
-                        chunks.append(chunk)
-                        if stream.isclosed():
-                            break
-                    body = b"".join(chunks)
-                require(time.monotonic() <= self.redirects.deadline, "request exceeded 15 seconds")
-                result = Response(status, response.headers, body)
+                        if not status_match:
+                            raise VerificationError("HTTP request or response decoding failed")
+                        status = int(status_match.group(1))
+                        if status == 403:
+                            raise VerificationError("HTTP request failed with status 403")
+                        body = b""
+                        if status == 200:
+                            if not body_path.is_file():
+                                raise VerificationError("HTTP request or response decoding failed")
+                            with open(body_path, "rb") as f:
+                                body = f.read(MAX_BODY + 1)
+                            require(len(body) <= MAX_BODY, "response exceeds the static asset size limit")
+                        headers = email.message_from_bytes(header_lines)
+                        require(time.monotonic() <= self.redirects.deadline, "request exceeded 15 seconds")
+                        result = Response(status, headers, body)
+                else:
+                    response = error
+            if result is None:
+                with response:
+                    require(origin_key(response.geturl()) == origin_key(self.origin), "response left the requested origin")
+                    status = response.code
+                    body = b""
+                    # Never read error/redirect bodies, which may contain sensitive data.
+                    if status == 200:
+                        chunks = []
+                        size = 0
+                        stream = response.fp if isinstance(response, urllib.error.HTTPError) else response
+                        while True:
+                            remaining = self.redirects.deadline - time.monotonic()
+                            require(remaining > 0, "request exceeded 15 seconds")
+                            # urllib's socket timeout alone resets per read. Bound the
+                            # whole response, including a slowly streamed body.
+                            raw_socket = stream.fp.raw._sock
+                            raw_socket.settimeout(remaining)
+                            chunk = stream.read1(min(65536, MAX_BODY + 1 - size))
+                            if not chunk:
+                                break
+                            size += len(chunk)
+                            require(size <= MAX_BODY, "response exceeds the static asset size limit")
+                            chunks.append(chunk)
+                            if stream.isclosed():
+                                break
+                        body = b"".join(chunks)
+                    require(time.monotonic() <= self.redirects.deadline, "request exceeded 15 seconds")
+                    result = Response(status, response.headers, body)
             encoding = result.header("Content-Encoding").strip().lower()
             if body and encoding not in {"", "identity"}:
                 if encoding == "gzip":
@@ -198,6 +235,106 @@ class Client:
             # Do not print exception strings: they can contain URLs or server data.
             raise VerificationError("HTTP request or response decoding failed") from None
 
+    def stream_events(self, path):
+        require(path.startswith("/") and not path.startswith("//"), "request path must be origin-relative")
+        request = urllib.request.Request(self.origin + path, headers={
+            "Accept": "text/event-stream",
+            "Accept-Encoding": "identity",
+            "User-Agent": "acb-frontend-verifier/1",
+        })
+        deadline = time.monotonic() + TIMEOUT
+        self.redirects.deadline = deadline
+        try:
+            response = self.opener.open(request, timeout=TIMEOUT)
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
+            if time.monotonic() >= deadline or "timed out" in str(error).lower():
+                raise VerificationError("request exceeded 15 seconds") from None
+            raise VerificationError("failed to open event stream") from None
+        with response:
+            require(origin_key(response.geturl()) == origin_key(self.origin), "response left the requested origin")
+            require(response.code == 200, "event stream did not return 200")
+            content_type = response.headers.get("Content-Type", "")
+            require(content_type.split(";")[0].strip().lower() == "text/event-stream", "event stream MIME mismatch")
+            cache_ctrl = response.headers.get("Cache-Control", "").lower()
+            directives = [p.strip() for p in cache_ctrl.split(",") if p.strip()]
+            require("no-cache" in directives and "no-transform" in directives, "event stream missing no-cache or no-transform")
+            for d in directives:
+                k, _, v = d.partition("=")
+                k = k.strip()
+                require(k != "immutable", "event stream has immutable cache directive")
+                if k == "max-age":
+                    try:
+                        require(int(v.strip()) <= 0, "event stream has positive max-age")
+                    except ValueError:
+                        raise VerificationError("invalid max-age directive") from None
+            stream = response.fp if hasattr(response, "fp") else response
+            raw_socket = getattr(stream.fp.raw, "_sock", None) if hasattr(stream, "fp") and hasattr(stream.fp, "raw") else None
+            FRAME_LIMIT = 64 * 1024
+            received_initial_state = False
+            received_heartbeat = False
+            total_bytes = 0
+            buffer = bytearray()
+            while not (received_initial_state and received_heartbeat):
+                remaining = deadline - time.monotonic()
+                require(remaining > 0, "request exceeded 15 seconds")
+                if raw_socket:
+                    try:
+                        raw_socket.settimeout(remaining)
+                    except (OSError, AttributeError):
+                        pass
+                try:
+                    chunk = stream.read1(min(4096, MAX_BODY + 1 - total_bytes)) if hasattr(stream, "read1") else stream.read(min(4096, MAX_BODY + 1 - total_bytes))
+                except (OSError, TimeoutError) as error:
+                    if time.monotonic() >= deadline or "timed out" in str(error).lower():
+                        raise VerificationError("request exceeded 15 seconds") from None
+                    raise VerificationError("failed to read from event stream") from None
+                require(bool(chunk), "event stream closed prematurely")
+                total_bytes += len(chunk)
+                require(total_bytes <= MAX_BODY, "response exceeds the static asset size limit")
+                buffer.extend(chunk)
+                while True:
+                    m = re.search(rb"\r?\n\r?\n", buffer)
+                    if not m:
+                        require(len(buffer) <= FRAME_LIMIT, "SSE frame exceeds frame size limit")
+                        break
+                    frame_bytes = bytes(buffer[:m.start()])
+                    del buffer[:m.end()]
+                    require(len(frame_bytes) <= FRAME_LIMIT, "SSE frame exceeds frame size limit")
+                    if not frame_bytes.strip():
+                        continue
+                    event_type = "message"
+                    data_lines = []
+                    for line in frame_bytes.splitlines():
+                        if not line or line.startswith(b":"):
+                            continue
+                        field, _, val = line.partition(b":")
+                        field = field.decode("latin1").strip()
+                        val = val.lstrip(b" ")
+                        if field == "event":
+                            event_type = val.decode("utf-8", errors="replace").strip()
+                        elif field == "data":
+                            data_lines.append(val)
+                    if event_type == "initial_state":
+                        require(not received_initial_state, "duplicate initial_state event")
+                        require(bool(data_lines), "missing data in initial_state event")
+                        payload = b"\n".join(data_lines)
+                        try:
+                            parsed_payload = json.loads(payload.decode("utf-8"))
+                        except (ValueError, UnicodeDecodeError):
+                            raise VerificationError("malformed initial_state payload") from None
+                        require(isinstance(parsed_payload, dict), "initial_state data must be a JSON object")
+                        received_initial_state = True
+                    elif event_type == "stream.heartbeat":
+                        require(received_initial_state, "stream.heartbeat received before initial_state")
+                        require(bool(data_lines), "missing data in stream.heartbeat event")
+                        payload = b"\n".join(data_lines)
+                        try:
+                            parsed_payload = json.loads(payload.decode("utf-8"))
+                        except (ValueError, UnicodeDecodeError):
+                            raise VerificationError("malformed stream.heartbeat payload") from None
+                        require(isinstance(parsed_payload, dict), "stream.heartbeat data must be a JSON object")
+                        received_heartbeat = True
+                        break
 
 def cache_directives(response):
     directives = {}
@@ -479,6 +616,20 @@ class Verifier:
         self.client = Client(origin)
         self.assets = {}
 
+    def backend(self):
+        response = self.client.get("/api/public/v1/transactions?limit=1", headers={"Accept": "application/json"})
+        require(response.status == 200, "transactions API did not return 200")
+        require(response.mime() == "application/json", "transactions API MIME mismatch")
+        require("no-store" in cache_directives(response), "transactions API is not no-store")
+        security(response)
+        try:
+            data = json.loads(response.body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            raise VerificationError("invalid JSON from transactions API") from None
+        require(isinstance(data, dict), "transactions API response must be a JSON object")
+        require(isinstance(data.get("items"), list), "transactions API response missing items list")
+        self.client.stream_events("/api/public/v1/events")
+
     def release(self):
         response = self.client.get("/__release?smoke=" + self.sha)
         require(response.status == 200 and response.mime() == "text/plain", "release status or MIME mismatch")
@@ -553,6 +704,8 @@ class Verifier:
             self.page("/admin/acb-credentials?test=1", credentials=True)
             self.page("/admin/acb-credentials/?test=1", credentials=True)
         self.missing()
+        if self.surface == "viewer":
+            self.backend()
         checksum = "decoded artifact checksums verified" if self.artifact else "NO artifact checksum comparison (rollback artifact unavailable)"
         cache = "; immutable rules omitted by artifact rule-limit fallback" if self.artifact and not self.artifact.immutable else ""
         if self.artifact and (self.artifact.edge_analytics_excluded or self.artifact.edge_security_excluded):
@@ -562,11 +715,12 @@ class Verifier:
             if self.artifact.edge_security_excluded:
                 excluded.append("security bootstrap")
             checksum += f"; allowlisted edge {' and '.join(excluded)} excluded from HTML comparison"
-        return f"PASS {self.surface}: release {self.sha}; HTML, {len(self.assets)} JS/CSS entries, MIME, cache, security and ETag checks; {checksum}{cache}"
+        extra = "; API JSON and SSE heartbeat verified" if self.surface == "viewer" else ""
+        return f"PASS {self.surface}: release {self.sha}; HTML, {len(self.assets)} JS/CSS entries, MIME, cache, security and ETag checks{extra}; {checksum}{cache}"
 
 
-def verify_access(origin):
-    response = Client(origin, follow=False).get("/")
+def check_access_redirect(client, path):
+    response = client.get(path)
     require(response.status == 302, "bank Access must return exactly 302 without a session")
     location = response.header("Location")
     require(len(response.headers.get_all("Location", [])) == 1
@@ -581,6 +735,12 @@ def verify_access(origin):
     except ValueError:
         valid = False
     require(valid, "bank Access redirect destination mismatch")
+
+
+def verify_access(origin):
+    client = Client(origin, follow=False)
+    check_access_redirect(client, "/")
+    check_access_redirect(client, "/api/v1/status")
     return "PASS access: unauthenticated bank 302 to the approved Access login; bank release SHA NOT verified"
 
 

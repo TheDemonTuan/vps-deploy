@@ -8,5 +8,5 @@
   "automatic": false,
   "zone_name": "tuannguyenviet.site",
   "workers": ["acb-web"],
-  "frontend_paths": ["web/", ".github/workflows/", "scripts/verify.sh", "deploy/cloudflare-routes.py", "deploy/verify-frontend.py", "deploy/tests/test_cloudflare_routes.py"]
+  "frontend_paths": ["web/", ".github/workflows/", "scripts/verify.sh", "deploy/cloudflare-routes.py", "deploy/verify-frontend.py", "deploy/tests/test_cloudflare_routes.py", "deploy/tests/test_verify_frontend.py"]
 }

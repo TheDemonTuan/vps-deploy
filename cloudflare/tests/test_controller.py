@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 spec = importlib.util.spec_from_file_location('controller', Path(__file__).parents[1] / 'deploy.py')
@@ -88,6 +89,32 @@ class SourceBoundaryTests(unittest.TestCase):
         self.api.artifact['workflow_run']['head_sha'] = NEW
         with self.assertRaises(controller.Failure):
             controller.resolve(self.api, self.config, 'publish', 42)
+
+    def test_scheduled_resolution_filters_automatic_policy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / 'selections.json'
+            with patch.object(controller, 'GitHub', return_value=self.api):
+                code = controller.main(['resolve', '--app', 'acb', '--mode', 'publish', '--scheduled', '--output', str(output)])
+            self.assertEqual(code, 0)
+            data = json.loads(output.read_text())
+            self.assertEqual(data['include'], [])
+
+            acb_auto = dict(self.config, automatic=True)
+            with patch.object(controller, 'GitHub', return_value=self.api), \
+                 patch.object(controller, 'registration', return_value=acb_auto):
+                code = controller.main(['resolve', '--app', 'acb', '--mode', 'publish', '--scheduled', '--output', str(output)])
+            self.assertEqual(code, 0)
+            data = json.loads(output.read_text())
+            self.assertEqual(len(data['include']), 1)
+            self.assertEqual((data['include'][0]['sha'], data['include'][0]['run_id']), (SHA, 42))
+
+    def test_ineligible_run_skipped_in_scheduled_resolution(self):
+        for field, value in [('status', 'in_progress'), ('conclusion', 'failure')]:
+            original = self.api.run[field]
+            self.api.run[field] = value
+            with self.subTest(field=field):
+                self.assertIsNone(controller.resolve(self.api, self.config, 'publish'))
+            self.api.run[field] = original
 
 
 class ArtifactBoundaryTests(unittest.TestCase):
