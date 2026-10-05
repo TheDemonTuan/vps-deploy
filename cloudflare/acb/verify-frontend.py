@@ -365,7 +365,7 @@ def without_edge_beacon(body):
     # HTML bytes and every JS/CSS byte remain authoritative.
     return re.sub(rb"<script\b[^>]*>\s*</script\s*>", replace, body, flags=re.IGNORECASE)
 
-def without_edge_security_bootstrap(body):
+def without_edge_security_bootstrap(body, expected=None):
     pattern = (
         rb"<script>\s*"
         rb"window\.__CF\$cv\$params=\{r:'[0-9a-f]+',t:'[A-Za-z0-9+/=]+',u:'[0-9a-f]{32}',"
@@ -379,9 +379,15 @@ def without_edge_security_bootstrap(body):
         return body, False
     match = matches[0]
     start, end = match.start(), match.end()
-    if start > 0 and body[start - 1:start] == b"\n":
+    if start > 0 and body[start - 1:start] in (b"\n", b"\r"):
         start -= 1
-    return body[:start] + body[end:], True
+    elif end < len(body) and body[end:end + 1] in (b"\n", b"\r"):
+        end += 1
+    cleaned = body[:start] + body[end:]
+    if expected and cleaned != expected and cleaned.split() == expected.split():
+        if re.sub(rb">\s+<", rb"><", cleaned) == re.sub(rb">\s+<", rb"><", expected):
+            return expected, True
+    return cleaned, True
 
 
 class Artifact:
@@ -429,7 +435,7 @@ class Artifact:
         if body != expected and path == "/index.html":
             normalized = without_edge_beacon(body)
             beacon_removed = normalized != body
-            normalized, security_removed = without_edge_security_bootstrap(normalized)
+            normalized, security_removed = without_edge_security_bootstrap(normalized, expected)
             if normalized == expected:
                 self.edge_analytics_excluded = beacon_removed
                 self.edge_security_excluded = security_removed
