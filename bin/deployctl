@@ -160,15 +160,27 @@ def run(req_id, cfg, state_dir, locks, profile):
                     raise Failure('RECOVERY_REQUIRED')
                 if req['op'] == 'deploy':
                     if req['component'] == 'app':
-                        transaction(req, state, state_dir, cfg, release, profile, locks)
+                        if profile['registration']['manifest']['strategy'] == 'recreate':
+                            from recreate import transaction as recreate_transaction
+                            recreate_transaction(req, state, state_dir, cfg, release, profile, locks)
+                        else:
+                            transaction(req, state, state_dir, cfg, release, profile, locks)
                     elif req['component'] == 'rtk':
                         rtk_deploy(req, state, state_dir, cfg, release, profile)
                     else:
                         cgw_deploy(req, state, state_dir, cfg, release, profile)
                 elif req['op'] == 'rollback':
-                    transaction(req, state, state_dir, cfg, release, profile, locks)
+                    if profile['registration']['manifest']['strategy'] == 'recreate':
+                        from recreate import rollback as recreate_rollback
+                        recreate_rollback(req, state, state_dir, cfg, release, profile, locks)
+                    else:
+                        transaction(req, state, state_dir, cfg, release, profile, locks)
                 else:
-                    reconcile(req, state, state_dir, cfg, release, profile, locks)
+                    if profile['registration']['manifest']['strategy'] == 'recreate':
+                        from recreate import reconcile as recreate_reconcile
+                        recreate_reconcile(req, state, state_dir, cfg, release, profile, locks)
+                    else:
+                        reconcile(req, state, state_dir, cfg, release, profile, locks)
                 receipt = result(req_id, 'complete', 'complete')
             except Exception as exc:
                 code = exc.code if isinstance(exc, Failure) else 'HOST_IO_ERROR'
@@ -200,19 +212,20 @@ def adopt(cfg, state_dir, locks, profile):
             from core import container, container_digest
             live = container(profile['app'] + '-' + slot, running=True)
             image = container_digest(live, profile['image_repository'])
-            __import__('operations').health(profile, slot, image)
-            _, mh = registered(cfg, profile['registration'])
-            active = {'slot': slot, 'image': image, 'platform_ref': profile['platform_ref'], 'manifest_sha256': mh}
-            other = 'green' if slot == 'blue' else 'blue'
-            try:
-                previous_obj = container(profile['app'] + '-' + other)
-            except Failure as exc:
-                if exc.code != 'COMMAND_FAILED':
-                    raise
+            if slot == 'single':
                 previous = None
             else:
-                previous_image = container_digest(previous_obj, profile['image_repository'])
-                previous = dict(active, slot=other, image=previous_image)
+                __import__('operations').health(profile, slot, image)
+                other = 'green' if slot == 'blue' else 'blue'
+                try:
+                    previous_obj = container(profile['app'] + '-' + other)
+                except Failure as exc:
+                    if exc.code != 'COMMAND_FAILED':
+                        raise
+                    previous = None
+                else:
+                    previous_image = container_digest(previous_obj, profile['image_repository'])
+                    previous = dict(active, slot=other, image=previous_image)
             rtk = None
             if profile['rtk_image_repository'] is not None:
                 name = profile['app'] + '-rtk-rtk-1'
@@ -234,7 +247,7 @@ def adopt(cfg, state_dir, locks, profile):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['submit', 'run', 'status', 'adopt', 'adopt-cgw', 'cleanup-drains'])
+    parser.add_argument('action', choices=['submit', 'run', 'status', 'adopt', 'adopt-cgw', 'cleanup-drains', 'backup'])
     parser.add_argument('--app', required=True)
     parser.add_argument('--request-id')
     parser.add_argument('--strict', action='store_true')
@@ -282,12 +295,20 @@ def main():
             parity = SourceFileLoader('cgw_preflight', str(Path(__file__).resolve().parents[1] / 'install/preflight.py')).load_module()
             parity.adopt_cgw(Path(__file__).resolve().parents[1], cfg, state_dir, profile)
         response = state_status(state_dir, None, cfg, profile)
+    elif args.action == 'backup':
+        require(profile['registration']['manifest']['strategy'] == 'recreate', 'STRATEGY_MISMATCH')
+        with lock(locks / (args.app + '@operation.lock')):
+            from recreate import backup as recreate_backup
+            res = recreate_backup(profile, cfg, state_dir, locks)
+            print(json.dumps(res, sort_keys=True))
+            return 0
     else:
         with lock(locks / (args.app + '@operation.lock')):
             require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')
             trusted_path(state_dir / 'state.json')
-            state = load(state_dir / 'state.json')
-            cleanup(state, state_dir, profile)
+            if profile['registration']['manifest']['strategy'] != 'recreate':
+                state = load(state_dir / 'state.json')
+                cleanup(state, state_dir, profile)
         response = state_status(state_dir, None, cfg, profile)
     print(json.dumps(response, sort_keys=True))
     if args.strict and not response.get('healthy'):

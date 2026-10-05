@@ -135,7 +135,10 @@ def matching(state, profile, expected=None):
     configured = route.route_state(raw, profile)
     require(configured == (active['slot'], state['generation']), 'ROUTE_STATE_MISMATCH')
     require(route.probe(profile) == configured, 'ROUTE_OBSERVED_MISMATCH')
-    health(profile, active['slot'], active['image'])
+    if active['slot'] != 'single':
+        health(profile, active['slot'], active['image'])
+    else:
+        container(profile['app'] + '-single', active['image'], running=True)
     if expected is not None:
         require(configured == expected, 'ROUTE_STATE_MISMATCH')
     return target, raw

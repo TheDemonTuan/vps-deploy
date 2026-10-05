@@ -271,8 +271,11 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                             put(target, content, 0o644)
                     key_file = Path('/home') / ('deploy-' + app) / '.ssh/authorized_keys'
                     old_units = (SYSTEMD / 'vps-deploy-9router-drain.service', SYSTEMD / 'vps-deploy-9router-drain.timer') if app == '9router' else ()
-                    for path in (cfg / 'host.json', cfg / 'app.yml', cfg / 'runtime.env', wrapper, drain, sudo, key_file, *old_units):
+                    rollback_compat_src = destination / 'apps' / app / 'rollback-compatibility.json'
+                    for path in (cfg / 'host.json', cfg / 'app.yml', cfg / 'runtime.env', wrapper, drain, sudo, key_file, *old_units, *([cfg / 'rollback-compatibility.json'] if rollback_compat_src.exists() else [])):
                         backup(path)
+                    if rollback_compat_src.exists():
+                        put(cfg / 'rollback-compatibility.json', rollback_compat_src.read_bytes(), 0o400)
                     if cgw_transition and (state / 'state.json').exists():
                         backup(state / 'state.json')
                     if originals[cfg / 'runtime.env'] is None:
@@ -295,13 +298,23 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                             profile = checked_host(cfg, app_registration(destination, app), host_record)
                             adopt_cgw(destination, cfg, state, profile)
                         run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
+                    else:
+                        from core import host as checked_host
+                        profile = checked_host(cfg, app_registration(destination, app), host_record)
+                        if profile['registration']['manifest']['strategy'] == 'recreate':
+                            run(str(destination / 'bin/deployctl'), 'adopt', '--app', app)
+                            run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
                     run('/usr/bin/bash', str(destination / 'install/install-key.sh'), '--app', app, str(args.public_key))
-                    was_enabled = any(enabled for _, enabled, _ in timers)
-                    run('/usr/bin/systemctl', 'enable' if was_enabled else 'disable', 'vps-deploy-drain@' + app + '.timer')
-                    if app == '9router':
-                        run('/usr/bin/systemctl', 'disable', 'vps-deploy-9router-drain.timer', check=False)
-                    if any(running for _, _, running in timers):
-                        run('/usr/bin/systemctl', 'start', 'vps-deploy-drain@' + app + '.timer')
+                    is_recreate = registration['manifest']['strategy'] == 'recreate'
+                    if not is_recreate:
+                        was_enabled = any(enabled for _, enabled, _ in timers)
+                        run('/usr/bin/systemctl', 'enable' if was_enabled else 'disable', 'vps-deploy-drain@' + app + '.timer')
+                        if app == '9router':
+                            run('/usr/bin/systemctl', 'disable', 'vps-deploy-9router-drain.timer', check=False)
+                        if any(running for _, _, running in timers):
+                            run('/usr/bin/systemctl', 'start', 'vps-deploy-drain@' + app + '.timer')
+                    else:
+                        run('/usr/bin/systemctl', 'disable', 'vps-deploy-drain@' + app + '.timer', check=False)
                     for old_unit in old_units:
                         old_unit.unlink(missing_ok=True)
                     if old_units:
@@ -378,7 +391,7 @@ def main():
     for enrolled in CONFIG.iterdir() if CONFIG.exists() else ():
         if enrolled.name == args.app or not (enrolled / 'host.json').is_file():
             continue
-        for slot in ('blue', 'green'):
+        for slot in ('blue', 'green', 'single'):
             try:
                 value = container(enrolled.name + '-' + slot)
             except Failure as exc:
@@ -389,7 +402,7 @@ def main():
     import route
     selected_profile = json.loads(profile_data(args.app, args.release, binding, host_record, previous))
     selected_profile.update(app=args.app, registration=registration, host_registration=host_record)
-    route.preflight(Path(selected_profile['dynamic_dir']), selected_profile)
+    route.preflight(Path(selected_profile['dynamic_dir']), selected_profile, release_root=root)
     for name in ('vps-deploy-drain@.service', 'vps-deploy-drain@.timer'):
         unit_file = SYSTEMD / name
         if optional_trusted(unit_file):

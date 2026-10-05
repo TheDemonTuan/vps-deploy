@@ -130,19 +130,25 @@ def app_registration(release, app):
         names = caller[key]
         require(type(names) is list and names and all(type(name) is str and re.fullmatch(r'[A-Za-z0-9_-]+\.yml', name) for name in names) and len(names) == len(set(names)), 'REGISTRY_POLICY')
     policy = value['manifest']
-    fields(policy, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route', 'rtk', 'cgw'}, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route'})
+    fields(policy, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route', 'rtk', 'cgw', 'build'}, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route'})
     fixture_image = fixture_authorized() and value['host'] == 'fixture-local' and app == 'demo' and policy['image'] == 'localhost:5000/demo'
-    require(type(policy['version']) is int and policy['version'] == 1 and policy['app'] == app and policy['strategy'] == 'blue-green' and policy['platform'] == 'linux/arm64' and type(policy['image']) is str and (re.fullmatch(r'ghcr\.io/[a-z0-9./_-]+', policy['image']) or fixture_image), 'REGISTRY_POLICY')
+    require(type(policy['version']) is int and policy['version'] == 1 and policy['app'] == app and policy['strategy'] in ('blue-green', 'recreate') and policy['platform'] == 'linux/arm64' and type(policy['image']) is str and (re.fullmatch(r'ghcr\.io/[a-z0-9./_-]+', policy['image']) or fixture_image), 'REGISTRY_POLICY')
     for section, keys in (('runtime', {'port'}), ('health', {'path', 'timeout_seconds'}), ('route', {'timeout_seconds'})):
         fields(policy[section], keys, keys)
     require(type(policy['runtime']['port']) is int and 1 <= policy['runtime']['port'] <= 65535, 'REGISTRY_POLICY')
     path_value = policy['health']['path']
     require(type(path_value) is str and HEALTH_PATH.fullmatch(path_value) and '..' not in path_value.split('/'), 'REGISTRY_POLICY')
     require(all(type(policy[section]['timeout_seconds']) is int and policy[section]['timeout_seconds'] == bound for section, bound in (('health', 60), ('route', 30))), 'REGISTRY_POLICY')
+    if 'build' in policy:
+        fields(policy['build'], {'dockerfile'}, {'dockerfile'})
+        dockerfile = policy['build']['dockerfile']
+        require(type(dockerfile) is str and dockerfile and not dockerfile.startswith('/') and '..' not in dockerfile.split('/') and re.fullmatch(r'(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+', dockerfile), 'REGISTRY_POLICY')
     if 'rtk' in policy:
+        require(policy['strategy'] == 'blue-green', 'REGISTRY_POLICY')
         fields(policy['rtk'], {'image'}, {'image'})
         require(type(policy['rtk']['image']) is str and re.fullmatch(r'ghcr\.io/[a-z0-9./_-]+', policy['rtk']['image']), 'REGISTRY_POLICY')
     if 'cgw' in policy:
+        require(policy['strategy'] == 'blue-green', 'REGISTRY_POLICY')
         fields(policy['cgw'], {'image'}, {'image'})
         require(app == '9router' and policy['cgw']['image'] == 'ghcr.io/thedemontuan/9router-cgw-runtime', 'REGISTRY_POLICY')
     runtime = value['runtime']
@@ -223,7 +229,7 @@ def resource_collisions(host_record):
         require(key not in occupied, 'RESOURCE_COLLISION')
         occupied.add(key)
     for app, binding in host_record['apps'].items():
-        for kind, value in (('user', 'deploy-' + app), ('work_dir', binding['work_dir']), ('project', binding['compose_project']), ('route', binding['route_name']), ('host', binding['api_host']), ('wrapper', 'vps-deploy-' + app), ('wrapper', 'vps-deploy-drain-' + app), ('container', app + '-blue'), ('container', app + '-green'), ('network', binding['edge_network'])):
+        for kind, value in (('user', 'deploy-' + app), ('work_dir', binding['work_dir']), ('project', binding['compose_project']), ('route', binding['route_name']), ('host', binding['api_host']), ('wrapper', 'vps-deploy-' + app), ('wrapper', 'vps-deploy-drain-' + app), ('container', app + '-blue'), ('container', app + '-green'), ('container', app + '-single'), ('volume', app + '-data'), ('network', binding['edge_network'])):
             reserve(kind, value)
         for key in ('dashboard_host', 'dashboard_alias_host'):
             if binding[key]:

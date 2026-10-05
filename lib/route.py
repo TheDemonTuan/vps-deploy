@@ -41,13 +41,19 @@ def route_state(raw, profile):
         header = obj['http']['middlewares'][app + '-route-generation']['headers']['customResponseHeaders'][header_name]
         require(type(urls) is list and len(urls) == 1 and type(urls[0]) is dict and set(urls[0]) == {'url'}, 'ROUTE_SHAPE')
         url = urls[0]['url']
-        expected = rf'http://{re.escape(app)}-(blue|green):{profile["registration"]["manifest"]["runtime"]["port"]}'
-        found = re.fullmatch(expected, url) if type(url) is str else None
-        require(found is not None and type(header) is str and re.fullmatch('[0-9a-f]{32}', header), 'ROUTE_SHAPE')
-        return found.group(1), header
+        strategy = profile['registration']['manifest'].get('strategy', 'blue-green')
+        if strategy == 'recreate':
+            expected = rf'http://{re.escape(app)}-single:{profile["registration"]["manifest"]["runtime"]["port"]}'
+            found = re.fullmatch(expected, url) if type(url) is str else None
+            require(found is not None and type(header) is str and re.fullmatch('[0-9a-f]{32}', header), 'ROUTE_SHAPE')
+            return 'single', header
+        else:
+            expected = rf'http://{re.escape(app)}-(blue|green):{profile["registration"]["manifest"]["runtime"]["port"]}'
+            found = re.fullmatch(expected, url) if type(url) is str else None
+            require(found is not None and type(header) is str and re.fullmatch('[0-9a-f]{32}', header), 'ROUTE_SHAPE')
+            return found.group(1), header
     except (KeyError, TypeError):
         raise Failure('ROUTE_SHAPE') from None
-
 
 def route_files(directory):
     files = {}
@@ -59,7 +65,7 @@ def route_files(directory):
     return files
 
 
-def preflight(directory, profile):
+def preflight(directory, profile, release_root=None):
     trusted_path(directory, directory=True)
     target = directory / profile['route_name']
     files = route_files(directory)
@@ -67,7 +73,7 @@ def preflight(directory, profile):
     raw = checked_file(target, managed=True)
     slot, generation = route_state(raw, profile)
     observed = parse_yaml(raw)['http']
-    expected = parse_yaml(render(profile, slot, generation))['http']
+    expected = parse_yaml(render(profile, slot, generation, release_root=release_root))['http']
     require(observed == expected, 'ROUTE_SECURITY_SHAPE')
     owned = {name for category in ('routers', 'services', 'middlewares') for name in expected.get(category, {})}
     shared_middlewares = set()
@@ -97,16 +103,41 @@ def preflight(directory, profile):
 
 
 def probe(profile):
-    try:
-        trust = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C'}
-        if profile.get('fixture_ci'):
-            trust['CURL_CA_BUNDLE'] = profile['ca_bundle']
-        line = command('/usr/bin/bash', str(Path(__file__).with_name('traefik.sh')), 'probe', profile['api_host'], profile['registration']['manifest']['health']['path'], profile['registration']['route']['generation_header'], timeout=8, env=trust)
-        slot, generation = line.strip().split()
-        require(slot in ('blue', 'green') and re.fullmatch('[0-9a-f]{32}', generation), 'PUBLIC_HEALTH')
-        return slot, generation
-    except (Failure, ValueError):
-        raise Failure('PUBLIC_HEALTH') from None
+    strategy = profile['registration']['manifest']['strategy']
+    if strategy == 'recreate':
+        traefik = profile['host_registration']['traefik']['container']
+        gen_hdr = profile['registration']['route']['generation_header'].lower()
+        cmd = ['docker', 'exec', traefik, 'wget', '-S', '-O', '-', '--header=Host: ' + profile['app'] + '.internal.invalid', 'http://127.0.0.1:18080/api/health']
+        import subprocess
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        require(proc.returncode == 0, 'PUBLIC_HEALTH')
+        lines = proc.stderr.splitlines()
+        require(any('HTTP/1.1 200' in l or 'HTTP/2 200' in l for l in lines), 'PUBLIC_HEALTH')
+        generation = None
+        for l in lines:
+            if ':' in l:
+                k, _, v = l.partition(':')
+                if k.strip().lower() == gen_hdr:
+                    generation = v.strip()
+                    break
+        require(generation and re.fullmatch('[0-9a-f]{32}', generation), 'PUBLIC_HEALTH')
+        try:
+            data = json.loads(proc.stdout)
+            require(data.get('ok') is True and data.get('deployment_slot') == 'single', 'PUBLIC_HEALTH')
+        except (ValueError, TypeError):
+            raise Failure('PUBLIC_HEALTH') from None
+        return 'single', generation
+    else:
+        try:
+            trust = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C'}
+            if profile.get('fixture_ci'):
+                trust['CURL_CA_BUNDLE'] = profile['ca_bundle']
+            line = command('/usr/bin/bash', str(Path(__file__).with_name('traefik.sh')), 'probe', profile['api_host'], profile['registration']['manifest']['health']['path'], profile['registration']['route']['generation_header'], timeout=8, env=trust)
+            slot, generation = line.strip().split()
+            require(slot in ('blue', 'green') and re.fullmatch('[0-9a-f]{32}', generation), 'PUBLIC_HEALTH')
+            return slot, generation
+        except (Failure, ValueError):
+            raise Failure('PUBLIC_HEALTH') from None
 
 
 def ack(profile, expected, timeout=30):
@@ -123,8 +154,11 @@ def ack(profile, expected, timeout=30):
     raise Failure('ROUTE_ACK_TIMEOUT')
 
 
-def render(profile, slot, generation):
-    adapter = Path('/opt/vps-deploy/releases') / profile['platform_ref'] / 'apps' / profile['app'] / 'adapter.sh'
+def render(profile, slot, generation, release_root=None):
+    if release_root is not None:
+        adapter = Path(release_root) / 'apps' / profile['app'] / 'adapter.sh'
+    else:
+        adapter = Path('/opt/vps-deploy/releases') / profile['platform_ref'] / 'apps' / profile['app'] / 'adapter.sh'
     trusted_path(adapter)
     raw = command('/usr/bin/bash', str(adapter), slot, generation, profile['dashboard_host'], profile['dashboard_alias_host'], profile['api_host']).encode()
     require(route_state(raw, profile) == (slot, generation), 'ROUTE_SHAPE')

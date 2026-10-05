@@ -1,0 +1,28 @@
+version: 1
+app: opendesign
+host: oracle-main
+caller:
+  repository: TheDemonTuan/open-design
+  ref: refs/heads/main
+  refs: [refs/heads/main]
+  config: .deploy/app.yml
+  build_workflows: [deploy.yml]
+  deploy_workflows: [deploy.yml, deploy-ops.yml]
+  security_workflows: [deploy.yml]
+manifest:
+  version: 1
+  app: opendesign
+  strategy: recreate
+  image: ghcr.io/thedemontuan/opendesign
+  platform: linux/arm64
+  build:
+    dockerfile: deploy/Dockerfile
+  runtime: {port: 7456}
+  health: {path: /api/health, timeout_seconds: 60}
+  route: {timeout_seconds: 30}
+runtime:
+  allowed_env: [OD_API_TOKEN, OD_ALLOWED_ORIGINS, NODE_OPTIONS, OPEN_DESIGN_MEM_LIMIT]
+  required_env: [OD_API_TOKEN, OD_ALLOWED_ORIGINS]
+route:
+  generation_header: X-OpenDesign-Route-Generation
+  required_middlewares: [tunnel-only, crowdsec-ip]
