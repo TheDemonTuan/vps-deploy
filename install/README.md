@@ -121,18 +121,20 @@ on another host and detection of another cookie. Production config validation an
 CrowdSec restart succeeded; root-only backups were retained. No active matching
 client decision remained to delete. Browser acceptance still requires real traffic.
 
-The subsequent message-persistence alert matched HTML/code in `ARGS.json.content`
-against CRS 921130, 932230, 933120 and 941100/110/160/180/190/260. The explicit
-message-content rule excludes only that argument from these observed rules on
-PUT of the exact project/conversation/message endpoint on the OpenDesign host.
-Query arguments, other JSON fields and other endpoints remain inspected. Native
-CrowdSec replay proved baseline XSS detection, content-target exclusion, and
-retained detection in another JSON field, another endpoint and query input.
-Direct production installation passed config validation/restart with backups;
-CrowdSec/bouncer/firewalld and strict application health remained active. The
-same client's cascading 403-bf alert was observed on 9Router; no matching active
-decision remained when checked after apply. Do not claim browser acceptance
-without post-fix traffic, or broaden exclusions to unobserved fields/rules.
+Message persistence intentionally stores arbitrary HTML/code/file references. An
+initial per-rule `json.content` exclusion fixed observed XSS/RCE signatures but
+later CRS 930120 matched file references in the same field. That policy has been
+removed rather than extended into an endless list of signature exceptions.
+
+`local/opendesign-message-body` now disables body inspection in both phases only
+for PUT of the exact project/conversation/message endpoint on the OpenDesign
+host. Method policy, URI/query, headers/cookies, IP reputation, other endpoints,
+Cloudflare Access and firewall remain enforced. **Tradeoff:** all JSON fields in
+this endpoint's body bypass WAF signatures, so daemon authorization/schema checks
+remain responsible for these writes. Native CrowdSec proved HTML/file-reference
+body exclusion while query XSS and other-endpoint/other-host body XSS/LFI remained
+detected. Direct config validation/restart passed with root-only backups; the
+superseded rule/config were removed. Browser acceptance requires post-fix traffic.
 
 
 
