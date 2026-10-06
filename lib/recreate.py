@@ -21,6 +21,7 @@ from core import (
     fault,
     image_id,
     inspect,
+    load,
     lock,
     require,
     save,
@@ -63,21 +64,32 @@ const req = http.request(options, (res) => {{
     }});
 }});
 req.on('error', err => {{
-    console.error(err);
+    console.log(JSON.stringify({{ error: err.code }}));
     process.exit(1);
 }});
 if (body !== 'null') req.write(body);
+req.on('timeout', () => req.destroy(new Error('Deployment API request timed out')));
 req.end();
 """
     cmd = ['docker', 'exec', container_id, 'node', '-e', script]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
-    require(proc.returncode == 0, 'DEPLOYMENT_EXEC_FAILED')
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise Failure('DEPLOYMENT_TIMEOUT') from exc
+    if proc.returncode != 0:
+        try:
+            error = json.loads(proc.stdout.strip())
+        except ValueError:
+            error = None
+        if isinstance(error, dict) and error.get('error') == 'ECONNREFUSED':
+            raise Failure('DEPLOYMENT_CONNECTION_REFUSED')
+        raise Failure('DEPLOYMENT_EXEC_FAILED')
     try:
         res = json.loads(proc.stdout.strip())
         status = res['status']
         data = json.loads(res['body']) if res['body'] else {}
         return status, data
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, TypeError):
         raise Failure('DEPLOYMENT_RESPONSE_MALFORMED')
 
 def get_volume_mountpoint(vol_name):
@@ -107,8 +119,31 @@ def fence(profile, operation_id):
     require(status == 200, 'DEPLOYMENT_FENCE_FAILED')
     return data
 
+def wait_api_ready(profile, timeout=120):
+    cname = container_name(profile)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            status, data = internal_call(cname, 'GET', '/api/deployment/status', timeout=min(10, remaining))
+        except Failure as exc:
+            if exc.code not in ('DEPLOYMENT_CONNECTION_REFUSED', 'DEPLOYMENT_TIMEOUT'):
+                raise
+        else:
+            require(status == 200, 'DEPLOYMENT_STATUS_FAILED')
+            require(isinstance(data, dict), 'DEPLOYMENT_RESPONSE_MALFORMED')
+            require(time.monotonic() < deadline, 'DEPLOYMENT_READINESS_TIMEOUT')
+            return status, data
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(2, remaining))
+    raise Failure('DEPLOYMENT_READINESS_TIMEOUT')
+
 def resume(profile, operation_id):
     cname = container_name(profile)
+    wait_api_ready(profile)
     status, data = internal_call(cname, 'POST', '/api/deployment/resume', {'operationId': operation_id})
     require(status in (200, 404), 'DEPLOYMENT_RESUME_FAILED')
     return data
@@ -124,10 +159,7 @@ def wait_idle_and_quiesce(profile, operation_id, timeout=120):
                 return q_data
         time.sleep(2)
     # Deadline reached without idle: resume admission and fail deployment
-    try:
-        resume(profile, operation_id)
-    except Exception:
-        pass
+    resume(profile, operation_id)
     raise Failure('RECREATE_BUSY')
 
 def check_sqlite_integrity(mountpoint):
@@ -319,7 +351,7 @@ def transaction(req, state, state_dir, cfg, release, profile, locks):
         fault(profile, 'candidate_started')
 
         # Check candidate internal state: accepting should still be false
-        status, sdata = internal_call(cname, 'GET', '/api/deployment/status')
+        status, sdata = wait_api_ready(profile)
         require(status == 200 and sdata.get('accepting') is False, 'CANDIDATE_NOT_FENCED')
         check_sqlite_integrity(get_volume_mountpoint(volume_name(profile)))
     except Exception as exc:
@@ -451,7 +483,7 @@ def rollback(req, state, state_dir, cfg, release, profile, locks):
         save(state_dir / 'state.json', state)
         fault(profile, 'candidate_started')
 
-        status, sdata = internal_call(cname, 'GET', '/api/deployment/status')
+        status, sdata = wait_api_ready(profile)
         require(status == 200 and sdata.get('accepting') is False, 'CANDIDATE_NOT_FENCED')
         check_sqlite_integrity(get_volume_mountpoint(volume_name(profile)))
     except Exception as exc:
@@ -519,10 +551,7 @@ def reconcile(req, state, state_dir, cfg, release, profile, locks):
         target = intent['target_entry']
         container(cname, target['image'], running=True)
         matching(state, profile)
-        try:
-            resume(profile, req_id)
-        except Exception:
-            pass
+        resume(profile, req_id)
         state['operation'] = None
         state['revision'] += 1
         save(state_dir / 'state.json', state)
@@ -567,10 +596,7 @@ def reconcile(req, state, state_dir, cfg, release, profile, locks):
         if c_info and not c_info['State']['Running']:
             # Restart old container on intact volume
             compose(release, profile, cfg, old['image'], 'single', False, 'up', '-d', '--no-deps', '--pull', 'never', cname)
-        try:
-            resume(profile, req_id)
-        except Exception:
-            pass
+        resume(profile, req_id)
         state['operation'] = None
         state['revision'] += 1
         save(state_dir / 'state.json', state)
@@ -592,10 +618,7 @@ def backup(profile, cfg, state_dir, locks):
         tar_path, chk = snapshot_data_volume(profile, state_dir, backup_id, old['image'], 'backup')
     finally:
         compose(release, profile, cfg, old['image'], 'single', False, 'up', '-d', '--no-deps', '--pull', 'never', cname)
-        try:
-            resume(profile, backup_id)
-        except Exception:
-            pass
+        resume(profile, backup_id)
 
     prune_backups(state_dir, profile, keep=7)
     return {'backupId': backup_id, 'tarPath': tar_path, 'checksum': chk}

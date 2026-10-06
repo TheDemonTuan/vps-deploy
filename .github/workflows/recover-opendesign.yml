@@ -1,0 +1,125 @@
+name: Recover fixed OpenDesign transaction
+on:
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: Reviewed OpenDesign main commit (40 lowercase hexadecimal characters)
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: platform-activate-opendesign
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      platform_ref: ${{ steps.inputs.outputs.platform_ref }}
+      app_ref: ${{ steps.inputs.outputs.app_ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install YAML parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+      - name: Validate reviewed inputs without admin credentials
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ github.sha }}
+          APP_REF: ${{ inputs.app_ref }}
+        run: python3 scripts/recover-opendesign.py --platform-ref "$PLATFORM_REF" --app-ref "$APP_REF" --check-inputs
+  recover:
+    needs: validate
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main'
+    environment: platform-admin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install YAML parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+      - name: Revalidate after environment approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ needs.validate.outputs.platform_ref }}
+          APP_REF: ${{ needs.validate.outputs.app_ref }}
+        run: python3 scripts/recover-opendesign.py --platform-ref "$PLATFORM_REF" --app-ref "$APP_REF" --check-inputs
+      - name: Recover using temporary admin identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ needs.validate.outputs.platform_ref }}
+          APP_REF: ${{ needs.validate.outputs.app_ref }}
+          VPS_PLATFORM_ADMIN_SSH_KEY: ${{ secrets.VPS_PLATFORM_ADMIN_SSH_KEY }}
+          OPENDESIGN_DEPLOY_PUBLIC_KEY: ${{ vars.OPENDESIGN_DEPLOY_PUBLIC_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import tempfile
+          import sys
+          temporary = tempfile.TemporaryDirectory(prefix='platform-admin-', dir=os.environ['RUNNER_TEMP'])
+          try:
+              root = Path(temporary.name)
+              admin = root / 'admin.key'
+              public = root / 'deploy.pub'
+              for path, variable in ((admin, 'VPS_PLATFORM_ADMIN_SSH_KEY'), (public, 'OPENDESIGN_DEPLOY_PUBLIC_KEY')):
+                  value = os.environ.pop(variable, '')
+                  if not value.strip():
+                      with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                          summary.write('\nOpenDesign recovery: stage `credentials`, code `MISSING_CREDENTIAL`.\n')
+                      sys.exit(1)
+                  fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                  with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                      stream.write(value.rstrip('\n') + '\n')
+              result = subprocess.run(['python3', 'scripts/recover-opendesign.py',
+                                       '--platform-ref', os.environ['PLATFORM_REF'], '--app-ref', os.environ['APP_REF'],
+                                       '--admin-key-file', str(admin), '--public-key-file', str(public)],
+                                      capture_output=True, text=True, timeout=1000)
+              if result.returncode:
+                  sys.exit(result.returncode)
+              receipt = json.loads(result.stdout)
+              target = Path(os.environ['RUNNER_TEMP']) / 'recovery-receipt.json'
+              target.write_text(json.dumps(receipt, sort_keys=True) + '\n', encoding='utf-8')
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                  summary.write('\n```json\n' + json.dumps(receipt, sort_keys=True) + '\n```\n')
+          except (OSError, ValueError, subprocess.TimeoutExpired):
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                  summary.write('\nOpenDesign recovery: stage `controller`, code `RECOVERY_IO_ERROR`.\n')
+              sys.exit(1)
+          finally:
+              temporary.cleanup()
+          PY
+      - name: Remove interrupted temporary identities
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          for path in Path(os.environ['RUNNER_TEMP']).glob('platform-admin-*'):
+              if path.is_dir() and not path.is_symlink():
+                  shutil.rmtree(path)
+          PY
+      - name: Upload successful recovery receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opendesign-recovery-${{ github.run_id }}
+          path: ${{ runner.temp }}/recovery-receipt.json
+          if-no-files-found: error

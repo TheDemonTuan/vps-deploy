@@ -68,6 +68,7 @@ def latest_ci(sha):
     require(runs, 'CI_MISSING')
     newest = max(runs, key=lambda item: (item['id'], item.get('run_attempt', 1)))
     require(newest.get('status') == 'completed' and newest.get('conclusion') == 'success', 'CI_NOT_SUCCESSFUL')
+    return newest
 
 
 def check_inputs(platform_ref, app_ref):
@@ -126,7 +127,8 @@ def validate_receipt(value, platform_ref, app_ref):
     return value
 
 
-def activate(platform_ref, app_ref, admin_key, deploy_key, host_record):
+def reviewed_admin(platform_ref, app_ref, admin_key, deploy_key, host_record, entry, validate_receipt,
+                   transport_error):
     require(admin_key.is_file() and not admin_key.is_symlink() and
             stat.S_IMODE(admin_key.stat().st_mode) == 0o600, 'UNSAFE_ADMIN_KEY')
     encoded = base64.b64encode(public_key(deploy_key)).decode('ascii')
@@ -145,7 +147,7 @@ def activate(platform_ref, app_ref, admin_key, deploy_key, host_record):
                '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4',
                '-T', 'opc@' + address,
                'sudo -n /usr/bin/python3 - ' + platform_ref + ' ' + app_ref + ' ' + encoded]
-        answer = run(ssh, input=(ROOT / 'install/activate-reviewed-release.py').read_bytes(), timeout=960)
+        answer = run(ssh, input=(ROOT / 'install' / entry).read_bytes(), timeout=960)
         if answer.returncode:
             # Only expose a bounded stage/code from our remote entry, never SSH stderr or env output.
             try:
@@ -153,9 +155,14 @@ def activate(platform_ref, app_ref, admin_key, deploy_key, host_record):
                 stage, code = failure['stage'], failure['error_code']
                 require(re.fullmatch(r'[a-z_]{1,40}', stage) and re.fullmatch(r'[A-Z_]{1,64}', code), 'REMOTE_FAILED')
             except (ValueError, KeyError, TypeError, Failure):
-                raise Failure('SSH_ACTIVATION_FAILED') from None
+                raise Failure(transport_error) from None
             raise Failure(stage.upper() + ':' + code)
         return validate_receipt(json.loads(answer.stdout), platform_ref, app_ref)
+
+
+def activate(platform_ref, app_ref, admin_key, deploy_key, host_record):
+    return reviewed_admin(platform_ref, app_ref, admin_key, deploy_key, host_record,
+                          'activate-reviewed-release.py', validate_receipt, 'SSH_ACTIVATION_FAILED')
 
 
 def summary(stage, code):

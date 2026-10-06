@@ -31,6 +31,14 @@ route bytes and runtime environment hash/ownership/mode remained unchanged.
 The active deployment record may retain the old platform until the next image
 deployment; do not edit state to force a match.
 
+Singleton recreate admission and resume wait up to 120 seconds for the internal
+deployment API after startup. A monotonic deadline bounds each probe and the
+two-second retry interval. Only structured connection refusal and probe timeout
+are startup retries; HTTP authentication/non-200 responses, malformed JSON and
+other execution failures fail visibly. Readiness does not replace candidate
+fencing or SQLite checks. Failed readiness or resume retains the pending operation
+for reconciliation; it must not be reported as a healthy completed deployment.
+
 Only after a successful receipt, update all application action refs and
 `platform-ref` inputs together to the activated SHA. Preserve Cloudflare Access,
 CrowdSec, Traefik and port isolation. On disconnect, inspect profile and strict
