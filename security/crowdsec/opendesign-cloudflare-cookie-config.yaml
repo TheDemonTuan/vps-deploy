@@ -1,0 +1,3 @@
+name: local/opendesign-cloudflare-cookie
+outofband_rules:
+  - local/opendesign-cloudflare-cookie-target

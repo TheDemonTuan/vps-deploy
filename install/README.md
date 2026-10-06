@@ -109,6 +109,19 @@ and no active decision for the reported client IP. Temporary admin secret was
 revoked and absence verified. Authenticated browser interaction remains a separate
 acceptance check; absence of traffic is not proof of no future false positives.
 
+On 2026-10-06, a separate post-login false positive matched CRS 930120 against
+`REQUEST_COOKIES.cf_clearance` on ordinary OpenDesign GET requests. With explicit
+operator authorization for direct VPS changes, the two reviewed cookie-target
+files under `security/crowdsec/` were installed and their configuration prepended
+to AppSec acquisition before CRS. The seclang runtime exclusion removes only
+`REQUEST_COOKIES:cf_clearance` from rule 930120 on the exact OpenDesign host.
+Other cookies, request arguments/body, other hosts and other rules stay inspected.
+Native CrowdSec 1.8.1 proved baseline detection, target-cookie exclusion, detection
+on another host and detection of another cookie. Production config validation and
+CrowdSec restart succeeded; root-only backups were retained. No active matching
+client decision remained to delete. Browser acceptance still requires real traffic.
+
+
 
 
 
