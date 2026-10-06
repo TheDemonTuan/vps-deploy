@@ -53,6 +53,27 @@ unchanged container and runtime environment; the temporary admin secret was
 deleted and its absence verified after completion. This proof does not claim
 that an application image deployment or a provider generation was performed.
 
+### Fixed startup-race recovery
+
+`recover-opendesign.yml` is a protected, main-only recovery entry for the exact
+transaction `gh-37424292784-1-app`, not a general recovery command. It requires
+successful AMD64/ARM64 CI for the dispatched platform SHA, a reviewed application
+main SHA, the enrolled deploy public key and temporary `platform-admin` identity.
+It refuses another pending operation, fence, image, snapshot or route identity.
+Under the existing submit/operation/Traefik locks, reviewed reconciliation restores
+the recorded old image/data, waits for API readiness and resumes the original
+operation. Only the engine's proven restored transition permits one bounded
+continuation to clear the intent; transport errors never trigger blind replay.
+Installed release bytes and enrollment remain unchanged. Use ordinary activation
+after successful recovery; do not patch state or bypass environment approval.
+
+[Recovery run 37426963504](https://github.com/TheDemonTuan/vps-deploy/actions/runs/37426963504)
+exercised platform `806225b42ac720fb9e1af49beb3b2a073563557c` against application
+`bc7372c32407fdf2f13b96edb94e30919d637cac`. Its receipt proves the old digest restored,
+healthy, accepting and operation cleared. The temporary admin secret was revoked
+and absence verified. This recovery proof is not a new-image deployment proof.
+
+
 ## Upgrade 9router
 
 1. Pause all caller workflows (`deploy.yml`, `deploy-ops.yml`, `rtk-sidecar.yml`, and `chatgpt-web-runtime.yml` once enrolled). Wait for pending receipts, transient deployments, and old drain service to finish; reconcile any pending intent using the **old** engine. Capture old `status --app 9router --strict`; compare the active/previous image digests, state revision, route generation, route bytes, volumes, environment names, and long-lived connections. Keep existing route and state untouched. Back up selected-app `/etc/vps-deploy/apps/9router/{host.json,app.yml,runtime.env}`, both `/usr/local/libexec/vps-deploy-{9router,drain-9router}`, sudoers, authorized key, legacy service/timer enable state, and owned route **outside** Traefik's watched directory. Never put private env/key contents in logs.
