@@ -1,0 +1,6 @@
+name: local/opendesign-message-content-target
+seclang_rules:
+  - |-
+    SecRule SERVER_NAME "@streq design.tuannguyenviet.site" "id:10000002,phase:1,pass,nolog,t:none,chain"
+    SecRule REQUEST_METHOD "@streq PUT" "t:none,chain"
+    SecRule REQUEST_URI "@rx ^/api/projects/[A-Za-z0-9_-]+/conversations/[A-Za-z0-9_-]+/messages/[A-Za-z0-9_-]+(?:\?|$)" "t:none,ctl:ruleRemoveTargetById=921130;ARGS:json.content,ctl:ruleRemoveTargetById=932230;ARGS:json.content,ctl:ruleRemoveTargetById=933120;ARGS:json.content,ctl:ruleRemoveTargetById=941100;ARGS:json.content,ctl:ruleRemoveTargetById=941110;ARGS:json.content,ctl:ruleRemoveTargetById=941160;ARGS:json.content,ctl:ruleRemoveTargetById=941180;ARGS:json.content,ctl:ruleRemoveTargetById=941190;ARGS:json.content,ctl:ruleRemoveTargetById=941260;ARGS:json.content"
