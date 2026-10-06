@@ -70,6 +70,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
           import subprocess
           import tempfile
@@ -84,6 +85,7 @@ jobs:
                   if not value.strip():
                       with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
                           summary.write('\nOpenDesign WAF tune: stage `credentials`, code `MISSING_CREDENTIAL`.\n')
+                      print('OpenDesign WAF tune: stage credentials, code MISSING_CREDENTIAL', flush=True)
                       sys.exit(1)
                   fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                   with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -93,6 +95,16 @@ jobs:
                                        '--admin-key-file', str(admin), '--public-key-file', str(public)],
                                       capture_output=True, text=True, timeout=1000)
               if result.returncode:
+                  failure = {'stage': 'controller', 'error_code': 'WAF_TUNE_IO_ERROR'}
+                  try:
+                      candidate = json.loads(result.stderr)
+                      if (type(candidate) is dict and set(candidate) == {'stage', 'error_code'} and
+                              type(candidate['stage']) is str and re.fullmatch(r'[a-z_]{1,40}', candidate['stage']) and
+                              type(candidate['error_code']) is str and re.fullmatch(r'[A-Z_]{1,64}(?::[A-Z_]{1,64})?', candidate['error_code'])):
+                          failure = candidate
+                  except (ValueError, TypeError):
+                      pass
+                  print('OpenDesign WAF tune: stage ' + failure['stage'] + ', code ' + failure['error_code'], flush=True)
                   sys.exit(result.returncode)
               receipt = json.loads(result.stdout)
               target = Path(os.environ['RUNNER_TEMP']) / 'waf-tune-receipt.json'
@@ -102,6 +114,7 @@ jobs:
           except (OSError, ValueError, subprocess.TimeoutExpired):
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
                   summary.write('\nOpenDesign WAF tune: stage `controller`, code `WAF_TUNE_IO_ERROR`.\n')
+              print('OpenDesign WAF tune: stage controller, code WAF_TUNE_IO_ERROR', flush=True)
               sys.exit(1)
           finally:
               temporary.cleanup()
