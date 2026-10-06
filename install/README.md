@@ -99,6 +99,17 @@ guarded unchanged. Workflow failures print only validated stage/error-code token
 never raw subprocess stderr or credentials. Revoke the temporary admin secret in
 the terminal-run monitor's `finally`, including failed/cancelled runs.
 
+[Production run 37438319293](https://github.com/TheDemonTuan/vps-deploy/actions/runs/37438319293)
+applied `local/opendesign-crs-scope` from platform
+`cf4639642480fe71d71b7912b834effe27b60584` after native baseline/candidate and
+negative controls passed. Receipt confirms security retained and application
+profile/container/runtime environment unchanged. Read-only checks confirmed the
+scope loaded, CrowdSec/firewall bouncer/firewalld active, strict application health
+and no active decision for the reported client IP. Temporary admin secret was
+revoked and absence verified. Authenticated browser interaction remains a separate
+acceptance check; absence of traffic is not proof of no future false positives.
+
+
 
 
 ## Upgrade 9router
