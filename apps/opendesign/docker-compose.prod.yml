@@ -21,7 +21,8 @@ services:
       OD_PORT: "7456"
       OD_WEB_PORT: "7456"
       OD_DEPLOYMENT_SLOT: single
-      OD_API_TOKEN: ${OD_API_TOKEN:?OD_API_TOKEN must be set}
+      OD_API_TOKEN: ${OD_API_TOKEN:-}
+      OD_DISABLE_API_AUTH: ${OD_DISABLE_API_AUTH:-0}
       OD_ALLOWED_ORIGINS: ${OD_ALLOWED_ORIGINS:-https://design.tuannguyenviet.site}
     volumes:
       - opendesign-data:/app/.od:rw

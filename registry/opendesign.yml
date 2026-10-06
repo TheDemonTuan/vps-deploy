@@ -21,8 +21,8 @@ manifest:
   health: {path: /api/health, timeout_seconds: 60}
   route: {timeout_seconds: 30}
 runtime:
-  allowed_env: [OD_API_TOKEN, OD_ALLOWED_ORIGINS, NODE_OPTIONS, OPEN_DESIGN_MEM_LIMIT]
-  required_env: [OD_API_TOKEN, OD_ALLOWED_ORIGINS]
+  allowed_env: [OD_API_TOKEN, OD_ALLOWED_ORIGINS, NODE_OPTIONS, OPEN_DESIGN_MEM_LIMIT, OD_DISABLE_API_AUTH]
+  required_env: [OD_ALLOWED_ORIGINS]
 route:
   generation_header: X-OpenDesign-Route-Generation
   required_middlewares: [tunnel-only, crowdsec-ip]
