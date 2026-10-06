@@ -19,6 +19,45 @@ from core import Failure, app_registration, host_registration, load, save
 IMAGE = 'ghcr.io/thedemontuan/9router-cgw-runtime@sha256:' + 'c' * 64
 
 
+class RecreateEnrollment(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.runtime = Path(self.tmp.name) / 'runtime.env'
+        self.registration = app_registration(ROOT, 'opendesign')
+        self.binding = host_registration(ROOT, 'oracle-main')['apps']['opendesign']
+        self.runtime.write_text(''.join(key + '=fixture-only\n' for key in self.registration['runtime']['required_env']))
+        self.live = {'State': {'Running': True}, 'Config': {'Env': ['OD_DISABLE_API_AUTH=1']},
+                     'NetworkSettings': {'Networks': {'edge-opendesign': {}}},
+                     'Mounts': [{'Type': 'volume', 'Destination': '/app/data', 'Name': 'opendesign-data'}]}
+        self.composed = {'services': {'opendesign-single': {
+            'container_name': 'opendesign-single', 'environment': {'OD_DISABLE_API_AUTH': '1'},
+            'networks': ['edge'], 'volumes': [{'type': 'volume', 'target': '/app/data', 'source': 'opendesign-data'}]}},
+            'networks': {'edge': {'name': 'edge-opendesign'}}}
+
+    def check(self):
+        with mock.patch('preflight.container', return_value=self.live), \
+                mock.patch('preflight.container_digest', return_value='fixture@sha256:' + 'a' * 64), \
+                mock.patch('preflight.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(self.composed).encode())):
+            return preflight.check(ROOT, 'opendesign', self.registration, self.binding, self.runtime,
+                                   {'platform_ref': 'a' * 40})
+
+    def test_recreate_single_service_preserves_live_parity(self):
+        self.check()
+        self.composed['services']['opendesign-single']['environment']['OD_DISABLE_API_AUTH'] = '0'
+        with self.assertRaisesRegex(Failure, 'COMPOSE_PARITY:env:OD_DISABLE_API_AUTH'):
+            self.check()
+
+    def test_recreate_rejects_extra_services_and_published_ports(self):
+        self.composed['services']['opendesign-blue'] = copy.deepcopy(self.composed['services']['opendesign-single'])
+        with self.assertRaisesRegex(Failure, 'COMPOSE_POLICY'):
+            self.check()
+        del self.composed['services']['opendesign-blue']
+        self.composed['services']['opendesign-single']['ports'] = [{'published': '7456', 'target': 7456}]
+        with self.assertRaisesRegex(Failure, 'COMPOSE_POLICY'):
+            self.check()
+
+
 class GatewayEnrollment(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -84,7 +84,8 @@ def check(root, app, registration, binding, runtime, previous, *, cgw_transition
     require(result.returncode == 0, 'COMPOSE_POLICY')
     composed = json.loads(result.stdout)
     services = composed['services']
-    require(set(services) == {app + '-blue', app + '-green'}, 'COMPOSE_POLICY')
+    expected_services = {app + '-single'} if strategy == 'recreate' else {app + '-blue', app + '-green'}
+    require(set(services) == expected_services, 'COMPOSE_POLICY')
     require(all(not service.get('ports') for service in services.values()), 'COMPOSE_POLICY')
     for service in services.values():
         require(all(mount.get('type') == 'volume' or mount.get('type') == 'bind' and mount.get('source') in allowed_binds and mount.get('read_only') is True for mount in service.get('volumes', [])), 'COMPOSE_POLICY')
