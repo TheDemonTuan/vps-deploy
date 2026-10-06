@@ -8,7 +8,6 @@ services:
       - "no-new-privileges:true"
     cap_drop:
       - ALL
-    pids_limit: 256
     tmpfs:
       - "/tmp:rw,noexec,nosuid,size=256m"
     restart: unless-stopped

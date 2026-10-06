@@ -86,6 +86,26 @@ def main():
     if args.check:
         print('CHECK_OK')
         return 0
+    for d in (CONFIG, cfg, STATE, state_dir, state_dir / 'requests', state_dir / 'backups', LOCKS):
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    # Initialize host.json if absent
+    host_json = cfg / 'host.json'
+    if not host_json.exists():
+        init_profile = dict(binding, platform_ref=args.release, dynamic_dir=host_record['traefik']['dynamic_dir'])
+        save(host_json, init_profile)
+
+    # Copy runtime.env from work_dir if absent
+    runtime_env = cfg / 'runtime.env'
+    if not runtime_env.exists():
+        content = source_env.read_bytes()
+        atomic(runtime_env, content, mode=0o600)
+        runtime_env.chmod(0o600)
+    # Initialize app.yml if absent
+    app_yml = cfg / 'app.yml'
+    if not app_yml.exists():
+        app_yml_content = (root / 'apps' / args.app / 'app.yml').read_bytes() if (root / 'apps' / args.app / 'app.yml').exists() else (Path(binding['work_dir']) / '.deploy/app.yml').read_bytes()
+        atomic(app_yml, app_yml_content, mode=0o600)
 
     profile = host(cfg, registration, host_record)
     profile['platform_ref'] = args.release
@@ -93,10 +113,6 @@ def main():
     cname = args.app + '-single'
     vol_name = args.app + '-data'
     edge_net = binding['edge_network']
-
-    for d in (CONFIG, cfg, STATE, state_dir, state_dir / 'requests', state_dir / 'backups', LOCKS):
-        d.mkdir(parents=True, exist_ok=True, mode=0o700)
-
     with lock(LOCKS / 'install.lock', 30), \
          lock(LOCKS / f"{args.app}@submit.lock", 30), \
          lock(LOCKS / f"{args.app}@operation.lock", 30), \
@@ -145,7 +161,9 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (Failure, OSError, ValueError, TypeError, KeyError) as exc:
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
         code = exc.code if isinstance(exc, Failure) else 'BOOTSTRAP_FAILED'
         print(code, file=sys.stderr)
         sys.exit(1)
