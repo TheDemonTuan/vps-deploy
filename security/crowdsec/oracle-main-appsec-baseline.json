@@ -1,0 +1,19 @@
+{
+  "crowdsecurity/appsec-default": "68e34ef8b7c8aaadca4233a7213f2fce706daf1b670fc1f544c03b0c8b2e7b87",
+  "crowdsecurity/crs": "55530ee07c4c13a8bf54ba65693365b9f66df329662e5a7392fad03fe8452408",
+  "crowdsecurity/appsec-bot-challenge-scoring-balanced": "fa54cfda9b864b02fe148760b30d25167ed7771859d55d4169eb67201ac8ada4",
+  "crowdsecurity/appsec-bot-challenge-scoring": "e5445319b2f281ea5cd9f5420fb6f953fadbebf2a190bd1510d6bf827df16bc8",
+  "crowdsecurity/appsec-bot-challenge-exclude-search-engines": "e921b9cf0f61bb0bc02f978441fdfa95a35be1a08716ee7b45dfce2c0ca1c6d5",
+  "crowdsecurity/appsec-bot-challenge-exclude-ai-crawlers": "fe23f56f3be7836ebe4ff3aa90db030793ff50050770adb6153542b252f1cba4",
+  "crowdsecurity/appsec-bot-challenge-exclude-social": "74df41e346b384429d5820bed3eba8ee5898e3e3524fcea7936e4ba5fd50bd97",
+  "crowdsecurity/appsec-bot-challenge-exclude-monitoring": "f1ef0ba521f3fc4b9e617d57379150a9e0f7ce600d3b5d0b35d46bd91ce814db",
+  "crowdsecurity/appsec-bot-challenge-exclude-crawler-files": "21c72e5fcc8d28ccd5f02131693ea61d18f52335114d9f3fb22dda840eb6b61c",
+  "crowdsecurity/appsec-bot-challenge-exclude-static": "e50eebefcdba3d34e21e49ed4f9316cc593ceb9aebff0e837cab1c766ff14285",
+  "crowdsecurity/appsec-bot-challenge-exclude-api": "be87312554fb67d3918646441419b1918b7af8bb2cd031f4adae6643102342e1",
+  "crowdsecurity/appsec-bot-challenge-exclude-feeds": "b5e1cf24f314948f3b84c219bc77d1ec719e1a8c7d06813b3789107dd6e1eea7",
+  "crowdsecurity/appsec-bot-challenge-exclude-webhooks": "c8fe5051b49396889faadce17858dc445755b5961b1708e00d723e3ac49a2bc2",
+  "local/bot-scope": "19004a5309e37805ea235be1cb5d4882bff54c10ee97df583a9859db6d88ccc5",
+  "local/body-scope": "43dabbe8e3d2b9c59dfd55daa5511e66133121fdafb3155a1c002888a6cd2ff7",
+  "local/beszel-crs-scope": "3582f07051af17526bf7669d7ed94df2ac57e8dae63b1d50ac842263e342f296",
+  "local/transactions-crs-scope": "53aa193fa537cf4416fc1c7899bd63df08a2f26cd931366de49e30d07c96e916"
+}

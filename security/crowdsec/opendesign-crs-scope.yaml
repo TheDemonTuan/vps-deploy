@@ -1,0 +1,20 @@
+# Only the observed app-config PUT false positive and the same method-policy
+# restriction on evidenced design persistence contracts are exempted.
+# Host equality is intentional: do not extend this to sibling sites or ports.
+# Generated UUIDs and client message IDs fit the bounded identifier alphabet.
+# Match URL.Path, not RequestURI: query arguments remain inspected by CRS.
+# Keep all body, XSS, SQLi, traversal and in-band rules active.
+# Hook reference: https://doc.crowdsec.net/docs/appsec/hooks/
+name: local/opendesign-crs-scope
+pre_eval:
+  - filter: >-
+      IsOutBand == true && req.Host == "design.tuannguyenviet.site" &&
+      ((req.Method == "PUT" &&
+        (req.URL.Path == "/api/app-config" ||
+         req.URL.Path matches "^/api/projects/[A-Za-z0-9_-]+/tabs$" ||
+         req.URL.Path matches "^/api/projects/[A-Za-z0-9_-]+/conversations/[A-Za-z0-9_-]+/messages/[A-Za-z0-9_-]+$")) ||
+       (req.Method == "PATCH" &&
+        (req.URL.Path matches "^/api/projects/[A-Za-z0-9_-]+$" ||
+         req.URL.Path matches "^/api/projects/[A-Za-z0-9_-]+/conversations/[A-Za-z0-9_-]+$")))
+    apply:
+      - RemoveOutBandRuleByID(911100)
