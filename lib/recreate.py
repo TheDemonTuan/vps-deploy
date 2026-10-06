@@ -26,7 +26,7 @@ from core import (
     save,
     trusted_path,
 )
-from operations import environment, compose, matching, state_phase, finish, recovered
+from operations import environment, compose, matching, state_phase, finish, recovered, pull
 import route
 
 def container_name(profile):
@@ -253,7 +253,7 @@ def transaction(req, state, state_dir, cfg, release, profile, locks):
     old_hash, old_gen = digest(old_raw), state['generation']
 
     # Pull and verify candidate image before touching runtime
-    image_id(ref)
+    pull(release, profile, cfg, ref, 'single')
 
     snapshot_file = state_dir / 'requests' / req['request_id'] / 'route.snapshot'
     with lock(locks / 'traefik.lock', 60):
@@ -392,7 +392,7 @@ def rollback(req, state, state_dir, cfg, release, profile, locks):
     _, old_raw, _ = route.preflight(route.dynamic(profile), profile)
     old_hash, old_gen = digest(old_raw), state['generation']
 
-    image_id(ref)
+    pull(release, profile, cfg, ref, 'single')
 
     snapshot_file = state_dir / 'requests' / req['request_id'] / 'route.snapshot'
     with lock(locks / 'traefik.lock', 60):
