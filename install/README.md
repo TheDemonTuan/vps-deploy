@@ -73,6 +73,33 @@ exercised platform `806225b42ac720fb9e1af49beb3b2a073563557c` against applicatio
 healthy, accepting and operation cleared. The temporary admin secret was revoked
 and absence verified. This recovery proof is not a new-image deployment proof.
 
+### Scoped OpenDesign method-policy tuning
+
+`tune-opendesign-waf.yml` requires main CI and the same temporary, reviewed
+`platform-admin` transport as activation. It does not activate a platform or image.
+The fixed policy removes out-of-band CRS 911100 only on the exact OpenDesign host
+and five source-evidenced PUT/PATCH configuration/design-persistence contracts.
+All other methods/routes/hosts, in-band rules and body/SQLi/XSS/traversal checks
+remain active; no IP whitelist or decision deletion is performed.
+
+Before touching the two owned configuration files, the remote entry verifies
+existing loaded-policy fingerprints and runs baseline/candidate/native in-band
+controls in a fresh network namespace with fake local credentials and no real
+notification or decision store. It observes rule-hit counters after native
+completion, not HTTP status alone. Its clean GET serialization barrier must have
+an empty body: a GET body triggers CRS 920170 and contaminates the request proof.
+The local native CrowdSec 1.8.1 replay against exported rule assets passed all
+99 baseline/candidate cases and five in-band controls after that correction.
+This is sandbox evidence, not proof of production deployment or browser acceptance.
+
+Only successful smoke permits atomic scope/acquisition replacement, config
+validation and CrowdSec restart/readiness. Failures restore only those two files;
+application profile/container/route/environment and other security config are
+guarded unchanged. Workflow failures print only validated stage/error-code tokens,
+never raw subprocess stderr or credentials. Revoke the temporary admin secret in
+the terminal-run monitor's `finally`, including failed/cancelled runs.
+
+
 
 ## Upgrade 9router
 

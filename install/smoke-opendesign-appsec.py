@@ -212,7 +212,7 @@ def phase(root, acquisition, cases, policy, updated, inband=False):
             completion_metric = ('cs_appsec_inband_parsing_time_seconds_count' if inband else
                                  'cs_appsec_outband_parsing_time_seconds_count')
             barrier = {'host': 'design.tuannguyenviet.site', 'method': 'GET', 'path': '/api/app-config',
-                       'body': '{}', 'content_type': 'application/json'}
+                       'body': '', 'content_type': 'application/json'}
             for case in cases:
                 before = counters(get(metrics_url))
                 answer = send(case)
