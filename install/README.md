@@ -2,6 +2,49 @@
 
 Do not run this procedure until the platform PR's AMD64/ARM64 checks and disposable migration rehearsal pass. The release, app commit, public key, VPS inventory, and caller workflow changes need operator review. This runbook does not authorize a production operation; ACB, Messenger, and the shared Traefik middleware are outside this upgrade. If Oracle host key, network, route, directory, or owner differs from `hosts/oracle-main.yml`, stop; review inventory and publish a corrected platform release rather than overriding policy at runtime.
 
+## Reviewed OpenDesign platform activation
+
+OpenDesign upgrades use **Activate OpenDesign platform**, not a workstation
+installer invocation or a rewritten release/tag. Dispatch `activate-platform.yml`
+on platform `main` with `app_ref` set to the full lowercase 40-character commit
+SHA already merged into `TheDemonTuan/open-design/main`. The dispatch's platform
+SHA must have completed successful `Platform verification` on both architectures;
+PR-only or older successful CI evidence is insufficient.
+
+Configure Environment `platform-admin` with required reviewer `TheDemonTuan`,
+only branch `main`, `can_admins_bypass: false`, and `prevent_self_review: false`.
+Keep the restricted app deploy key unchanged. Set variable
+`OPENDESIGN_DEPLOY_PUBLIC_KEY` to that enrolled Ed25519 public key and provision
+secret `VPS_PLATFORM_ADMIN_SSH_KEY` temporarily for this activation only. Approve
+the environment deployment manually; never approve it programmatically to bypass
+review. The runner removes temporary key files, but the operator must also delete
+the environment secret in a `finally` after the run reaches success/failure/cancel
+and verify its absence using the secret-name list.
+
+The remote entry requires an idle, already enrolled host. It fetches exact clean
+detached commits into private staging, verifies the existing forced-command key,
+and invokes the installer first with `--check` then identical apply arguments.
+Recreate preflight requires the singleton service while retaining environment,
+mount, network and no-published-port parity. A success receipt proves the profile
+selected the reviewed platform, strict health passed, and container/image,
+route bytes and runtime environment hash/ownership/mode remained unchanged.
+The active deployment record may retain the old platform until the next image
+deployment; do not edit state to force a match.
+
+Only after a successful receipt, update all application action refs and
+`platform-ref` inputs together to the activated SHA. Preserve Cloudflare Access,
+CrowdSec, Traefik and port isolation. On disconnect, inspect profile and strict
+status read-only before replaying the same SHAs. `RELEASE_MODIFIED`, key mismatch,
+busy state or invariant drift must fail visibly: do not overwrite releases,
+patch state, rotate keys, or add another rollback mechanism.
+
+Production proof: [run 37415312347](https://github.com/TheDemonTuan/vps-deploy/actions/runs/37415312347)
+activated `840986fe2c98898372ac58de528d1b2606e9c04c` against application
+`1bd710a0c41892b276e2f5e51f32e7d19c8d2095`. Its receipt reports healthy,
+unchanged container and runtime environment; the temporary admin secret was
+deleted and its absence verified after completion. This proof does not claim
+that an application image deployment or a provider generation was performed.
+
 ## Upgrade 9router
 
 1. Pause all caller workflows (`deploy.yml`, `deploy-ops.yml`, `rtk-sidecar.yml`, and `chatgpt-web-runtime.yml` once enrolled). Wait for pending receipts, transient deployments, and old drain service to finish; reconcile any pending intent using the **old** engine. Capture old `status --app 9router --strict`; compare the active/previous image digests, state revision, route generation, route bytes, volumes, environment names, and long-lived connections. Keep existing route and state untouched. Back up selected-app `/etc/vps-deploy/apps/9router/{host.json,app.yml,runtime.env}`, both `/usr/local/libexec/vps-deploy-{9router,drain-9router}`, sudoers, authorized key, legacy service/timer enable state, and owned route **outside** Traefik's watched directory. Never put private env/key contents in logs.
