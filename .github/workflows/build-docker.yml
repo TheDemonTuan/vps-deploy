@@ -180,7 +180,7 @@ jobs:
           import json, sys
           evidence = json.load(open(sys.argv[1], encoding='utf-8'))
           flags = {'nativeToolLoop', 'namespacedTools', 'freeformTools', 'compatibilityV1',
-                   'nestedSubagents', 'profileConcurrency', 'approvalOnceOnly', 'requestScopeIsolation'}
+                   'nestedSubagents', 'profileConcurrency', 'approvalOnceOnly', 'requestScopeIsolation', 'genericToolHandoff'}
           assert set(evidence) == flags | {'protocolVersion', 'upstreamRevision'}
           assert type(evidence['protocolVersion']) is int and evidence['protocolVersion'] == 1
           assert evidence['upstreamRevision'] == 'fa2d2c6c24926078b46eedb2186f69f2e8d548d7'

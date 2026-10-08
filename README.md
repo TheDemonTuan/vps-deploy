@@ -398,3 +398,5 @@ Khi cần kiểm tra hoặc xử lý trực tiếp trên VPS với quyền root:
   ```bash
   /opt/vps-deploy/current/bin/deployctl cleanup-drains --app 9router
   ```
+
+CGW runtime publication requires generated compatibility evidence with `genericToolHandoff: true` in addition to all native harness flags. The publisher rejects missing, false or unknown capability fields; it never adds evidence to compensate for a producer failure.
