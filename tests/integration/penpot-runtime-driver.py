@@ -264,7 +264,12 @@ class Harness:
                          host_key=' '.join(key[:2]),fingerprint=fingerprint))
         inventory['apps'] = {'penpot':inventory['apps']['penpot']}
         self.put(self.release_source/'hosts/fixture-local.yml',yaml.safe_dump(inventory,sort_keys=False),0o644)
-        self.put(CFG/'host.json',json.dumps(dict(inventory['apps']['penpot'],platform_ref=self.platform,
+        # host.json describes an enrolled baseline, so its release must exist
+        # before installer --check validates the previous installation.
+        self.baseline_release = Path('/opt/vps-deploy/releases') / self.f
+        require(not self.baseline_release.exists(), 'OCCUPIED_FIXTURE_RELEASE')
+        shutil.copytree(self.release_source, self.baseline_release)
+        self.put(CFG/'host.json',json.dumps(dict(inventory['apps']['penpot'],platform_ref=self.f,
                  dynamic_dir=str(EDGE/'dynamic'),fixture_ci=True,image_repositories=registry['manifest']['images'],
                  architecture='arm64',ca_bundle=str(EDGE/'cloudflare-ca/origin-ca.pem'),fault_file=str(WORK/'fault'))))
         self.registry = registry
@@ -882,6 +887,8 @@ class Harness:
                 Path(path).unlink(missing_ok=True)
             shutil.rmtree(Path('/opt/vps-deploy/releases')/self.platform,ignore_errors=True)
             self.run('systemctl','daemon-reload',check=False)
+        if hasattr(self, 'baseline_release'):
+            shutil.rmtree(self.baseline_release, ignore_errors=True)
         for path in reversed(self.paths):
             if path==self.private or path in (CFG,STATE,WORK,EDGE):
                 shutil.rmtree(path,ignore_errors=True)
