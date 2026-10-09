@@ -101,7 +101,7 @@ def prepare(api, account):
             body['domain'] = remaining[0]
             body['self_hosted_domains'] = remaining
         access.append((path, before, body if remaining else None))
-    sets_path = '/zones/' + zone + '/rulesets?per_page=100'
+    sets_path = '/zones/' + zone + '/rulesets?per_page=50'
     sets = inventory_list(api.get(sets_path))
     entrypoints = [item for item in sets if item.get('phase') == 'http_request_cache_settings' and item.get('kind') == 'zone']
     if len(entrypoints) > 1:
