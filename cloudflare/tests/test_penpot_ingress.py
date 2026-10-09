@@ -1,6 +1,10 @@
 import importlib.util
+import contextlib
+import io
+import json
 from pathlib import Path
 import unittest
+from unittest import mock
 
 PATH = Path(__file__).resolve().parents[1] / 'penpot_ingress.py'
 
@@ -49,21 +53,189 @@ class PenpotIngressSurvey(unittest.TestCase):
             with self.subTest(fault=fault):
                 self.assertIn(expected, self.survey(fault)['conflicts'])
 
-    def test_incomplete_paginated_and_oversized_responses_fail_closed(self):
-        import json
-        from unittest import mock
+    @contextlib.contextmanager
+    def client(self, module, responses):
+        values = [io.BytesIO(value if type(value) is bytes else json.dumps(value).encode())
+                  if not isinstance(value, Exception) else value for value in responses]
+        with mock.patch.dict(module.os.environ, {'CLOUDFLARE_API_TOKEN': 'secret-canary',
+                                                'CLOUDFLARE_ACCOUNT_ID': 'a' * 32}), \
+             mock.patch.object(module.urllib.request, 'build_opener') as opener:
+            opener.return_value.open.side_effect = values
+            yield module.Client(), opener.return_value.open
+
+    def page(self, items, page=1, per_page=2, total_count=1, total_pages=1):
+        return {'success': True, 'result': items, 'result_info': {
+            'page': page, 'per_page': per_page, 'count': len(items),
+            'total_count': total_count, 'total_pages': total_pages}}
+
+    def test_all_get_pages_are_aggregated_with_filters_preserved(self):
         module = self.module()
-        for raw, error in [(json.dumps({'success': True, 'result': [], 'result_info': {'total_pages': 2}}).encode(),
-                            'CLOUDFLARE_PAGINATION_REQUIRED'),
-                           (b'x' * (4 * 1024 * 1024 + 1), 'CLOUDFLARE_RESPONSE_TOO_LARGE')]:
-            response = mock.MagicMock()
-            response.__enter__.return_value.read.return_value = raw
-            with self.subTest(error=error), mock.patch.dict(module.os.environ, {
-                    'CLOUDFLARE_API_TOKEN': 'secret-canary', 'CLOUDFLARE_ACCOUNT_ID': 'a' * 32}), \
-                 mock.patch.object(module.urllib.request, 'build_opener') as opener:
-                opener.return_value.open.return_value = response
-                with self.assertRaisesRegex(module.Failure, error):
-                    module.Client().get('/zones')
+        items = [{'id': str(number)} for number in range(5)]
+        responses = [self.page(items[:2], total_count=5, total_pages=3),
+                     self.page(items[2:4], page=2, total_count=5, total_pages=3),
+                     self.page(items[4:], page=3, total_count=5, total_pages=3)]
+        path = '/accounts/' + 'a' * 32 + '/access/apps?domain=design.example%2Fpath&per_page=2&page=1'
+        with self.client(module, responses) as (client, opened):
+            self.assertEqual(client.get(path), items)
+            requests = [call.args[0] for call in opened.call_args_list]
+            for number, request in enumerate(requests, 1):
+                url = module.urllib.parse.urlsplit(request.full_url)
+                self.assertEqual(module.urllib.parse.parse_qs(url.query), {
+                    'domain': ['design.example/path'], 'per_page': ['2'], 'page': [str(number)]})
+
+    def test_total_count_can_prove_completion_without_total_pages(self):
+        module = self.module()
+        responses = [self.page([{'id': 'first'}, {'id': 'second'}], total_count=3, total_pages=2),
+                     self.page([{'id': 'third'}], page=2, total_count=3, total_pages=2)]
+        for response in responses:
+            del response['result_info']['total_pages']
+        with self.client(module, responses) as (client, opened):
+            self.assertEqual(client.get('/zones?per_page=2'), [
+                {'id': 'first'}, {'id': 'second'}, {'id': 'third'}])
+            self.assertEqual(opened.call_count, 2)
+
+    def test_empty_inventory_accepts_consistent_zero_or_one_page(self):
+        module = self.module()
+        for pages in (0, 1, None):
+            response = self.page([], total_count=0, total_pages=pages)
+            if pages is None:
+                del response['result_info']['total_pages']
+            with self.subTest(pages=pages), self.client(module, [response]) as (client, opened):
+                self.assertEqual(client.get('/accounts/' + 'a' * 32 + '/access/apps?per_page=100'), [])
+                self.assertEqual(opened.call_count, 1)
+
+    def test_missing_malformed_and_truncated_metadata_fail_closed(self):
+        module = self.module()
+        cases = [{'success': True, 'result': []},
+                 {'success': True, 'result': [], 'result_info': {'total_pages': 2}}]
+        valid = self.page([{'id': 'one'}])
+        for field in ('page', 'per_page', 'count', 'total_count'):
+            value = json.loads(json.dumps(valid))
+            del value['result_info'][field]
+            cases.append(value)
+        for field, malformed in [('page', 0), ('page', 2), ('page', True), ('per_page', 0),
+                                 ('per_page', '2'), ('count', -1), ('count', True), ('total_count', -1),
+                                 ('total_count', 0), ('total_count', 2), ('total_pages', False),
+                                 ('total_pages', 0), ('total_pages', 2), ('total_pages', '1')]:
+            value = json.loads(json.dumps(valid))
+            value['result_info'][field] = malformed
+            cases.append(value)
+        for info in (None, [], 'pagination'):
+            cases.append({'success': True, 'result': [], 'result_info': info})
+        cases.extend([self.page([{'id': 'short'}], total_count=3, total_pages=2),
+                      self.page([], total_count=1), self.page([], total_count=0, total_pages=2),
+                      self.page([{'id': 'one'}], per_page=1, total_count=module.MAX_INVENTORY_PAGES + 1,
+                                total_pages=module.MAX_INVENTORY_PAGES + 1)])
+        for value in cases:
+            with self.subTest(value=value), self.client(module, [value]) as (client, opened):
+                with self.assertRaisesRegex(module.Failure, 'CLOUDFLARE_PAGINATION_REQUIRED'):
+                    client.get('/zones')
+                self.assertEqual(opened.call_count, 1)
+
+    def test_later_page_drift_and_missing_metadata_fail_closed(self):
+        module = self.module()
+        first = self.page([{'id': 'one'}, {'id': 'two'}], total_count=3, total_pages=2)
+        final = self.page([{'id': 'three'}], page=2, total_count=3, total_pages=2)
+        cases = [{'success': True, 'result': [{'id': 'three'}]},
+                 {'success': True, 'result': {}, 'result_info': final['result_info']},
+                 self.page([], page=2, total_count=3, total_pages=2),
+                 self.page([{'id': 'one'}], page=2, total_count=3, total_pages=2)]
+        for field, value in [('page', 1), ('per_page', 3), ('count', 0), ('total_count', 4), ('total_pages', 3)]:
+            changed = json.loads(json.dumps(final))
+            changed['result_info'][field] = value
+            cases.append(changed)
+        changed = json.loads(json.dumps(final))
+        del changed['result_info']['total_count']
+        cases.append(changed)
+        cases.extend([self.page([{'id': 'three'}, {'id': 'four'}], page=2, total_count=4, total_pages=2),
+                      self.page([{'id': 'two'}], page=2, per_page=1, total_count=2, total_pages=2)])
+        for response in cases:
+            with self.subTest(response=response), self.client(module, [first, response]) as (client, opened):
+                with self.assertRaisesRegex(module.Failure, 'CLOUDFLARE_PAGINATION_REQUIRED'):
+                    client.get('/zones?per_page=2')
+                self.assertEqual(opened.call_count, 2)
+
+    def test_noninitial_or_duplicate_page_parameters_cannot_return_partial_inventory(self):
+        module = self.module()
+        for query in ('page=2', 'page=0', 'page=1&page=1', 'per_page=1&per_page=2'):
+            with self.subTest(query=query), self.client(module, [self.page([{'id': 'one'}])]) as (client, opened):
+                with self.assertRaisesRegex(module.Failure, 'CLOUDFLARE_PAGINATION_REQUIRED'):
+                    client.get('/zones?' + query)
+                self.assertEqual(opened.call_count, 1)
+
+    def test_later_page_transport_failure_keeps_credentials_private_and_never_retries(self):
+        module = self.module()
+        first = self.page([{'id': 'one'}], per_page=1, total_count=2, total_pages=2)
+        errors = [module.urllib.error.HTTPError('https://foreign.example?token=secret-canary', 403,
+                                               'secret-canary', {}, None),
+                  module.urllib.error.URLError('secret-canary'),
+                  module.Failure('CLOUDFLARE_REDIRECT_FORBIDDEN')]
+        for error in errors:
+            with self.subTest(error=type(error).__name__), self.client(module, [first, error]) as (client, opened):
+                with self.assertRaises(module.Failure) as caught:
+                    client.get('/accounts/' + 'a' * 32 + '/access/apps?per_page=1')
+                self.assertNotIn('secret-canary', str(caught.exception))
+                self.assertNotIn('foreign.example', str(caught.exception))
+                self.assertEqual(opened.call_count, 2)
+                if isinstance(error, module.urllib.error.HTTPError):
+                    self.assertIn('Access: Apps and Policies: Read', str(caught.exception))
+
+    def test_page_and_aggregate_response_limits_are_bounded(self):
+        module = self.module()
+        with self.client(module, [b'x' * (module.MAX_RESPONSE_BYTES + 1)]) as (client, opened):
+            with self.assertRaisesRegex(module.Failure, 'CLOUDFLARE_RESPONSE_TOO_LARGE'):
+                client.get('/zones')
+            self.assertEqual(opened.call_count, 1)
+        responses = [self.page([{'id': 'one'}], per_page=1, total_count=2, total_pages=2),
+                     self.page([{'id': 'two'}], page=2, per_page=1, total_count=2, total_pages=2)]
+        limit = max(len(json.dumps(value).encode()) for value in responses)
+        with mock.patch.object(module, 'MAX_RESPONSE_BYTES', limit), \
+             self.client(module, responses) as (client, opened):
+            with self.assertRaisesRegex(module.Failure, 'CLOUDFLARE_RESPONSE_TOO_LARGE'):
+                client.get('/zones?per_page=1')
+            self.assertEqual(opened.call_count, 2)
+
+    def test_nonpaginated_endpoints_and_object_responses_keep_contract(self):
+        module = self.module()
+        for path, result in [('/accounts/' + 'a' * 32 + '/cfd_tunnel/test/connections', [{'id': 'connector'}]),
+                             ('/zones/' + 'b' * 32 + '/rulesets?per_page=100', []),
+                             ('/accounts/' + 'a' * 32 + '/cfd_tunnel/test/configurations', {'version': 7})]:
+            with self.subTest(path=path), self.client(module, [{'success': True, 'result': result}]) as (client, opened):
+                self.assertEqual(client.get(path), result)
+                self.assertEqual(opened.call_count, 1)
+
+    def test_writes_never_paginate_or_retry(self):
+        module = self.module()
+        for method in ('PUT', 'POST', 'PATCH', 'DELETE'):
+            with self.subTest(method=method), self.client(module, [self.page([], total_count=3, total_pages=2)]) as (client, opened):
+                with self.assertRaisesRegex(module.Failure, 'CLOUDFLARE_PAGINATION_REQUIRED'):
+                    client.request(method, '/zones', {'record': 'value'})
+                self.assertEqual(opened.call_count, 1)
+                self.assertEqual(opened.call_args.args[0].get_method(), method)
+        for method in ('GET', 'PUT'):
+            error = module.urllib.error.URLError('secret-canary')
+            with self.subTest(method=method), self.client(module, [error]) as (client, opened):
+                with self.assertRaisesRegex(module.Failure, '^CLOUDFLARE_READ_FAILED$'):
+                    client.request(method, '/zones')
+                self.assertEqual(opened.call_count, 1)
+
+    def test_access_conflicts_on_last_page_are_not_omitted(self):
+        module = self.module()
+        zone = 'b' * 32
+        responses = [self.page([{'id': zone, 'name': module.ZONE, 'account': {'id': 'a' * 32}}]),
+                     self.page([], total_count=0, total_pages=0),
+                     {'success': True, 'result': [{'id': 'connector', 'is_pending_reconnect': False}]},
+                     {'success': True, 'result': {'version': 7, 'config': {'ingress': [{'service': 'http_status:404'}]}}},
+                     self.page([{'id': 'foreign', 'domain': 'other.example'}], per_page=1, total_count=2, total_pages=2),
+                     self.page([{'id': 'wildcard', 'domain': '*.tuannguyenviet.site',
+                                 'self_hosted_domains': [module.HOST]}], page=2, per_page=1,
+                               total_count=2, total_pages=2),
+                     {'success': True, 'result': []}]
+        with self.client(module, responses) as (client, opened):
+            receipt = module.survey(client.get, client.account)
+            self.assertIn('ACCESS_SCOPE_CONFLICT', receipt['conflicts'])
+            self.assertEqual(receipt['access_apps'], [{'id': 'wildcard', 'dedicated': False}])
+            self.assertEqual(opened.call_count, 7)
 
     def test_api_redirects_cannot_forward_credentials(self):
         module = self.module()
