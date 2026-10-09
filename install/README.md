@@ -46,6 +46,10 @@ short pages, overlapping resource IDs or changing totals fail closed; only the
 nonpaginated tunnel-connections endpoint may omit metadata. Ruleset lists use
 `per_page=50` and follow `result_info.cursors.after` until no next cursor remains;
 missing metadata, repeated cursors and overlapping IDs fail closed.
+Cursor metadata rejection reports only fixed pagination field names, JSON types,
+item count and traversal number. It never prints metadata values, cursors or
+inventory contents. Use this evidence to diagnose API differences before changing
+completeness validation; a diagnostic failure is not a successful survey.
 Inventory reads are bounded to 1,000 pages and 4 MiB total response bytes, keep
 filters and block redirects. Writes remain single requests without retries or
 pagination. A failed survey does not establish that ownership conflicts are absent.

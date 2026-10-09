@@ -109,7 +109,14 @@ class Client:
             result.extend(items)
             info = data.get('result_info')
             if type(info) is not dict or type(info.get('cursors')) is not dict:
-                raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+                # Only fixed field names and JSON types: never response values,
+                # cursor bytes, resource IDs or credentials in diagnostics.
+                fields = ('page', 'per_page', 'count', 'total_count', 'total_pages', 'cursors')
+                shape = {key: type(info[key]).__name__ for key in fields if type(info) is dict and key in info}
+                diagnostic = {'result_info_type': type(info).__name__, 'fields': shape,
+                              'items': len(items), 'page': number + 1}
+                raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint +
+                              '; metadata_shape=' + json.dumps(diagnostic, sort_keys=True))
             after = info['cursors'].get('after')
             if after is None:
                 return result
