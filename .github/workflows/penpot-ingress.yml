@@ -41,6 +41,7 @@ jobs:
           import json, os
           from pathlib import Path
           value = json.loads((Path(os.environ['RUNNER_TEMP']) / 'penpot-ingress-survey.json').read_text())
+          print(json.dumps(value, sort_keys=True))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
               stream.write('## Read-only Penpot ingress survey\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n')
           PY
