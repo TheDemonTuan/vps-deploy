@@ -568,7 +568,7 @@ docker exec demo-blue rm /app/data/health-gate-green
 demo_poll demo-parallel | assert_json '{"status":"complete","healthy":true}'
 sha256sum -c "$fixture/sentinel.sha" >/dev/null
 printf 'PARALLEL_CANDIDATES_ISOLATED_OK\n'
-wait_phase() { local file=$1 expected=$2 actual
+wait_phase() { local file=$1 expected=$2 request_id=${3:-} actual
   for _ in {1..90}; do
     actual=$(python3 - "$file" <<'PY'
 import json,sys
@@ -582,7 +582,20 @@ PY
     [[ $actual == "$expected" ]] && return 0
     sleep .2
   done
-  printf 'PHASE_TIMEOUT %s %s %s\n' "$file" "$expected" "$actual" >&2; return 1
+  printf 'PHASE_TIMEOUT %s %s %s\n' "$file" "$expected" "$actual" >&2
+  if [[ -n $request_id ]]; then
+    python3 - "$file" "$request_id" <<'PY' >&2
+import json, pathlib, sys
+state_path = pathlib.Path(sys.argv[1])
+state = json.loads(state_path.read_bytes())
+receipt = state_path.parent / 'requests' / sys.argv[2] / 'result.json'
+print(json.dumps({'operation': state.get('operation'),
+                  'active': state.get('active'),
+                  'receipt': json.loads(receipt.read_bytes()) if receipt.exists() else None}, sort_keys=True))
+PY
+    journalctl -u "vps-deploy-$(basename "$(dirname "$file")")@$request_id.service" --no-pager -n 40 >&2
+  fi
+  return 1
 }
 docker exec 9router-green touch /app/data/health-gate-blue
 docker exec demo-green touch /app/data/health-gate-blue
@@ -590,14 +603,14 @@ router_route_before=$(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1)
 demo_route_before=$(sha256sum "$fixture/dynamic/demo.yml" | cut -d' ' -f1)
 printf '%s' "$(make_request deploy app fixture-shared-lock "$first")" | ssh_request | assert_json '{"status":"running"}'
 printf '%s' "$(demo_request deploy demo-shared-lock "$demo_first")" | demo_ssh | assert_json '{"status":"running"}'
-wait_phase "$state/state.json" prepared
-wait_phase "$demo_state/state.json" prepared
+wait_phase "$state/state.json" prepared fixture-shared-lock
+wait_phase "$demo_state/state.json" prepared demo-shared-lock
 exec {publish_fd}> "$locks/traefik.lock"
 flock -x "$publish_fd"
 docker exec 9router-green rm /app/data/health-gate-blue
 docker exec demo-green rm /app/data/health-gate-blue
-wait_phase "$state/state.json" candidate_ready
-wait_phase "$demo_state/state.json" candidate_ready
+wait_phase "$state/state.json" candidate_ready fixture-shared-lock
+wait_phase "$demo_state/state.json" candidate_ready demo-shared-lock
 [[ $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$router_route_before" && $(sha256sum "$fixture/dynamic/demo.yml" | cut -d' ' -f1) == "$demo_route_before" ]]
 flock -u "$publish_fd"
 exec {publish_fd}>&-
