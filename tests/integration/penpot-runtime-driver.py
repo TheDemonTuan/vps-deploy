@@ -863,6 +863,14 @@ class Harness:
             if self.docker('container','inspect',name,check=False).returncode==0:
                 process=self.docker('logs','--tail','100',name,check=False)
                 self.log(name+' diagnostics:\n'+self.redact(process.stdout+process.stderr))
+                container = self.inspect('container', name)
+                image = self.inspect('image', container['Image'])
+                self.log(name+' identity: '+json.dumps({
+                    'containerImage': container['Image'], 'imageId': image['Id'],
+                    'architecture': image['Architecture'], 'os': image['Os'],
+                    'repoDigests': image.get('RepoDigests', []),
+                    'health': container.get('State', {}).get('Health', {}),
+                }, sort_keys=True))
         for unit in self.units:
             process=self.run('journalctl','-u',unit,'--no-pager','-n','30',check=False)
             self.log(unit+' journal:\n'+self.redact(process.stdout))
