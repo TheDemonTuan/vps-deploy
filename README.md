@@ -447,6 +447,8 @@ Khi cần kiểm tra hoặc xử lý trực tiếp trên VPS với quyền root:
 
 `.github/workflows/cloudflare-deploy.yml` owns Cloudflare deployment. Registered source repositories build and verify immutable artifacts without Cloudflare credentials; this repository verifies successful whole-workflow CI, branch/head eligibility, GitHub ZIP digest, exhaustive SHA256SUMS and manifest identity before executing only platform-owned adapters. No source npm scripts, OpenNext config, Terraform or uploaded deploy scripts run with the token.
 
+Controller verification installs pinned `PyYAML==6.0.3` before its Python suites; the workflow policy checks parse YAML on a clean runner.
+
 - Registry: `cloudflare/registry/{acb,uptimeflare}.json`. Adding an app requires a reviewed registration and trusted adapter, not copying keys into its source repository.
 - Central secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Existing uptimeflare values were moved as GitHub sealed-box ciphertext; plaintext was not downloaded. `UPTIMEFLARE_D1_ID` is a central variable fixed to `431a0d2e-6413-4e80-9d27-1ee933f14f05`.
 - Runtime rotation envelopes are stored centrally as `UPTIMEFLARE_CF_ACCESS_CLIENT_ID`, `UPTIMEFLARE_CF_ACCESS_CLIENT_SECRET`, `UPTIMEFLARE_BESZEL_ACCESS_CLIENT_ID`, `UPTIMEFLARE_BESZEL_ACCESS_CLIENT_SECRET`, `UPTIMEFLARE_TELEGRAM_BOT_TOKEN`, `UPTIMEFLARE_TELEGRAM_CHAT_ID`. Ordinary releases preserve existing Worker secrets without reading or rewriting these GitHub values.
