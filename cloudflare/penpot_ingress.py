@@ -7,11 +7,14 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HOST = 'design.tuannguyenviet.site'
 ZONE = 'tuannguyenviet.site'
 TUNNEL = '09575df7-5465-4201-94c0-130e16472dce'
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_INVENTORY_PAGES = 1000
 
 
 class Failure(Exception):
@@ -48,13 +51,76 @@ class Client:
     def request(self, method, path, body=None):
         if method not in ('GET', 'PUT', 'POST', 'PATCH', 'DELETE') or not path.startswith(('/zones', '/accounts/')) or '#' in path:
             raise Failure('API_PATH_POLICY')
+        data, size = self._response(method, path, body)
+        if method != 'GET' or type(data['result']) is not list:
+            info = data.get('result_info', {})
+            if type(info) is not dict or type(info.get('total_pages', 1)) is not int or info.get('total_pages', 1) != 1:
+                raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + path.split('?')[0])
+            return data['result']
+
+        endpoint, separator, query = path.partition('?')
+        parameters = urllib.parse.parse_qsl(query, keep_blank_values=True)
+        pages = [value for key, value in parameters if key == 'page']
+        per_pages = [value for key, value in parameters if key == 'per_page']
+        if pages not in ([], ['1']) or len(per_pages) > 1:
+            raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+        if 'result_info' not in data:
+            # These endpoints return all objects without pagination. Paginated
+            # inventories (notably Access apps) must supply complete metadata.
+            if re.fullmatch(r'/accounts/[0-9a-f]{32}/cfd_tunnel/[^/]+/connections', endpoint) or re.fullmatch(
+                    r'/zones/[0-9a-f]{32}/rulesets', endpoint):
+                return data['result']
+            raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+
+        total_pages, per_page, total_count = self._pagination(data, 1, endpoint)
+        result = data['result']
+        seen_ids = set()
+        for page in range(1, max(1, total_pages) + 1):
+            if page > 1:
+                parameters = [(key, value) for key, value in parameters if key not in ('page', 'per_page')]
+                next_path = endpoint + '?' + urllib.parse.urlencode(parameters + [('page', page), ('per_page', per_page)])
+                data, page_size = self._response('GET', next_path, None)
+                size += page_size
+                if size > MAX_RESPONSE_BYTES:
+                    raise Failure('CLOUDFLARE_RESPONSE_TOO_LARGE')
+                if self._pagination(data, page, endpoint) != (total_pages, per_page, total_count):
+                    raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+                result.extend(data['result'])
+            # Overlapping resource IDs can hide an omitted ownership conflict.
+            for item in data['result']:
+                if type(item) is dict and type(item.get('id')) is str:
+                    if item['id'] in seen_ids:
+                        raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+                    seen_ids.add(item['id'])
+        return result
+
+    def _pagination(self, data, page, endpoint):
+        info = data.get('result_info')
+        fields = ('page', 'per_page', 'count', 'total_count')
+        if type(data.get('result')) is not list or type(info) is not dict or any(
+                type(info.get(field)) is not int for field in fields):
+            raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+        per_page, total_count = info['per_page'], info['total_count']
+        if info['page'] != page or per_page < 1 or total_count < 0:
+            raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+        expected_pages = (total_count + per_page - 1) // per_page
+        total_pages = info.get('total_pages', expected_pages)
+        if type(total_pages) is not int or total_pages not in ((0, 1) if total_count == 0 else (expected_pages,)) or (
+                total_pages > MAX_INVENTORY_PAGES or page > max(1, total_pages)):
+            raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+        expected_count = min(per_page, max(0, total_count - (page - 1) * per_page))
+        if info['count'] != expected_count or len(data['result']) != expected_count:
+            raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+        return total_pages, per_page, total_count
+
+    def _response(self, method, path, body):
         request = urllib.request.Request('https://api.cloudflare.com/client/v4' + path,
                                          headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'},
                                          method=method, data=None if body is None else json.dumps(body).encode())
         try:
             with urllib.request.build_opener(NoApiRedirect()).open(request, timeout=30) as response:
-                raw = response.read(4 * 1024 * 1024 + 1)
-                if len(raw) > 4 * 1024 * 1024:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
                     raise Failure('CLOUDFLARE_RESPONSE_TOO_LARGE')
                 data = json.loads(raw)
         except urllib.error.HTTPError as error:
@@ -64,11 +130,7 @@ class Client:
             raise Failure('CLOUDFLARE_READ_FAILED') from None
         if type(data) is not dict or data.get('success') is not True or 'result' not in data:
             raise Failure('CLOUDFLARE_RESPONSE_POLICY')
-        # Fail closed rather than omit apps/rules on an incomplete inventory.
-        pages = data.get('result_info', {}).get('total_pages', 1)
-        if type(pages) is not int or pages != 1:
-            raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + path.split('?')[0])
-        return data['result']
+        return data, len(raw)
 
 
 def wildcard_matches(pattern):

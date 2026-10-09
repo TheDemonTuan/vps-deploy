@@ -37,6 +37,22 @@ changes only the design hostname and preserves sibling routes and policies. Revi
 native CI and bootstrap evidence before running it; Access removal is the last
 write, followed by public HTTPS readiness.
 
+Survey and apply preflight enumerate every GET inventory page before evaluating
+ownership, including Access conflicts found on later pages. Pagination requires
+integer `page`, `per_page`, `count` and `total_count`; `total_pages` may be derived
+from the counts when absent, but a present value must agree. Empty inventories
+accept zero or one total page only with zero counts and page 1. Missing metadata,
+short pages, overlapping resource IDs or changing totals fail closed; only the
+nonpaginated tunnel-connections and ruleset-list endpoints may omit metadata.
+Inventory reads are bounded to 1,000 pages and 4 MiB total response bytes, keep
+filters and block redirects. Writes remain single requests without retries or
+pagination. A failed survey does not establish that ownership conflicts are absent.
+
+After a reviewed platform revision reaches `main`, run the read-only smoke with
+`gh workflow run penpot-ingress.yml --repo TheDemonTuan/vps-deploy --ref main -f operation=survey`
+and inspect that exact run's sanitized summary before considering apply. Local
+focused coverage is `python3 -m unittest discover -s cloudflare/tests -p 'test_penpot_ingress.py' -v`.
+
 ## Upgrade 9router
 
 1. Pause all caller workflows (`deploy.yml`, `deploy-ops.yml`, `rtk-sidecar.yml`, and `chatgpt-web-runtime.yml` once enrolled). Wait for pending receipts, transient deployments, and old drain service to finish; reconcile any pending intent using the **old** engine. Capture old `status --app 9router --strict`; compare the active/previous image digests, state revision, route generation, route bytes, volumes, environment names, and long-lived connections. Keep existing route and state untouched. Back up selected-app `/etc/vps-deploy/apps/9router/{host.json,app.yml,runtime.env}`, both `/usr/local/libexec/vps-deploy-{9router,drain-9router}`, sudoers, authorized key, legacy service/timer enable state, and owned route **outside** Traefik's watched directory. Never put private env/key contents in logs.
