@@ -101,7 +101,7 @@ services:
 
   penpot-postgres:
     <<: *runtime
-    image: postgres:15@sha256:7e2070cf6ad06fb3cbbd141b1bafbb7fd5bb63e2b6001e6daf34448eb555e4b3
+    image: postgres@sha256:7e2070cf6ad06fb3cbbd141b1bafbb7fd5bb63e2b6001e6daf34448eb555e4b3
     container_name: penpot-postgres
     mem_limit: 1g
     networks: [penpot]
@@ -120,7 +120,7 @@ services:
 
   penpot-valkey:
     <<: *runtime
-    image: valkey/valkey:8.1@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
+    image: valkey/valkey@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
     container_name: penpot-valkey
     mem_limit: 256m
     networks: [penpot]
