@@ -96,7 +96,8 @@ class Client:
         return result
 
     def _cursor_inventory(self, endpoint, parameters, data, size):
-        if any(key in ('page', 'cursor') for key, value in parameters):
+        if any(key in ('page', 'cursor') for key, value in parameters) or [
+                value for key, value in parameters if key == 'per_page'] != ['50']:
             raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
         result, cursors, ids = [], set(), set()
         for number in range(MAX_INVENTORY_PAGES):
@@ -108,6 +109,10 @@ class Client:
                 ids.add(identity)
             result.extend(items)
             info = data.get('result_info')
+            # Legacy list responses omit pagination metadata. Only a short
+            # first page can terminate without risking an omitted next page.
+            if info is None and number == 0 and len(items) < 50:
+                return result
             if type(info) is not dict or type(info.get('cursors')) is not dict:
                 # Only fixed field names and JSON types: never response values,
                 # cursor bytes, resource IDs or credentials in diagnostics.
