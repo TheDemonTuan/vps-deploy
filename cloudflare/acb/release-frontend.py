@@ -174,6 +174,10 @@ def run(command, cwd):
         raise ReleaseError(f'Command failed ({type(error).__name__})') from None
     if result.returncode:
         # Error pages and API response bodies are deliberately not published.
+        if len(command) > 1 and Path(command[1]).resolve() == Path(__file__).with_name('verify-frontend.py').resolve():
+            diagnostic = result.stderr.strip()
+            if diagnostic.startswith('FAIL frontend verification: ') and '\n' not in diagnostic and len(diagnostic) <= 4096:
+                raise ReleaseError(diagnostic)
         raise ReleaseError(f'{Path(command[0]).name} command exited {result.returncode}')
     return result.stdout
 
