@@ -225,6 +225,12 @@ class Harness:
             raise
 
     def setup(self):
+        # Hosted runners make /opt group-writable; installed release roots must
+        # have a non-writable ancestor. Change only this authorized disposable VM.
+        opt = Path('/opt')
+        require(opt.stat().st_uid == 0 and not opt.is_symlink(), 'FIXTURE_UNTRUSTED_DIRECTORY')
+        self.opt_mode = stat.S_IMODE(opt.stat().st_mode)
+        opt.chmod(self.opt_mode & ~0o022)
         for path in (self.private, CFG, STATE, STATE/'requests', WORK, EDGE/'dynamic', EDGE/'cloudflare-ca',
                      Path('/opt/vps-deploy/releases'), Path('/run/lock/vps-deploy')):
             self.mkdir(path)
@@ -895,6 +901,8 @@ class Harness:
             elif path.is_dir():
                 with contextlib.suppress(OSError):path.rmdir()
             else:path.unlink(missing_ok=True)
+        if hasattr(self, 'opt_mode'):
+            Path('/opt').chmod(self.opt_mode)
         self.result['foreignResourceIsolation']=self.preserve_foreign()
 
     def finish_report(self):

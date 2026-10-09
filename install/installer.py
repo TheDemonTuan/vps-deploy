@@ -436,14 +436,4 @@ if __name__ == '__main__':
         main()
     except (Failure, OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired) as exc:
         print(exc.code if isinstance(exc, Failure) else 'INSTALL_IO_ERROR', file=sys.stderr)
-        if '--fixture' in sys.argv and fixture_authorized():
-            # Disposable CI only: reveal the failed path, never argv/env/content.
-            frame = exc.__traceback__
-            while frame is not None:
-                if frame.tb_frame.f_code.co_name == 'trusted_path':
-                    entry = frame.tb_frame.f_locals.get('entry')
-                    print('FIXTURE_TRUST_PATH:', entry, file=sys.stderr)
-                print('FIXTURE_FAILURE_FRAME:', Path(frame.tb_frame.f_code.co_filename).name,
-                      frame.tb_lineno, file=sys.stderr)
-                frame = frame.tb_next
         sys.exit(1)
