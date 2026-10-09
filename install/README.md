@@ -24,6 +24,8 @@ datastores and MCP remain on the internal network. Frontend needs external DNS
 and HTTPS for its GitHub template and Google Fonts proxies, including nginx
 startup resolution. Exporter uses `redis://penpot-valkey/0`, not the upstream
 default hostname `redis`.
+Datastore references use canonical `repository@sha256:digest` form, without a
+tag, so exact identity checks match Docker's `RepoDigests` representation.
 
 Bootstrap uses the host CA `/opt/platform/edge/cloudflare-ca/origin-ca.pem`, mounted
 read-only at `/etc/cloudflare-origin-ca` in `edge-cloudflared`. Its origin probe runs
