@@ -131,14 +131,12 @@ def entry(slot, image, req):
 def matching(state, profile, expected=None):
     active = state['active']
     require(active is not None, 'NOT_ADOPTED')
+    require(active['slot'] in ('blue', 'green'), 'INVALID_STATE')
     target, raw, _ = route.preflight(route.dynamic(profile), profile)
     configured = route.route_state(raw, profile)
     require(configured == (active['slot'], state['generation']), 'ROUTE_STATE_MISMATCH')
     require(route.probe(profile) == configured, 'ROUTE_OBSERVED_MISMATCH')
-    if active['slot'] != 'single':
-        health(profile, active['slot'], active['image'])
-    else:
-        container(profile['app'] + '-single', active['image'], running=True)
+    health(profile, active['slot'], active['image'])
     if expected is not None:
         require(configured == expected, 'ROUTE_STATE_MISMATCH')
     return target, raw

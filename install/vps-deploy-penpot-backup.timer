@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule the daily locked Penpot backup
+
+[Timer]
+OnCalendar=*-*-* 20:15:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=vps-deploy-penpot-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -43,12 +43,22 @@ def get_receipt(state_dir, app, req_id):
     return result(req_id, 'queued', 'queued')
 
 
+def ready_engine(profile):
+    # Native disposable fixtures alone may exercise the still-fenced engine.
+    from core import fixture_authorized
+    penpot = profile['app'] == 'penpot' or profile['registration']['manifest'].get('strategy') == 'penpot'
+    require(not penpot or (profile.get('fixture_ci') is True and
+                          profile['registration']['host'] == 'fixture-local' and
+                          fixture_authorized()), 'PENPOT_RELEASE_ENGINE_NOT_READY')
+
+
 def submit(req, cfg, state_dir, locks):
     app = req['app']
     directory = receipt_dir(state_dir, req['request_id'])
     with lock(locks / (app + '@submit.lock'), 10):
         profile = load_profile(cfg, app)
         req = request(__import__('core').json_bytes(req), profile)
+        ready_engine(profile)
         release = verify_request(req, cfg, profile)
         trusted_path(state_dir, directory=True)
         trusted_path(state_dir / 'requests', directory=True)
@@ -66,7 +76,7 @@ def submit(req, cfg, state_dir, locks):
             __import__('core').fsync_dir(directory.parent)
             atomic(directory / 'request.json', data)
         __import__('core').fault(profile, 'receipt_saved')
-        watchdog = 1800 if req.get('component') == 'cgw' else 900
+        watchdog = 1800 if req.get('component') == 'cgw' or app == 'penpot' else 900
         command = ['/usr/bin/systemd-run', '--unit=' + unit(app, req['request_id']), '--property=Type=exec', '--property=RuntimeMaxSec=' + str(watchdog), '--property=TimeoutStopSec=60', '--property=KillMode=mixed', str(release / 'bin/deployctl'), 'run', '--app', app, '--request-id', req['request_id']]
         proc = subprocess.run(command, capture_output=True)
         if proc.returncode and not unit_active(app, req['request_id']):
@@ -89,7 +99,11 @@ def load_profile(cfg, app):
     record = host_registration(release, registration['host'])
     profile = host(cfg, registration, record)
     registered(cfg, registration)
-    environment(profile, cfg, '')
+    if registration['manifest']['strategy'] == 'penpot':
+        from penpot import bounded_file, runtime_values
+        runtime_values(bounded_file(cfg / 'runtime.env'), registration)
+    else:
+        environment(profile, cfg, '')
     return profile
 
 
@@ -101,10 +115,18 @@ def state_status(state_dir, req_id, cfg, profile):
     require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')
     trusted_path(state_dir / 'state.json')
     state = load(state_dir / 'state.json')
+    penpot_strategy = profile['registration']['manifest']['strategy'] == 'penpot'
+    if penpot_strategy:
+        from penpot import validate_state
+        validate_state(state, profile)
     healthy = False
     observed = None
     try:
-        matching(state, profile)
+        if penpot_strategy:
+            from penpot import matching as penpot_matching
+            penpot_matching(state, profile)
+        else:
+            matching(state, profile)
         observed = route.probe(profile)[1]
         healthy = state['operation'] is None
     except (Failure, OSError):
@@ -130,21 +152,27 @@ def state_status(state_dir, req_id, cfg, profile):
         healthy = healthy and cgw_healthy
     if state['operation'] and entry['status'] == 'complete':
         entry = result(req_id, 'recovery_required', state['operation']['phase'], 'RECOVERY_REQUIRED')
-    entry.update(healthy=healthy, rtk_healthy=rtk_healthy, active=state['active'], previous=state['previous'], platform_ref=profile['platform_ref'], image=state['active']['image'] if state['active'] else None, configured_generation=state['generation'], observed_generation=observed, draining=state['draining'], revision=state['revision'])
+    entry.update(healthy=healthy, rtk_healthy=rtk_healthy, active=state['active'], previous=state['previous'], platform_ref=profile['platform_ref'], configured_generation=state['generation'], observed_generation=observed, draining=state['draining'], revision=state['revision'])
+    if penpot_strategy:
+        entry.update(images=state['active']['images'] if state['active'] else None,
+                     source_sha=state['active']['source_sha'] if state['active'] else None)
+    else:
+        entry['image'] = state['active']['image'] if state['active'] else None
     entry.update(cgw=state.get('cgw'), cgw_healthy=cgw_healthy)
     return entry
 
 
 def run(req_id, cfg, state_dir, locks, profile):
+    ready_engine(profile)
     directory = receipt_dir(state_dir, req_id)
     trusted_path(directory / 'request.json')
     req = request((directory / 'request.json').read_bytes(), profile)
     require(req['request_id'] == req_id and req['op'] != 'status', 'INVALID_REQUEST')
     release = verify_request(req, cfg, profile)
-    if req['component'] == 'cgw':
+    if req['component'] == 'cgw' or profile['app'] == 'penpot':
         import signal
         def terminate(signum, frame):
-            raise Failure('CGW_TERMINATED')
+            raise Failure('PENPOT_TERMINATED' if profile['app'] == 'penpot' else 'CGW_TERMINATED')
         signal.signal(signal.SIGTERM, terminate)
     try:
         with lock(locks / (profile['app'] + '@operation.lock')):
@@ -160,9 +188,9 @@ def run(req_id, cfg, state_dir, locks, profile):
                     raise Failure('RECOVERY_REQUIRED')
                 if req['op'] == 'deploy':
                     if req['component'] == 'app':
-                        if profile['registration']['manifest']['strategy'] == 'recreate':
-                            from recreate import transaction as recreate_transaction
-                            recreate_transaction(req, state, state_dir, cfg, release, profile, locks)
+                        if profile['registration']['manifest']['strategy'] == 'penpot':
+                            from penpot import transaction as penpot_transaction
+                            penpot_transaction(req, state, state_dir, cfg, release, profile, locks, _locked=True)
                         else:
                             transaction(req, state, state_dir, cfg, release, profile, locks)
                     elif req['component'] == 'rtk':
@@ -170,15 +198,11 @@ def run(req_id, cfg, state_dir, locks, profile):
                     else:
                         cgw_deploy(req, state, state_dir, cfg, release, profile)
                 elif req['op'] == 'rollback':
-                    if profile['registration']['manifest']['strategy'] == 'recreate':
-                        from recreate import rollback as recreate_rollback
-                        recreate_rollback(req, state, state_dir, cfg, release, profile, locks)
-                    else:
-                        transaction(req, state, state_dir, cfg, release, profile, locks)
+                    transaction(req, state, state_dir, cfg, release, profile, locks)
                 else:
-                    if profile['registration']['manifest']['strategy'] == 'recreate':
-                        from recreate import reconcile as recreate_reconcile
-                        recreate_reconcile(req, state, state_dir, cfg, release, profile, locks)
+                    if profile['registration']['manifest']['strategy'] == 'penpot':
+                        from penpot import reconcile_transaction
+                        reconcile_transaction(state, state_dir, cfg, release, profile, locks, _locked=True)
                     else:
                         reconcile(req, state, state_dir, cfg, release, profile, locks)
                 receipt = result(req_id, 'complete', 'complete')
@@ -203,12 +227,21 @@ def run(req_id, cfg, state_dir, locks, profile):
 
 
 def adopt(cfg, state_dir, locks, profile):
+    ready_engine(profile)
     with lock(locks / (profile['app'] + '@operation.lock')):
         require(not (state_dir / 'state.json').exists(), 'ALREADY_ADOPTED')
         with lock(locks / 'traefik.lock', 60):
             target, raw, _ = route.preflight(route.dynamic(profile), profile)
             slot, generation = route.route_state(raw, profile)
             route.ack(profile, (slot, generation))
+            if profile['registration']['manifest']['strategy'] == 'penpot':
+                require(slot == 'single', 'ROUTE_MISMATCH')
+                _, mh = registered(cfg, profile['registration'])
+                from penpot import adopt_state
+                state = adopt_state(profile, mh, generation)
+                trusted_path(state_dir, directory=True)
+                save(state_dir / 'state.json', state)
+                return state_status(state_dir, None, cfg, profile)
             from core import container, container_digest
             live = container(profile['app'] + '-' + slot, running=True)
             image = container_digest(live, profile['image_repository'])
@@ -298,19 +331,21 @@ def main():
             parity.adopt_cgw(Path(__file__).resolve().parents[1], cfg, state_dir, profile)
         response = state_status(state_dir, None, cfg, profile)
     elif args.action == 'backup':
-        require(profile['registration']['manifest']['strategy'] == 'recreate', 'STRATEGY_MISMATCH')
-        with lock(locks / (args.app + '@operation.lock')):
-            from recreate import backup as recreate_backup
-            res = recreate_backup(profile, cfg, state_dir, locks)
-            print(json.dumps(res, sort_keys=True))
+        if profile['registration']['manifest']['strategy'] == 'penpot':
+            ready_engine(profile)
+            from penpot import operator_backup
+            response = operator_backup(profile, cfg, state_dir, locks)
+            print(json.dumps(response, sort_keys=True))
             return 0
+        raise Failure('STRATEGY_MISMATCH')
     else:
+        ready_engine(profile)
+        require(profile['registration']['manifest']['strategy'] == 'blue-green', 'STRATEGY_MISMATCH')
         with lock(locks / (args.app + '@operation.lock')):
             require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')
             trusted_path(state_dir / 'state.json')
-            if profile['registration']['manifest']['strategy'] != 'recreate':
-                state = load(state_dir / 'state.json')
-                cleanup(state, state_dir, profile)
+            state = load(state_dir / 'state.json')
+            cleanup(state, state_dir, profile)
         response = state_status(state_dir, None, cfg, profile)
     print(json.dumps(response, sort_keys=True))
     if args.strict and not response.get('healthy'):

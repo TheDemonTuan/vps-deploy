@@ -7,7 +7,6 @@
         "version",
         "app",
         "strategy",
-        "image",
         "platform",
         "runtime",
         "health",
@@ -24,12 +23,23 @@
         "strategy": {
             "enum": [
                 "blue-green",
-                "recreate"
+                "penpot"
             ]
         },
         "image": {
             "type": "string",
             "pattern": "^(?:ghcr\\.io/[a-z0-9./_-]+|localhost:5000/[a-z0-9-]+)$"
+        },
+        "images": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["frontend", "backend", "exporter", "mcp"],
+            "properties": {
+                "frontend": {"const": "ghcr.io/thedemontuan/penpot-frontend"},
+                "backend": {"const": "ghcr.io/thedemontuan/penpot-backend"},
+                "exporter": {"const": "ghcr.io/thedemontuan/penpot-exporter"},
+                "mcp": {"const": "ghcr.io/thedemontuan/penpot-mcp"}
+            }
         },
         "platform": {
             "const": "linux/arm64"
@@ -74,7 +84,7 @@
                     "pattern": "^/[A-Za-z0-9._/-]*$"
                 },
                 "timeout_seconds": {
-                    "const": 60
+                    "enum": [60, 180]
                 }
             }
         },
@@ -117,6 +127,26 @@
         }
     },
     "allOf": [
+        {
+            "if": {"properties": {"strategy": {"const": "penpot"}}, "required": ["strategy"]},
+            "then": {
+                "required": ["images"],
+                "not": {"anyOf": [
+                    {"required": ["image"]}, {"required": ["build"]},
+                    {"required": ["rtk"]}, {"required": ["cgw"]}
+                ]},
+                "properties": {
+                    "app": {"const": "penpot"},
+                    "runtime": {"properties": {"port": {"const": 8080}}},
+                    "health": {"properties": {"path": {"const": "/readyz"}, "timeout_seconds": {"const": 180}}}
+                }
+            },
+            "else": {
+                "required": ["image"],
+                "not": {"required": ["images"]},
+                "properties": {"health": {"properties": {"timeout_seconds": {"const": 60}}}}
+            }
+        },
         {
             "if": {
                 "required": [

@@ -1,0 +1,72 @@
+name: Penpot ingress
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Survey is read-only; apply requires a verified enrolled origin
+        type: choice
+        options: [survey, apply]
+        default: survey
+permissions:
+  contents: read
+concurrency:
+  group: penpot-ingress-production
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Test controller without credentials
+        run: |
+          python3 -m unittest discover -s cloudflare/tests -p 'test_*.py' -v > "$RUNNER_TEMP/cloudflare-tests.log" 2>&1
+  survey:
+    needs: verify
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main' && inputs.operation == 'survey'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Read exact design DNS tunnel Access and cache inventory
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 cloudflare/penpot_ingress.py --operation survey > "$RUNNER_TEMP/penpot-ingress-survey.json"
+      - name: Publish sanitized inventory
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = json.loads((Path(os.environ['RUNNER_TEMP']) / 'penpot-ingress-survey.json').read_text())
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write('## Read-only Penpot ingress survey\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n')
+          PY
+  apply:
+    needs: verify
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: platform-admin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify origin through pinned admin SSH and apply exact host only
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VPS_PLATFORM_ADMIN_SSH_KEY: ${{ secrets.VPS_PLATFORM_ADMIN_SSH_KEY }}
+        run: python3 cloudflare/penpot_ingress.py --operation apply > "$RUNNER_TEMP/penpot-ingress-apply.json"
+      - name: Publish scoped apply receipt
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = json.loads((Path(os.environ['RUNNER_TEMP']) / 'penpot-ingress-apply.json').read_text())
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write('## Penpot ingress apply\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n')
+          PY

@@ -1,0 +1,203 @@
+name: Build registered native Penpot release
+on:
+  workflow_call:
+    inputs:
+      app:
+        required: true
+        type: string
+      source-sha:
+        required: true
+        type: string
+      platform-ref:
+        required: true
+        type: string
+      config:
+        required: true
+        type: string
+    outputs:
+      images:
+        value: ${{ jobs.publish.outputs.images }}
+      release-artifact-id:
+        value: ${{ jobs.publish.outputs.release-artifact-id }}
+permissions:
+  contents: read
+env:
+  APP: ${{ inputs.app }}
+  SOURCE_SHA: ${{ inputs.source-sha }}
+  PLATFORM_REF: ${{ inputs.platform-ref }}
+  CONFIG: ${{ inputs.config }}
+  CALLER_REPO: ${{ github.repository }}
+  CALLER_SHA: ${{ github.sha }}
+  CALLER_REF: ${{ github.ref }}
+  OPERATION: build
+  COMPONENT: app
+  IMAGE_REF: ''
+  IMAGES: ''
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    outputs:
+      artifact-id: ${{ steps.archive.outputs.artifact-id }}
+    steps:
+      - name: Reject mutable or foreign caller before checkout
+        run: |
+          set -euo pipefail
+          [[ "$APP" == penpot && "$CALLER_REPO" == TheDemonTuan/penpot && "$CALLER_REF" == refs/heads/main ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" ]]
+          [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ && "$(uname -m)" == aarch64 ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: TheDemonTuan/vps-deploy
+          ref: ${{ inputs.platform-ref }}
+          path: platform
+          persist-credentials: false
+      - name: Validate registered caller before source checkout
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml rsync zstd
+          python3 platform/scripts/check-caller.py build-penpot.yml --preflight
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.source-sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind source commit and manifest
+        run: python3 platform/scripts/check-caller.py build-penpot.yml
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Build local devenv and all four native source images
+        working-directory: source
+        run: bash .deploy/build-images.sh
+      - name: Smoke disposable six-service stack without host ports
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 "$RUNNER_TEMP/penpot-proof"
+          bash .deploy/smoke-stack.sh "$GITHUB_WORKSPACE/platform/apps/penpot/docker-compose.prod.yml" > "$RUNNER_TEMP/penpot-proof/smoke.json"
+      - name: Prove native recovery, backup, restore and log safety
+        id: lifecycle
+        run: |
+          set -euo pipefail
+          sudo env CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            PENPOT_DISPOSABLE_VM=1 PENPOT_APP_REF="$SOURCE_SHA" \
+            PENPOT_PLATFORM_REF="$PLATFORM_REF" \
+            PENPOT_CI_APP_DIR="$GITHUB_WORKSPACE/source" \
+            PENPOT_CI_REPORT_DIR="$RUNNER_TEMP/penpot-proof" \
+            bash platform/tests/integration/penpot-runtime-ci.sh
+      - name: Bind sanitized evidence to this exact build attempt
+        id: proof
+        if: ${{ always() && steps.lifecycle.outcome != 'skipped' && steps.lifecycle.outcome != '' }}
+        run: python3 platform/scripts/write-penpot-proof.py --directory "$RUNNER_TEMP/penpot-proof"
+      - name: Upload native proof, including failed lifecycle reports
+        if: ${{ always() && steps.proof.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: penpot-proof-${{ inputs.source-sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/penpot-proof/proof.json
+            ${{ runner.temp }}/penpot-proof/smoke.json
+            ${{ runner.temp }}/penpot-proof/lifecycle.json
+            ${{ runner.temp }}/penpot-proof/runtime.log
+            ${{ runner.temp }}/penpot-proof/logs/*.log
+          if-no-files-found: error
+          retention-days: 30
+      - name: Save the exact tested local images for the publication job
+        if: ${{ success() && steps.lifecycle.outcome == 'success' && steps.proof.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/penpot-native-bundle"
+          mkdir -m 0700 "$bundle"
+          images=()
+          for role in frontend backend exporter mcp; do
+            images+=("ghcr.io/thedemontuan/penpot-$role:sha-$SOURCE_SHA")
+          done
+          docker save "${images[@]}" | zstd -T0 -3 -o "$bundle/images.tar.zst"
+          python3 - "$bundle" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          bundle = Path(sys.argv[1])
+          digest = hashlib.sha256()
+          with (bundle / 'images.tar.zst').open('rb') as stream:
+              for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                  digest.update(chunk)
+          metadata = {'schemaVersion': 1, 'sourceSha': os.environ['SOURCE_SHA'],
+                      'platformRef': os.environ['PLATFORM_REF'], 'platform': 'linux/arm64',
+                      'archiveSha256': digest.hexdigest()}
+          (bundle / 'build.json').write_text(json.dumps(metadata, sort_keys=True), encoding='ascii')
+          PY
+      - name: Upload this run's tested images only
+        id: archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: penpot-native-${{ inputs.source-sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/penpot-native-bundle/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      images: ${{ steps.publish.outputs.images }}
+      release-artifact-id: ${{ steps.release.outputs.artifact-id }}
+    steps:
+      - name: Reject mutable or foreign publication caller
+        run: |
+          set -euo pipefail
+          [[ "$APP" == penpot && "$CALLER_REPO" == TheDemonTuan/penpot && "$CALLER_REF" == refs/heads/main ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" ]]
+          [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ && "$(uname -m)" == aarch64 ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: TheDemonTuan/vps-deploy
+          ref: ${{ inputs.platform-ref }}
+          path: platform
+          persist-credentials: false
+      - name: Validate registered publication caller
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml zstd
+          python3 platform/scripts/check-caller.py build-penpot.yml --preflight
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.source-sha }}
+          path: source
+          persist-credentials: false
+      - name: Validate immutable source and registered manifest
+        run: python3 platform/scripts/check-caller.py build-penpot.yml
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/penpot-native-bundle
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish four tested source images and resolve public immutable digests
+        id: publish
+        run: |
+          set -euo pipefail
+          python3 platform/scripts/publish-penpot.py \
+            --archive "$RUNNER_TEMP/penpot-native-bundle/images.tar.zst" \
+            --metadata "$RUNNER_TEMP/penpot-native-bundle/build.json" \
+            --output "$RUNNER_TEMP/penpot-release-$SOURCE_SHA.json"
+      - name: Upload this run's coherent release evidence
+        id: release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: penpot-release-${{ inputs.source-sha }}
+          path: ${{ runner.temp }}/penpot-release-${{ inputs.source-sha }}.json
+          if-no-files-found: error
+          retention-days: 7

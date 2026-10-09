@@ -19,11 +19,11 @@ apps:
     rtk_network: 9router-rtk
     cgw_network: 9router-cgw
     route_name: 9router.yml
-  opendesign:
+  penpot:
     api_host: design.tuannguyenviet.site
     dashboard_host: ""
     dashboard_alias_host: ""
-    work_dir: /opt/opendesign
-    compose_project: opendesign
-    edge_network: edge-opendesign
-    route_name: opendesign.yml
+    work_dir: /opt/penpot
+    compose_project: penpot
+    edge_network: edge-penpot
+    route_name: penpot.yml

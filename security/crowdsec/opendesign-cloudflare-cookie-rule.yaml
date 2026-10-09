@@ -1,4 +1,0 @@
-name: local/opendesign-cloudflare-cookie-target
-seclang_rules:
-  - >-
-    SecRule SERVER_NAME "@streq design.tuannguyenviet.site" "id:10000001,phase:1,pass,nolog,t:none,ctl:ruleRemoveTargetById=930120;REQUEST_COOKIES:cf_clearance"

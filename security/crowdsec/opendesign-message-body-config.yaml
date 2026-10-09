@@ -1,9 +1,0 @@
-# Message bodies intentionally store arbitrary HTML, code and file references.
-# Keep URI/query/header/cookie inspection and every other endpoint protected.
-name: local/opendesign-message-body
-pre_eval:
-  - filter: >-
-      req.Host == "design.tuannguyenviet.site" && req.Method == "PUT" &&
-      req.URL.Path matches "^/api/projects/[A-Za-z0-9_-]+/conversations/[A-Za-z0-9_-]+/messages/[A-Za-z0-9_-]+$"
-    apply:
-      - DisableBodyInspection()

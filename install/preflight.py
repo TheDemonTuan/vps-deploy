@@ -6,7 +6,12 @@ import subprocess
 from core import Failure, container, container_digest, require
 
 
-def check(root, app, registration, binding, runtime, previous, *, cgw_transition=False):
+def check(root, app, registration, binding, runtime, previous, *, cgw_transition=False,
+          source_sha=None, platform_ref=None):
+    if registration['manifest'].get('strategy') == 'penpot':
+        require(app == 'penpot' and not cgw_transition, 'PENPOT_COMPOSE_ARGUMENT')
+        from penpot_preflight import check as penpot_check
+        return penpot_check(root, registration, binding, runtime, source_sha, platform_ref)
     names = registration['runtime']
     raw = runtime.read_text()
     present = {line.split('=', 1)[0] for line in raw.splitlines() if '=' in line and not line.startswith('#')}
@@ -16,31 +21,19 @@ def check(root, app, registration, binding, runtime, previous, *, cgw_transition
     if previous and previous.get('fixture_ci'):
         image = previous['image_repository']
     strategy = registration['manifest'].get('strategy', 'blue-green')
-    if strategy == 'recreate':
-        slots = {}
-        name = app + '-single'
+    require(strategy == 'blue-green', 'STRATEGY_MISMATCH')
+    slots = {}
+    for slot in ('blue', 'green'):
+        name = app + '-' + slot
         try:
             value = container(name)
         except Failure as exc:
-            if exc.code != 'COMMAND_FAILED':
-                raise
-            value = None
-        if value and value['State']['Running']:
-            slots['single'] = value
-        require(slots, 'NO_RUNNING_SLOT')
-    else:
-        slots = {}
-        for slot in ('blue', 'green'):
-            name = app + '-' + slot
-            try:
-                value = container(name)
-            except Failure as exc:
-                if exc.code == 'COMMAND_FAILED':
-                    continue
-                raise
-            if value['State']['Running']:
-                slots[slot] = value
-        require(slots, 'NO_RUNNING_SLOT')
+            if exc.code == 'COMMAND_FAILED':
+                continue
+            raise
+        if value['State']['Running']:
+            slots[slot] = value
+    require(slots, 'NO_RUNNING_SLOT')
     for value in slots.values():
         container_digest(value, image)
     require(not any(mount['Destination'] == '/run/9router-chatgpt-web' for value in slots.values() for mount in value['Mounts']), 'CGW_SOCKET_CUTOVER_REQUIRED')
@@ -84,7 +77,7 @@ def check(root, app, registration, binding, runtime, previous, *, cgw_transition
     require(result.returncode == 0, 'COMPOSE_POLICY')
     composed = json.loads(result.stdout)
     services = composed['services']
-    expected_services = {app + '-single'} if strategy == 'recreate' else {app + '-blue', app + '-green'}
+    expected_services = {app + '-blue', app + '-green'}
     require(set(services) == expected_services, 'COMPOSE_POLICY')
     require(all(not service.get('ports') for service in services.values()), 'COMPOSE_POLICY')
     for service in services.values():

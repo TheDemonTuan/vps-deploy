@@ -25,6 +25,8 @@ APP_ID = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?\Z')
 ENV_NAME = re.compile(r'[A-Z_][A-Z0-9_]*\Z')
 HEADER = re.compile(r'[A-Za-z][A-Za-z0-9-]{0,63}\Z')
 HEALTH_PATH = re.compile(r'/[A-Za-z0-9._/-]*\Z')
+PENPOT_ROLES = ('frontend', 'backend', 'exporter', 'mcp')
+PENPOT_REPOSITORIES = {role: 'ghcr.io/thedemontuan/penpot-' + role for role in PENPOT_ROLES}
 
 
 
@@ -130,15 +132,29 @@ def app_registration(release, app):
         names = caller[key]
         require(type(names) is list and names and all(type(name) is str and re.fullmatch(r'[A-Za-z0-9_-]+\.yml', name) for name in names) and len(names) == len(set(names)), 'REGISTRY_POLICY')
     policy = value['manifest']
-    fields(policy, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route', 'rtk', 'cgw', 'build'}, {'version', 'app', 'strategy', 'image', 'platform', 'runtime', 'health', 'route'})
-    fixture_image = fixture_authorized() and value['host'] == 'fixture-local' and app == 'demo' and policy['image'] == 'localhost:5000/demo'
-    require(type(policy['version']) is int and policy['version'] == 1 and policy['app'] == app and policy['strategy'] in ('blue-green', 'recreate') and policy['platform'] == 'linux/arm64' and type(policy['image']) is str and (re.fullmatch(r'ghcr\.io/[a-z0-9./_-]+', policy['image']) or fixture_image), 'REGISTRY_POLICY')
+    require(type(policy) is dict, 'REGISTRY_POLICY')
+    multi_image = policy.get('strategy') == 'penpot'
+    common = {'version', 'app', 'strategy', 'platform', 'runtime', 'health', 'route'}
+    if multi_image:
+        fields(policy, common | {'images'}, common | {'images'})
+        require(app == 'penpot', 'REGISTRY_POLICY')
+        repositories = PENPOT_REPOSITORIES
+        if value['host'] == 'fixture-local' and fixture_authorized():
+            repositories = {role: 'localhost:5000/penpot-' + role for role in PENPOT_ROLES}
+        exact(policy['images'], repositories)
+    else:
+        fields(policy, common | {'image', 'rtk', 'cgw', 'build'}, common | {'image'})
+        fixture_image = fixture_authorized() and value['host'] == 'fixture-local' and app == 'demo' and policy['image'] == 'localhost:5000/demo'
+        require(type(policy['image']) is str and (re.fullmatch(r'ghcr\.io/[a-z0-9./_-]+', policy['image']) or fixture_image), 'REGISTRY_POLICY')
+    require(type(policy['version']) is int and policy['version'] == 1 and policy['app'] == app and policy['strategy'] in ('blue-green', 'penpot') and policy['platform'] == 'linux/arm64', 'REGISTRY_POLICY')
     for section, keys in (('runtime', {'port'}), ('health', {'path', 'timeout_seconds'}), ('route', {'timeout_seconds'})):
         fields(policy[section], keys, keys)
     require(type(policy['runtime']['port']) is int and 1 <= policy['runtime']['port'] <= 65535, 'REGISTRY_POLICY')
     path_value = policy['health']['path']
     require(type(path_value) is str and HEALTH_PATH.fullmatch(path_value) and '..' not in path_value.split('/'), 'REGISTRY_POLICY')
-    require(all(type(policy[section]['timeout_seconds']) is int and policy[section]['timeout_seconds'] == bound for section, bound in (('health', 60), ('route', 30))), 'REGISTRY_POLICY')
+    require(all(type(policy[section]['timeout_seconds']) is int and policy[section]['timeout_seconds'] == bound for section, bound in (('health', 180 if multi_image else 60), ('route', 30))), 'REGISTRY_POLICY')
+    if multi_image:
+        require(policy['runtime']['port'] == 8080 and path_value == '/readyz', 'REGISTRY_POLICY')
     if 'build' in policy:
         fields(policy['build'], {'dockerfile'}, {'dockerfile'})
         dockerfile = policy['build']['dockerfile']
@@ -270,13 +286,23 @@ def manifest(raw, registration):
     return obj
 
 
+def image_map(value, repositories):
+    fields(value, set(PENPOT_ROLES), set(PENPOT_ROLES))
+    fields(repositories, set(PENPOT_ROLES), set(PENPOT_ROLES))
+    for role in PENPOT_ROLES:
+        require(type(value[role]) is str and re.fullmatch(re.escape(repositories[role]) + r'@sha256:[0-9a-f]{64}', value[role]), 'INVALID_IMAGE')
+    return value
+
+
 def request(raw, profile):
     obj = parse_json(raw)
     op = obj.get('op')
     require(op in ('deploy', 'rollback', 'reconcile', 'status'), 'INVALID_OPERATION')
     common = {'version', 'op', 'app', 'request_id'}
     mutating = common | {'component', 'platform_ref', 'manifest_sha256', 'source_sha'}
-    expected = common if op == 'status' else mutating | ({'image'} if op == 'deploy' else set())
+    multi_image = profile['registration']['manifest'].get('strategy') == 'penpot'
+    image_field = 'images' if multi_image else 'image'
+    expected = common if op == 'status' else mutating | ({image_field} if op == 'deploy' else set())
     fields(obj, expected, {'version', 'op', 'app'} if op == 'status' else expected)
     require(type(obj['version']) is int and obj['version'] == 1, 'INVALID_REQUEST')
     require(type(obj['app']) is str and obj['app'] == profile['app'], 'APP_BINDING_MISMATCH')
@@ -287,9 +313,13 @@ def request(raw, profile):
         require(obj['component'] in components and (op != 'rollback' or obj['component'] == 'app'), 'INVALID_COMPONENT')
         require(all(type(obj[k]) is str and SHA.fullmatch(obj[k]) for k in ('platform_ref', 'source_sha')), 'INVALID_SHA')
         require(type(obj['manifest_sha256']) is str and HASH.fullmatch(obj['manifest_sha256']), 'INVALID_HASH')
+        require(not (multi_image and op == 'rollback'), 'PENPOT_ROLLBACK_REQUIRES_OFFLINE_RESTORE')
         if op == 'deploy':
-            repository = profile['image_repository'] if obj['component'] == 'app' else profile[obj['component'] + '_image_repository']
-            require(type(obj['image']) is str and re.fullmatch(re.escape(repository) + r'@sha256:[0-9a-f]{64}', obj['image']), 'INVALID_IMAGE')
+            if multi_image:
+                image_map(obj['images'], profile['image_repositories'])
+            else:
+                repository = profile['image_repository'] if obj['component'] == 'app' else profile[obj['component'] + '_image_repository']
+                require(type(obj['image']) is str and re.fullmatch(re.escape(repository) + r'@sha256:[0-9a-f]{64}', obj['image']), 'INVALID_IMAGE')
     return obj
 
 
@@ -424,7 +454,9 @@ def host(config, registration, host_record):
         require('cgw_network' not in binding, 'REGISTRY_POLICY')
     fixture = value.get('fixture_ci') is True
     require(not fixture or fixture_authorized(), 'FIXTURE_NOT_AUTHORIZED')
-    extras = {'fixture_ci', 'image_repository', 'architecture', 'ca_bundle'} | ({'rtk_image_repository'} if 'rtk_network' in required else set()) if fixture else set()
+    multi_image = registration['manifest']['strategy'] == 'penpot'
+    image_field = 'image_repositories' if multi_image else 'image_repository'
+    extras = {'fixture_ci', image_field, 'architecture', 'ca_bundle'} | ({'rtk_image_repository'} if 'rtk_network' in required else set()) if fixture else set()
     if fixture and 'fault_file' in value:
         extras.add('fault_file')
     fields(value, required | extras, required | (extras - {'fault_file'}))
@@ -445,7 +477,12 @@ def host(config, registration, host_record):
         native = {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(os.uname().machine, os.uname().machine)
         fixture_image = 'localhost:5000/' + app
         fixture_rtk = 'localhost:5000/rtk-sidecar' if 'rtk' in registration['manifest'] else None
-        require(value['architecture'] == native and value['image_repository'] == fixture_image and value.get('rtk_image_repository') == fixture_rtk, 'FIXTURE_POLICY')
+        require(value['architecture'] == native and value.get('rtk_image_repository') == fixture_rtk, 'FIXTURE_POLICY')
+        if multi_image:
+            require(app == 'penpot', 'FIXTURE_POLICY')
+            exact(value['image_repositories'], {role: 'localhost:5000/penpot-' + role for role in PENPOT_ROLES})
+        else:
+            require(value['image_repository'] == fixture_image, 'FIXTURE_POLICY')
         value['rtk_image_repository'] = fixture_rtk
         require(type(value['ca_bundle']) is str, 'FIXTURE_POLICY')
         trusted_path(value['ca_bundle'])
@@ -458,7 +495,10 @@ def host(config, registration, host_record):
             if fault.exists() or fault.is_symlink():
                 trusted_path(fault)
     else:
-        value['image_repository'] = registration['manifest']['image']
+        if multi_image:
+            value['image_repositories'] = registration['manifest']['images']
+        else:
+            value['image_repository'] = registration['manifest']['image']
         value['rtk_image_repository'] = registration['manifest'].get('rtk', {}).get('image')
         value['architecture'] = 'arm64'
     value['cgw_image_repository'] = registration['manifest'].get('cgw', {}).get('image')
