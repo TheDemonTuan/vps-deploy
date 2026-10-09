@@ -45,7 +45,9 @@ accept zero or one total page only with zero counts and page 1. Missing metadata
 short pages, overlapping resource IDs or changing totals fail closed; only the
 nonpaginated tunnel-connections endpoint may omit metadata. Ruleset lists use
 `per_page=50` and follow `result_info.cursors.after` until no next cursor remains;
-missing metadata, repeated cursors and overlapping IDs fail closed.
+repeated cursors and overlapping IDs fail closed. Legacy ruleset responses without
+metadata are accepted only on the first page with fewer than 50 items and an
+explicit `per_page=50`; full pages or missing metadata after a cursor fail closed.
 Cursor metadata rejection reports only fixed pagination field names, JSON types,
 item count and traversal number. It never prints metadata values, cursors or
 inventory contents. Use this evidence to diagnose API differences before changing

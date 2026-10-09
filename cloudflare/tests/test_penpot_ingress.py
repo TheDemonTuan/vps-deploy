@@ -211,7 +211,9 @@ class PenpotIngressSurvey(unittest.TestCase):
         module = self.module()
         path = '/zones/' + 'b' * 32 + '/rulesets?per_page=50'
         for responses in (
-                [{'success': True, 'result': []}],
+                [{'success': True, 'result': [{'id': str(i)} for i in range(50)]}],
+                [{'success': True, 'result': [{'id': 'one'}], 'result_info': {'cursors': {'after': 'next'}}},
+                 {'success': True, 'result': [{'id': 'two'}]}],
                 [{'success': True, 'result': [], 'result_info': {'cursors': {'after': 'next'}}}],
                 [{'success': True, 'result': [{'id': 'one'}], 'result_info': {'cursors': {'after': 'next'}}},
                  {'success': True, 'result': [{'id': 'two'}], 'result_info': {'cursors': {'after': 'next'}}}]):
@@ -220,6 +222,14 @@ class PenpotIngressSurvey(unittest.TestCase):
                     client.get(path)
         with self.client(module, [{'success': True, 'result': [], 'result_info': {'cursors': {}}}]) as (client, opened):
             self.assertEqual(client.get(path), [])
+
+    def test_legacy_ruleset_short_first_page_retains_all_items(self):
+        module = self.module()
+        path = '/zones/' + 'b' * 32 + '/rulesets?per_page=50'
+        for count in (0, 6, 49):
+            items = [{'id': str(i)} for i in range(count)]
+            with self.subTest(count=count), self.client(module, [{'success': True, 'result': items}]) as (client, opened):
+                self.assertEqual(client.get(path), items)
 
     def test_cursor_metadata_diagnostic_never_discloses_response_values(self):
         import json
