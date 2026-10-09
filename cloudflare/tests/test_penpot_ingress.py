@@ -221,6 +221,23 @@ class PenpotIngressSurvey(unittest.TestCase):
         with self.client(module, [{'success': True, 'result': [], 'result_info': {'cursors': {}}}]) as (client, opened):
             self.assertEqual(client.get(path), [])
 
+    def test_cursor_metadata_diagnostic_never_discloses_response_values(self):
+        import json
+        module = self.module()
+        response = {'success': True, 'result': [{'id': 'private-resource-canary'}],
+                    'result_info': {'page': 'secret-page-canary', 'cursors': 'secret-cursor-canary',
+                                    'private-field-canary': 'secret-value-canary'}}
+        with self.client(module, [response]) as (client, opened):
+            with self.assertRaises(module.Failure) as caught:
+                client.get('/zones/' + 'b' * 32 + '/rulesets?per_page=50')
+        message = str(caught.exception)
+        for secret in ('private-resource-canary', 'secret-page-canary', 'secret-cursor-canary',
+                       'private-field-canary', 'secret-value-canary', 'secret-canary'):
+            self.assertNotIn(secret, message)
+        diagnostic = json.loads(message.split('; metadata_shape=', 1)[1])
+        self.assertEqual(diagnostic, {'result_info_type': 'dict', 'fields': {'page': 'str', 'cursors': 'str'},
+                                      'items': 1, 'page': 1})
+
     def test_nonpaginated_endpoints_and_object_responses_keep_contract(self):
         module = self.module()
         for path, result in [('/accounts/' + 'a' * 32 + '/cfd_tunnel/test/connections', [{'id': 'connector'}]),
