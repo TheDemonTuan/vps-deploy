@@ -33,7 +33,7 @@ def check(root, registration, binding, runtime, source_sha, platform_ref):
     penpot.owned_volumes(profile)
     expected_networks = {
         'penpot_penpot': (True, set(penpot.APP_SERVICES) | set(penpot.DATASTORE_IMAGES)),
-        'penpot-egress': (False, {'penpot-backend', 'penpot-exporter'}),
+        'penpot-egress': (False, {'penpot-frontend', 'penpot-backend', 'penpot-exporter'}),
         'edge-penpot': (True, {'edge-traefik', 'penpot-frontend'}),
     }
     for name, (internal, members) in expected_networks.items():

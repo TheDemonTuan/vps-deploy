@@ -66,7 +66,7 @@ class PenpotEnrollmentParity(unittest.TestCase):
     def check(self):
         def image(kind, ref):
             if kind == 'network':
-                members = set(self.live) if ref == 'penpot_penpot' else {'penpot-backend', 'penpot-exporter'} if ref == 'penpot-egress' else {'edge-traefik', 'penpot-frontend'}
+                members = set(self.live) if ref == 'penpot_penpot' else {'penpot-frontend', 'penpot-backend', 'penpot-exporter'} if ref == 'penpot-egress' else {'edge-traefik', 'penpot-frontend'}
                 value = {'Driver': 'bridge', 'Internal': ref in ('penpot_penpot', 'edge-penpot'), 'Labels': {'vps-deploy.app': 'penpot'},
                          'Containers': {name: {'Name': name} for name in members}}
                 if self.network_fault == 'internal' and ref == 'penpot_penpot':
