@@ -15,6 +15,9 @@ volume ownership and edge TLS without creating directories, keys or volumes.
 Production activation still fails with `PENPOT_RELEASE_ENGINE_NOT_READY`; only an
 authorized `fixture-local` disposable CI profile may pass the preparation fence.
 Native recovery evidence, not source-only tests, is required to remove that fence.
+The native fixture seeds the previous enrolled release before installer `--check`;
+the new target release remains absent until apply. Production trust checks are
+unchanged, and fixture cleanup removes its owned baseline release.
 
 Frontend, backend and exporter share the outbound `penpot-egress` network;
 datastores and MCP remain on the internal network. Frontend needs external DNS
