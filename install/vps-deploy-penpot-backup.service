@@ -1,0 +1,16 @@
+[Unit]
+Description=Create a locked local Penpot database and assets backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/libexec/vps-deploy-penpot-backup
+TimeoutStartSec=1800
+TimeoutStopSec=60
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true

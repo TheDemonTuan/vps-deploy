@@ -112,7 +112,7 @@ def profile_data(app, release, binding, host_record, previous):
     profile = dict(binding, platform_ref=release, dynamic_dir=host_record['traefik']['dynamic_dir'])
     if previous:
         previous = dict(previous)
-        for name in ('fixture_ci', 'image_repository', 'rtk_image_repository',
+        for name in ('fixture_ci', 'image_repository', 'image_repositories', 'rtk_image_repository',
                      'architecture', 'ca_bundle', 'fault_file'):
             if name in previous:
                 profile[name] = previous[name]
@@ -205,8 +205,7 @@ def stop_drain(app, old=False):
 def restore_timers(timers):
     for timer, enabled, running in timers:
         run('/usr/bin/systemctl', 'enable' if enabled else 'disable', timer, check=False)
-        if running:
-            run('/usr/bin/systemctl', 'start', timer, check=False)
+        run('/usr/bin/systemctl', 'start' if running else 'stop', timer, check=False)
 
 
 def activation(args, root, raw, binding, host_record, previous, source_env, expected, *, cgw_transition=False):
@@ -250,6 +249,12 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                 timers = []
                 try:
                     timers.append(stop_drain(app))
+                    if app == 'penpot':
+                        if optional_trusted(SYSTEMD / 'vps-deploy-penpot-backup.timer'):
+                            from penpot_backup import pause
+                            timers.append(pause(run))
+                        else:
+                            timers.append(('vps-deploy-penpot-backup.timer', False, False))
                     if app == '9router':
                         timers.append(stop_drain(app, old=True))
                     stack.enter_context(acquire(LOCKS / (app + '@operation.lock')))
@@ -269,10 +274,14 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                             require(target.read_bytes() == content and stat.S_IMODE(target.stat().st_mode) == 0o644, 'SHARED_UNIT_MISMATCH')
                         else:
                             put(target, content, 0o644)
+                    backup_files = {}
+                    if app == 'penpot':
+                        from penpot_backup import files as penpot_backup_files
+                        backup_files = penpot_backup_files(destination, LIBEXEC, SYSTEMD)
                     key_file = Path('/home') / ('deploy-' + app) / '.ssh/authorized_keys'
                     old_units = (SYSTEMD / 'vps-deploy-9router-drain.service', SYSTEMD / 'vps-deploy-9router-drain.timer') if app == '9router' else ()
                     rollback_compat_src = destination / 'apps' / app / 'rollback-compatibility.json'
-                    for path in (cfg / 'host.json', cfg / 'app.yml', cfg / 'runtime.env', wrapper, drain, sudo, key_file, *old_units, *([cfg / 'rollback-compatibility.json'] if rollback_compat_src.exists() else [])):
+                    for path in (cfg / 'host.json', cfg / 'app.yml', cfg / 'runtime.env', wrapper, drain, sudo, key_file, *old_units, *backup_files, *([cfg / 'rollback-compatibility.json'] if rollback_compat_src.exists() else [])):
                         backup(path)
                     if rollback_compat_src.exists():
                         put(cfg / 'rollback-compatibility.json', rollback_compat_src.read_bytes(), 0o400)
@@ -286,6 +295,8 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                         content = (destination / 'install/vps-deploy-app').read_text()
                         content = content.replace('@APP@', app).replace('@RELEASE@', args.release).replace('@ACTION@', action)
                         put(target, content.encode(), 0o755)
+                    for target, (content, mode) in backup_files.items():
+                        put(target, content, mode)
                     sudo_text = f'deploy-{app} ALL=(root) NOPASSWD: {wrapper} ""\n'.encode()
                     temporary = sudo.with_suffix('.tmp')
                     put(temporary, sudo_text, 0o440)
@@ -300,12 +311,12 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                             adopt_cgw(destination, cfg, state, profile)
                         run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
                     else:
-                        if profile['registration']['manifest']['strategy'] == 'recreate':
+                        if profile['registration']['manifest']['strategy'] == 'penpot':
                             run(str(destination / 'bin/deployctl'), 'adopt', '--app', app)
                             run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
                     run('/usr/bin/bash', str(destination / 'install/install-key.sh'), '--app', app, str(args.public_key))
-                    is_recreate = registration['manifest']['strategy'] == 'recreate'
-                    if not is_recreate:
+                    singleton = registration['manifest']['strategy'] == 'penpot'
+                    if not singleton:
                         was_enabled = any(enabled for _, enabled, _ in timers)
                         run('/usr/bin/systemctl', 'enable' if was_enabled else 'disable', 'vps-deploy-drain@' + app + '.timer')
                         if app == '9router':
@@ -314,6 +325,8 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                             run('/usr/bin/systemctl', 'start', 'vps-deploy-drain@' + app + '.timer')
                     else:
                         run('/usr/bin/systemctl', 'disable', 'vps-deploy-drain@' + app + '.timer', check=False)
+                    if app == 'penpot':
+                        restore_timers([saved for saved in timers if saved[0] == 'vps-deploy-penpot-backup.timer'])
                     for old_unit in old_units:
                         old_unit.unlink(missing_ok=True)
                     if old_units:
@@ -384,7 +397,9 @@ def main():
         trusted_path(source_env.parent.parent, directory=True)
         require(source_env.stat().st_uid in (0, source_env.parent.stat().st_uid) and not source_env.parent.stat().st_mode & 0o022, 'UNSAFE_RUNTIME_ENV')
     require(stat.S_IMODE(source_env.stat().st_mode) == 0o600, 'UNSAFE_RUNTIME_ENV')
-    composed = preflight(root, args.app, registration, binding, source_env, previous, cgw_transition=cgw_transition)
+    penpot_proof = {'source_sha': args.app_ref, 'platform_ref': args.release} if registration['manifest']['strategy'] == 'penpot' else {}
+    composed = preflight(root, args.app, registration, binding, source_env, previous,
+                         cgw_transition=cgw_transition, **penpot_proof)
     selected_volumes = {mount['source'] for service in composed['services'].values() for mount in service.get('volumes', []) if mount.get('type') == 'volume'}
     from core import container
     for enrolled in CONFIG.iterdir() if CONFIG.exists() else ():

@@ -365,6 +365,50 @@ Thực hiện một lần bởi Quản trị viên (Operator) có quyền root:
 - CGW public image không chứa browser. `docker compose up` tự chạy `browser-init` bằng cùng image, non-root, root read-only, 0.5 CPU / 1GB RAM; tải Chrome for Testing `154.0.8037.92` trực tiếp từ Google và xác minh SHA256/provenance trong Docker cache. Không cài Chrome/Python browser installer trên host, không compile/browser builder hoặc COPY payload vào image. Cache mount tại `/opt/cgw-browser`: init RW, runtime RO; executable versioned do từng image sở hữu, giữ các version cũ để rollback. Managed deploy chuẩn bị cache **trước** drain rồi dùng runtime `up --no-deps`; transaction profile/data vẫn giữ nguyên. Build chạy verifier thật trong image sandboxed và COPY duy nhất generated compatibility JSON vào `/opt/cgw/compatibility.json`. Exact published digest phải qua native image/browser smoke và image Trivy gate. `scripts/scan-browser.py` dùng SPDX đọc qua Docker, Grype `0.120.0` theo CPE `google:chrome`, không ignore HIGH/CRITICAL; mỗi lần scan phải chứng minh phát hiện Chrome cũ có lỗ hổng, scanner/database lỗi hoặc thiếu CPE coverage đều fail closed. CI dọn cache/container của chính job, không upload browser/account/runtime state. Offline build evidence không chứng minh account login hay Full readiness. Runbook: [`install/README.md`](install/README.md#first-cgw-enrollment-and-build-proof).
 - Gateway CGW env chỉ cho phép URL nội bộ và ba file selectors `CHATGPT_WEB_RUNTIME_TOKEN_FILE`, `CHATGPT_WEB_RUNTIME_ADMIN_TOKEN_FILE`, `CHATGPT_WEB_CLIENT_KEYS_FILE`; không dùng socket env cũ hoặc secrets trực tiếp. `INITIAL_PASSWORD` vẫn bắt buộc; CGW secret-file/native-policy checks chỉ áp dụng khi manifest enroll CGW.
 
+### Penpot: bằng chứng lifecycle native trước activation
+
+`tests/integration/penpot-runtime-ci.sh` chỉ dành cho VM GitHub-hosted dùng một lần,
+root, ARM64 native, Docker native và systemd PID 1. Guard từ chối self-hosted/VPS,
+checkout khác SHA hoặc dirty, resource production đã tồn tại và cổng fixture đã
+được sử dụng; thiếu prerequisite là fail, không skip. Job gọi sau source smoke:
+
+```bash
+sudo env CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+  GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+  PENPOT_DISPOSABLE_VM=1 PENPOT_APP_REF="$SOURCE_SHA" \
+  PENPOT_PLATFORM_REF="$PLATFORM_REF" \
+  PENPOT_CI_APP_DIR="$GITHUB_WORKSPACE/source" \
+  PENPOT_CI_REPORT_DIR="$RUNNER_TEMP/penpot-proof" \
+  bash platform/tests/integration/penpot-runtime-ci.sh
+```
+
+Report directory phải được runner tạo trước; chỉ `lifecycle.json` và sanitized
+`logs/runtime.log` được harness xuất, kể cả khi fail. Fixture commit F chứa raw
+localhost manifest, bốn variants có OCI revision F và label source SHA thật;
+production source tags không bị sửa và variants không được archive/publish.
+Đây là lifecycle proof từ cùng source image closure, không phải proof migration
+giữa hai app release khác nhau. Registry chỉ bind loopback, digest immutable.
+
+Suite dùng controller/forced SSH/systemd thật, PostgreSQL và asset volume thật,
+TLS Traefik/origin probe thật, installer immutable-copy và fresh backup timer
+inactive. Migration fixture mở JDBC connection riêng để commit dữ liệu rồi
+throw trong engine migration thật. Các checkpoints SIGKILL, reconcile hai lần,
+write sau exposure, backup/offline restore/corruption/retention và foreign
+sentinels phải pass trước activation. Retention là newest seven cộng references
+theo engine; variants cùng F vẫn là previous-source references, không xóa state
+để ép số backup thành bảy. Query-token regression giữ error causes ở success,
+404, connection refused và timeout; leak là fail, không tắt logging để lấy xanh.
+
+P0 vẫn chặn production bằng `PENPOT_RELEASE_ENGINE_NOT_READY`: chỉ profile có
+`fixture_ci: true`, registry host `fixture-local` và marker root-owned regular
+0600 hợp lệ được đi qua. Không có environment override trên production. Cleanup
+chỉ xóa resource do harness tạo; không prune hoặc đụng shared infrastructure.
+Container/cache volume BuildKit từ `docker/setup-buildx-action` được phép tồn tại;
+guard chỉ chặn production/fixture names và ownership labels. Harness giữ baseline
+identity của mọi resource foreign có sẵn, assert sau từng lifecycle và cleanup,
+không dừng builder, không xóa cache hoặc network foreign. CA directory readonly
+được bind đúng topology ở cả Traefik và tunnel namespace; asset UID/GID phải 1001.
+
 ### Lưu ý an toàn cơ sở dữ liệu Blue/Green
 
 Hai slot blue/green dùng chung volume dữ liệu (như SQLite hoặc DB container). Deployment engine hỗ trợ rollback route và container ngay lập tức, nhưng **không rollback dữ liệu đã thay đổi**.

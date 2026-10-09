@@ -9,7 +9,7 @@ import sys
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
-from core import Failure, app_registration, host_registration, manifest
+from core import Failure, app_registration, host_registration, image_map, manifest, parse_json
 
 
 class UniqueBaseLoader(yaml.BaseLoader):
@@ -39,7 +39,7 @@ def checked_sha(directory, expected):
 def main():
     workflow = sys.argv[1] if len(sys.argv) > 1 else None
     preflight = sys.argv[2:] == ["--preflight"]
-    if workflow not in ("build-docker.yml", "deploy/action.yml", "security-trivy.yml") or (sys.argv[2:] and not preflight):
+    if workflow not in ("build-docker.yml", "build-penpot.yml", "deploy/action.yml", "security-trivy.yml") or (sys.argv[2:] and not preflight):
         raise ValueError("unknown workflow or option")
     env = os.environ
     source, platform_sha = env["SOURCE_SHA"], env["PLATFORM_REF"]
@@ -55,18 +55,27 @@ def main():
     if (workflow == "deploy/action.yml" and registered_host != env.get("HOST")) or registration["caller"]["repository"] != env["CALLER_REPO"] or env["CALLER_REF"] not in allowed_refs or registration["caller"]["config"] != env["CONFIG"]:
         raise ValueError("caller binding mismatch")
     policy = registration["manifest"]
-    if workflow == "build-docker.yml":
-        if env["OPERATION"] != "build" or env["COMPONENT"] not in ("app", "cgw") or (env["COMPONENT"] == "cgw" and "cgw" not in policy) or env["IMAGE_REF"]:
-            raise ValueError("invalid build inputs")
-        callers = registration["caller"]["build_workflows"]
-        pin = "TheDemonTuan/vps-deploy/.github/workflows/build-docker.yml@" + platform_sha
+    penpot = policy['strategy'] == 'penpot'
+    images = env.get('IMAGES', '')
+    if workflow in ('build-docker.yml', 'build-penpot.yml'):
+        if (workflow == 'build-penpot.yml') != penpot:
+            raise ValueError('builder strategy mismatch')
+        if env['OPERATION'] != 'build' or env['COMPONENT'] not in (('app',) if penpot else ('app', 'cgw')) or (env['COMPONENT'] == 'cgw' and 'cgw' not in policy) or env['IMAGE_REF'] or images:
+            raise ValueError('invalid build inputs')
+        callers = registration['caller']['build_workflows']
+        pin = 'TheDemonTuan/vps-deploy/.github/workflows/' + workflow + '@' + platform_sha
     elif workflow == "security-trivy.yml":
         mode = env.get("SCAN_MODE", "source")
         if mode not in ("source", "image"):
             raise ValueError("invalid scan mode")
+        role = env.get('IMAGE_ROLE', '')
+        if images or (role and not penpot) or (mode == 'source' and (role or env.get('IMAGE_REF'))):
+            raise ValueError('invalid scan inputs')
         if mode == "image":
             image = env.get("IMAGE_REF", "")
-            allowed_images = [policy["image"]]
+            if penpot and role not in policy['images']:
+                raise ValueError('invalid image role')
+            allowed_images = [policy['images'][role]] if penpot else [policy['image']]
             if "rtk" in policy:
                 allowed_images.append(policy["rtk"]["image"])
             if 'cgw' in policy:
@@ -79,12 +88,24 @@ def main():
         component, operation, image = env["COMPONENT"], env["OPERATION"], env["IMAGE_REF"]
         if component not in ('app', 'rtk', 'cgw') or (component != 'app' and component not in policy):
             raise ValueError("unregistered component")
-        if operation == "deploy":
-            repository = policy['image'] if component == 'app' else policy[component]['image']
-            if not re.fullmatch(re.escape(repository) + r"@sha256:[0-9a-f]{64}", image):
-                raise ValueError("invalid image")
-        elif operation not in ("status", "reconcile", "rollback") or image or (operation == "rollback" and component != "app"):
-            raise ValueError("invalid operation")
+        if penpot:
+            if component != 'app' or image:
+                raise ValueError('invalid Penpot component or single image')
+            if operation == 'rollback':
+                raise ValueError('PENPOT_ROLLBACK_REQUIRES_OFFLINE_RESTORE')
+            if operation == 'deploy':
+                image_map(parse_json(images.encode()), policy['images'])
+            elif operation not in ('status', 'reconcile') or images:
+                raise ValueError('invalid operation')
+        else:
+            if images:
+                raise ValueError('image map requires Penpot strategy')
+            if operation == 'deploy':
+                repository = policy['image'] if component == 'app' else policy[component]['image']
+                if not re.fullmatch(re.escape(repository) + r'@sha256:[0-9a-f]{64}', image):
+                    raise ValueError('invalid image')
+            elif operation not in ('status', 'reconcile', 'rollback') or image or (operation == 'rollback' and component != 'app'):
+                raise ValueError('invalid operation')
         callers = registration["caller"]["deploy_workflows"]
         pin = "TheDemonTuan/vps-deploy/.github/actions/deploy@" + platform_sha
     if preflight:

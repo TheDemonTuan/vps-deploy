@@ -1,5 +1,0 @@
-networks:
-  edge-opendesign:
-    name: edge-opendesign
-    driver: bridge
-    internal: true

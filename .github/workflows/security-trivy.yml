@@ -21,6 +21,10 @@ on:
         required: false
         type: string
         default: ''
+      image-role:
+        required: false
+        type: string
+        default: ''
       platform:
         required: false
         type: string
@@ -69,6 +73,7 @@ jobs:
           CALLER_REF: ${{ github.ref }}
           SCAN_MODE: ${{ inputs.scan-mode }}
           IMAGE_REF: ${{ inputs.image-ref }}
+          IMAGE_ROLE: ${{ inputs.image-role }}
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -91,6 +96,7 @@ jobs:
           CALLER_REF: ${{ github.ref }}
           SCAN_MODE: ${{ inputs.scan-mode }}
           IMAGE_REF: ${{ inputs.image-ref }}
+          IMAGE_ROLE: ${{ inputs.image-role }}
         run: |
           set -euo pipefail
           python3 platform/scripts/check-caller.py security-trivy.yml
@@ -119,6 +125,7 @@ jobs:
         env:
           SCAN_MODE: ${{ inputs.scan-mode }}
           IMAGE_REF: ${{ inputs.image-ref }}
+          IMAGE_ROLE: ${{ inputs.image-role }}
           APP: ${{ inputs.app }}
           PLATFORM: ${{ inputs.platform }}
           VULN_SEVERITY: ${{ inputs.vuln-severity }}
@@ -126,6 +133,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/trivy-reports"
           REPORT_DIR="$RUNNER_TEMP/trivy-reports"
+          REPORT_APP="$APP${IMAGE_ROLE:+-$IMAGE_ROLE}"
 
           COMMON_OPTS=()
           if [[ -f ".trivyignore.yaml" ]]; then
@@ -192,13 +200,13 @@ jobs:
             trivy image "${COMMON_OPTS[@]}" "${IMAGE_OPTS[@]}" \
               --scanners vuln,secret,misconfig \
               --format json \
-              --output "$REPORT_DIR/trivy-image-${APP}.json" \
+              --output "$REPORT_DIR/trivy-image-${REPORT_APP}.json" \
               "$IMAGE_REF"
 
             # 3. CycloneDX SBOM for exact image digest
             trivy image "${COMMON_OPTS[@]}" "${IMAGE_OPTS[@]}" \
               --format cyclonedx \
-              --output "$REPORT_DIR/sbom-image-${APP}.cdx.json" \
+              --output "$REPORT_DIR/sbom-image-${REPORT_APP}.cdx.json" \
               "$IMAGE_REF"
             # 4. Strict Gate: Fail if CRITICAL vulnerabilities or HIGH/CRITICAL secrets/misconfigs exist in image
             echo "Running strict image gate..."
@@ -254,6 +262,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: trivy-reports-${{ inputs.app }}-${{ inputs.scan-mode }}
+          name: trivy-reports-${{ inputs.app }}-${{ inputs.scan-mode }}${{ inputs.image-role && format('-{0}', inputs.image-role) || '' }}
           path: ${{ runner.temp }}/trivy-reports/
           if-no-files-found: ignore

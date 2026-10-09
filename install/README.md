@@ -2,144 +2,40 @@
 
 Do not run this procedure until the platform PR's AMD64/ARM64 checks and disposable migration rehearsal pass. The release, app commit, public key, VPS inventory, and caller workflow changes need operator review. This runbook does not authorize a production operation; ACB, Messenger, and the shared Traefik middleware are outside this upgrade. If Oracle host key, network, route, directory, or owner differs from `hosts/oracle-main.yml`, stop; review inventory and publish a corrected platform release rather than overriding policy at runtime.
 
-## Reviewed OpenDesign platform activation
+## Penpot preparation
 
-OpenDesign upgrades use **Activate OpenDesign platform**, not a workstation
-installer invocation or a rewritten release/tag. Dispatch `activate-platform.yml`
-on platform `main` with `app_ref` set to the full lowercase 40-character commit
-SHA already merged into `TheDemonTuan/open-design/main`. The dispatch's platform
-SHA must have completed successful `Platform verification` on both architectures;
-PR-only or older successful CI evidence is insufficient.
+The old OpenDesign registry, controllers, workflows and recreate engine no longer
+ship in new platform releases. Prior versions remain in Git history. This source
+change does not remove installed releases, live security configuration, routes,
+containers or volumes on the VPS.
 
-Configure Environment `platform-admin` with required reviewer `TheDemonTuan`,
-only branch `main`, `can_admins_bypass: false`, and `prevent_self_review: false`.
-Keep the restricted app deploy key unchanged. Set variable
-`OPENDESIGN_DEPLOY_PUBLIC_KEY` to that enrolled Ed25519 public key and provision
-secret `VPS_PLATFORM_ADMIN_SSH_KEY` temporarily for this activation only. Approve
-the environment deployment manually; never approve it programmatically to bypass
-review. The runner removes temporary key files, but the operator must also delete
-the environment secret in a `finally` after the run reaches success/failure/cancel
-and verify its absence using the secret-name list.
+Penpot has its own four-image release engine, six-service Compose, offline restore
+and daily backup units. `bootstrap-penpot.py --check` validates source/image identity,
+volume ownership and edge TLS without creating directories, keys or volumes.
+Production activation still fails with `PENPOT_RELEASE_ENGINE_NOT_READY`; only an
+authorized `fixture-local` disposable CI profile may pass the preparation fence.
+Native recovery evidence, not source-only tests, is required to remove that fence.
 
-The remote entry requires an idle, already enrolled host. It fetches exact clean
-detached commits into private staging, verifies the existing forced-command key,
-and invokes the installer first with `--check` then identical apply arguments.
-Recreate preflight requires the singleton service while retaining environment,
-mount, network and no-published-port parity. A success receipt proves the profile
-selected the reviewed platform, strict health passed, and container/image,
-route bytes and runtime environment hash/ownership/mode remained unchanged.
-The active deployment record may retain the old platform until the next image
-deployment; do not edit state to force a match.
+Bootstrap uses the host CA `/opt/platform/edge/cloudflare-ca/origin-ca.pem`, mounted
+read-only at `/etc/cloudflare-origin-ca` in `edge-cloudflared`. Its origin probe runs
+the checked frontend digest in that container's network namespace, with design
+Host/SNI and CA verification against `172.31.250.4:8080`. It checks the shared edge
+IPs and TLS entrypoint first and needs two matching readiness responses before
+enrollment. DNS need not exist yet. Deploy, reconcile and backup retain their public
+HTTPS checks; they never fall back to the origin probe.
 
-Singleton recreate admission and resume wait up to 120 seconds for the internal
-deployment API after startup. A monotonic deadline bounds each probe and the
-two-second retry interval. Only structured connection refusal and probe timeout
-are startup retries; HTTP authentication/non-200 responses, malformed JSON and
-other execution failures fail visibly. Readiness does not replace candidate
-fencing or SQLite checks. Failed readiness or resume retains the pending operation
-for reconciliation; it must not be reported as a healthy completed deployment.
+Apply copies reviewed platform bytes into `/opt/vps-deploy/releases/<platform-sha>`
+using the installer's immutable release-copy API. Reuse requires identical bytes.
+Enrollment restores the backup timer's prior enabled/active state. A fresh timer
+stays disabled/inactive until public readiness, a complete production backup and
+a private ARM64 restore rehearsal pass; only then enable the daily timer.
 
-Only after a successful receipt, update all application action refs and
-`platform-ref` inputs together to the activated SHA. Preserve Cloudflare Access,
-CrowdSec, Traefik and port isolation. On disconnect, inspect profile and strict
-status read-only before replaying the same SHAs. `RELEASE_MODIFIED`, key mismatch,
-busy state or invariant drift must fail visibly: do not overwrite releases,
-patch state, rotate keys, or add another rollback mechanism.
-
-Production proof: [run 37415312347](https://github.com/TheDemonTuan/vps-deploy/actions/runs/37415312347)
-activated `840986fe2c98898372ac58de528d1b2606e9c04c` against application
-`1bd710a0c41892b276e2f5e51f32e7d19c8d2095`. Its receipt reports healthy,
-unchanged container and runtime environment; the temporary admin secret was
-deleted and its absence verified after completion. This proof does not claim
-that an application image deployment or a provider generation was performed.
-
-### Fixed startup-race recovery
-
-`recover-opendesign.yml` is a protected, main-only recovery entry for the exact
-transaction `gh-37424292784-1-app`, not a general recovery command. It requires
-successful AMD64/ARM64 CI for the dispatched platform SHA, a reviewed application
-main SHA, the enrolled deploy public key and temporary `platform-admin` identity.
-It refuses another pending operation, fence, image, snapshot or route identity.
-Under the existing submit/operation/Traefik locks, reviewed reconciliation restores
-the recorded old image/data, waits for API readiness and resumes the original
-operation. Only the engine's proven restored transition permits one bounded
-continuation to clear the intent; transport errors never trigger blind replay.
-Installed release bytes and enrollment remain unchanged. Use ordinary activation
-after successful recovery; do not patch state or bypass environment approval.
-
-[Recovery run 37426963504](https://github.com/TheDemonTuan/vps-deploy/actions/runs/37426963504)
-exercised platform `806225b42ac720fb9e1af49beb3b2a073563557c` against application
-`bc7372c32407fdf2f13b96edb94e30919d637cac`. Its receipt proves the old digest restored,
-healthy, accepting and operation cleared. The temporary admin secret was revoked
-and absence verified. This recovery proof is not a new-image deployment proof.
-
-### Scoped OpenDesign method-policy tuning
-
-`tune-opendesign-waf.yml` requires main CI and the same temporary, reviewed
-`platform-admin` transport as activation. It does not activate a platform or image.
-The fixed policy removes out-of-band CRS 911100 only on the exact OpenDesign host
-and five source-evidenced PUT/PATCH configuration/design-persistence contracts.
-All other methods/routes/hosts, in-band rules and body/SQLi/XSS/traversal checks
-remain active; no IP whitelist or decision deletion is performed.
-
-Before touching the two owned configuration files, the remote entry verifies
-existing loaded-policy fingerprints and runs baseline/candidate/native in-band
-controls in a fresh network namespace with fake local credentials and no real
-notification or decision store. It observes rule-hit counters after native
-completion, not HTTP status alone. Its clean GET serialization barrier must have
-an empty body: a GET body triggers CRS 920170 and contaminates the request proof.
-The local native CrowdSec 1.8.1 replay against exported rule assets passed all
-99 baseline/candidate cases and five in-band controls after that correction.
-This is sandbox evidence, not proof of production deployment or browser acceptance.
-
-Only successful smoke permits atomic scope/acquisition replacement, config
-validation and CrowdSec restart/readiness. Failures restore only those two files;
-application profile/container/route/environment and other security config are
-guarded unchanged. Workflow failures print only validated stage/error-code tokens,
-never raw subprocess stderr or credentials. Revoke the temporary admin secret in
-the terminal-run monitor's `finally`, including failed/cancelled runs.
-
-[Production run 37438319293](https://github.com/TheDemonTuan/vps-deploy/actions/runs/37438319293)
-applied `local/opendesign-crs-scope` from platform
-`cf4639642480fe71d71b7912b834effe27b60584` after native baseline/candidate and
-negative controls passed. Receipt confirms security retained and application
-profile/container/runtime environment unchanged. Read-only checks confirmed the
-scope loaded, CrowdSec/firewall bouncer/firewalld active, strict application health
-and no active decision for the reported client IP. Temporary admin secret was
-revoked and absence verified. Authenticated browser interaction remains a separate
-acceptance check; absence of traffic is not proof of no future false positives.
-
-On 2026-10-06, a separate post-login false positive matched CRS 930120 against
-`REQUEST_COOKIES.cf_clearance` on ordinary OpenDesign GET requests. With explicit
-operator authorization for direct VPS changes, the two reviewed cookie-target
-files under `security/crowdsec/` were installed and their configuration prepended
-to AppSec acquisition before CRS. The seclang runtime exclusion removes only
-`REQUEST_COOKIES:cf_clearance` from rule 930120 on the exact OpenDesign host.
-Other cookies, request arguments/body, other hosts and other rules stay inspected.
-Native CrowdSec 1.8.1 proved baseline detection, target-cookie exclusion, detection
-on another host and detection of another cookie. Production config validation and
-CrowdSec restart succeeded; root-only backups were retained. No active matching
-client decision remained to delete. Browser acceptance still requires real traffic.
-
-Message persistence intentionally stores arbitrary HTML/code/file references. An
-initial per-rule `json.content` exclusion fixed observed XSS/RCE signatures but
-later CRS 930120 matched file references in the same field. That policy has been
-removed rather than extended into an endless list of signature exceptions.
-
-`local/opendesign-message-body` now disables body inspection in both phases only
-for PUT of the exact project/conversation/message endpoint on the OpenDesign
-host. Method policy, URI/query, headers/cookies, IP reputation, other endpoints,
-Cloudflare Access and firewall remain enforced. **Tradeoff:** all JSON fields in
-this endpoint's body bypass WAF signatures, so daemon authorization/schema checks
-remain responsible for these writes. Native CrowdSec proved HTML/file-reference
-body exclusion while query XSS and other-endpoint/other-host body XSS/LFI remained
-detected. Direct config validation/restart passed with root-only backups; the
-superseded rule/config were removed. Browser acceptance requires post-fix traffic.
-
-
-
-
-
+Cloudflare `penpot-ingress.yml` offers manual survey/apply on platform `main`. Apply
+uses the protected `platform-admin` identity to prove the exact installed platform,
+healthy coherent Penpot state and verified origin TLS before any API write. It
+changes only the design hostname and preserves sibling routes and policies. Review
+native CI and bootstrap evidence before running it; Access removal is the last
+write, followed by public HTTPS readiness.
 
 ## Upgrade 9router
 

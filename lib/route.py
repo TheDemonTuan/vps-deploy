@@ -2,6 +2,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -42,16 +43,15 @@ def route_state(raw, profile):
         require(type(urls) is list and len(urls) == 1 and type(urls[0]) is dict and set(urls[0]) == {'url'}, 'ROUTE_SHAPE')
         url = urls[0]['url']
         strategy = profile['registration']['manifest'].get('strategy', 'blue-green')
-        if strategy == 'recreate':
-            expected = rf'http://{re.escape(app)}-single:{profile["registration"]["manifest"]["runtime"]["port"]}'
-            found = re.fullmatch(expected, url) if type(url) is str else None
-            require(found is not None and type(header) is str and re.fullmatch('[0-9a-f]{32}', header), 'ROUTE_SHAPE')
+        require(strategy in ('blue-green', 'penpot'), 'ROUTE_SHAPE')
+        if strategy == 'penpot':
+            require(url == 'http://penpot-frontend:8080' and app == 'penpot' and
+                    type(header) is str and re.fullmatch('[0-9a-f]{32}', header), 'ROUTE_SHAPE')
             return 'single', header
-        else:
-            expected = rf'http://{re.escape(app)}-(blue|green):{profile["registration"]["manifest"]["runtime"]["port"]}'
-            found = re.fullmatch(expected, url) if type(url) is str else None
-            require(found is not None and type(header) is str and re.fullmatch('[0-9a-f]{32}', header), 'ROUTE_SHAPE')
-            return found.group(1), header
+        expected = rf'http://{re.escape(app)}-(blue|green):{profile["registration"]["manifest"]["runtime"]["port"]}'
+        found = re.fullmatch(expected, url) if type(url) is str else None
+        require(found is not None and type(header) is str and re.fullmatch('[0-9a-f]{32}', header), 'ROUTE_SHAPE')
+        return found.group(1), header
     except (KeyError, TypeError):
         raise Failure('ROUTE_SHAPE') from None
 
@@ -104,29 +104,27 @@ def preflight(directory, profile, release_root=None):
 
 def probe(profile):
     strategy = profile['registration']['manifest']['strategy']
-    if strategy == 'recreate':
+    require(strategy in ('blue-green', 'penpot'), 'STRATEGY_MISMATCH')
+    if strategy == 'penpot':
         traefik = profile['host_registration']['traefik']['container']
-        gen_hdr = profile['registration']['route']['generation_header'].lower()
-        cmd = ['docker', 'exec', traefik, 'wget', '-S', '-O', '-', '--header=Host: ' + profile['app'] + '.internal.invalid', 'http://127.0.0.1:18080/api/health']
-        import subprocess
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
-        require(proc.returncode == 0, 'PUBLIC_HEALTH')
-        lines = proc.stderr.splitlines()
-        require(any('HTTP/1.1 200' in l or 'HTTP/2 200' in l for l in lines), 'PUBLIC_HEALTH')
-        generation = None
-        for l in lines:
-            if ':' in l:
-                k, _, v = l.partition(':')
-                if k.strip().lower() == gen_hdr:
-                    generation = v.strip()
-                    break
-        require(generation and re.fullmatch('[0-9a-f]{32}', generation), 'PUBLIC_HEALTH')
-        try:
-            data = json.loads(proc.stdout)
-            require(data.get('ok') is True and data.get('deployment_slot') == 'single', 'PUBLIC_HEALTH')
-        except (ValueError, TypeError):
-            raise Failure('PUBLIC_HEALTH') from None
-        return 'single', generation
+        process = subprocess.run(['/usr/bin/docker', 'exec', traefik, 'wget', '-S', '-O', '-',
+                                  '--header=Host: penpot.internal.invalid', 'http://127.0.0.1:18080/readyz'],
+                                 capture_output=True, timeout=8)
+        require(process.returncode == 0 and process.stdout.strip() == b'OK', 'PUBLIC_HEALTH')
+        headers = process.stderr.decode('ascii', errors='replace').splitlines()
+        statuses = [line.strip() for line in headers if line.strip().startswith('HTTP/')]
+        require(len(statuses) == 1 and re.fullmatch(r'HTTP/(?:1\.[01]|2(?:\.0)?) 200(?: .*)?', statuses[0]), 'PUBLIC_HEALTH')
+        generation_header = profile['registration']['route']['generation_header'].lower()
+        generations, ages = [], []
+        for line in headers:
+            key, separator, value = line.strip().partition(':')
+            if separator and key.lower() == generation_header:
+                generations.append(value.strip())
+            elif separator and key.lower() == 'age':
+                ages.append(value.strip())
+        require(len(generations) == 1 and re.fullmatch('[0-9a-f]{32}', generations[0]) and
+                len(ages) <= 1 and all(value == '0' for value in ages), 'PUBLIC_HEALTH')
+        return 'single', generations[0]
     else:
         try:
             trust = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C'}

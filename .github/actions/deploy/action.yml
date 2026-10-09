@@ -23,7 +23,10 @@ inputs:
     description: App manifest path
     default: .deploy/app.yml
   image-ref:
-    description: Immutable image digest; required only for deploy
+    description: Immutable single-image digest for non-Penpot deploys
+    default: ''
+  images:
+    description: Exact JSON map of four immutable digests for Penpot deploys
     default: ''
 runs:
   using: composite
@@ -64,6 +67,7 @@ runs:
         OPERATION: ${{ inputs.operation }}
         COMPONENT: ${{ inputs.component }}
         IMAGE_REF: ${{ inputs.image-ref }}
+        IMAGES: ${{ inputs.images }}
       run: |
         set -euo pipefail
         sudo apt-get update
@@ -90,6 +94,7 @@ runs:
         OPERATION: ${{ inputs.operation }}
         COMPONENT: ${{ inputs.component }}
         IMAGE_REF: ${{ inputs.image-ref }}
+        IMAGES: ${{ inputs.images }}
       run: python3 platform/scripts/check-caller.py deploy/action.yml
     - name: Submit request and verify strict status
       shell: bash
@@ -103,6 +108,7 @@ runs:
         OPERATION: ${{ inputs.operation }}
         COMPONENT: ${{ inputs.component }}
         IMAGE_REF: ${{ inputs.image-ref }}
+        IMAGES: ${{ inputs.images }}
         DEPLOY_HOST: ${{ env.DEPLOY_HOST || '' }}
         DEPLOY_PORT: ${{ env.DEPLOY_PORT || '' }}
         DEPLOY_USER: ${{ env.DEPLOY_USER || '' }}
@@ -116,5 +122,7 @@ runs:
         args=(--app "$APP" --host "$HOST" --operation "$OPERATION" --component "$COMPONENT"
               --source-sha "$SOURCE_SHA" --platform-ref "$PLATFORM_REF" --config "$CONFIG"
               --request-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${COMPONENT}")
-        if [[ "$OPERATION" == deploy ]]; then args+=(--image "$IMAGE_REF"); fi
+        if [[ "$OPERATION" == deploy ]]; then
+          if [[ "$APP" == penpot ]]; then args+=(--images "$IMAGES"); else args+=(--image "$IMAGE_REF"); fi
+        fi
         DEPLOY_KEY_FILE="$sshdir/key" python3 ../platform/scripts/ssh-request.py "${args[@]}"

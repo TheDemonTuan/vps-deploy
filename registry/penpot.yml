@@ -1,0 +1,30 @@
+version: 1
+app: penpot
+host: oracle-main
+caller:
+  repository: TheDemonTuan/penpot
+  ref: refs/heads/main
+  refs: [refs/heads/main]
+  config: .deploy/app.yml
+  build_workflows: [fork-deploy.yml]
+  security_workflows: [fork-deploy.yml]
+  deploy_workflows: [fork-deploy.yml, fork-ops.yml]
+manifest:
+  version: 1
+  app: penpot
+  strategy: penpot
+  images:
+    frontend: ghcr.io/thedemontuan/penpot-frontend
+    backend: ghcr.io/thedemontuan/penpot-backend
+    exporter: ghcr.io/thedemontuan/penpot-exporter
+    mcp: ghcr.io/thedemontuan/penpot-mcp
+  platform: linux/arm64
+  runtime: {port: 8080}
+  health: {path: /readyz, timeout_seconds: 180}
+  route: {timeout_seconds: 30}
+runtime:
+  allowed_env: [PENPOT_SECRET_KEY, PENPOT_DB_PASSWORD]
+  required_env: [PENPOT_SECRET_KEY, PENPOT_DB_PASSWORD]
+route:
+  generation_header: X-Penpot-Route-Generation
+  required_middlewares: [tunnel-only, crowdsec-ip]

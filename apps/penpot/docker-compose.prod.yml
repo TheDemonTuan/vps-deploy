@@ -1,0 +1,147 @@
+x-flags: &flags enable-mcp enable-prepl-server disable-registration
+x-runtime: &runtime
+  restart: unless-stopped
+  platform: linux/arm64
+  security_opt: [no-new-privileges:true]
+  labels:
+    vps-deploy.app: penpot
+
+services:
+  penpot-frontend:
+    <<: *runtime
+    image: ${PENPOT_FRONTEND_IMAGE:?validated frontend digest required}
+    container_name: penpot-frontend
+    mem_limit: 256m
+    depends_on:
+      penpot-backend: {condition: service_healthy}
+      penpot-exporter: {condition: service_started}
+      penpot-mcp: {condition: service_started}
+    networks: [penpot, edge]
+    volumes:
+      - penpot_assets:/opt/data/assets:ro
+    environment:
+      PENPOT_FLAGS: *flags
+      PENPOT_PUBLIC_URI: https://design.tuannguyenviet.site
+      PENPOT_BACKEND_URI: http://penpot-backend:6060
+      PENPOT_EXPORTER_URI: http://penpot-exporter:6061
+      PENPOT_MCP_URI: http://penpot-mcp:4401
+      PENPOT_MCP_URI_WS: http://penpot-mcp:4402
+    healthcheck:
+      test: [CMD-SHELL, 'test "$$(curl -fsS -w ''%{http_code}'' http://127.0.0.1:8080/readyz)" = OK200']
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 10s
+
+  penpot-backend:
+    <<: *runtime
+    image: ${PENPOT_BACKEND_IMAGE:?validated backend digest required}
+    container_name: penpot-backend
+    mem_limit: 2g
+    depends_on:
+      penpot-postgres: {condition: service_healthy}
+      penpot-valkey: {condition: service_healthy}
+    networks:
+      penpot: {}
+      egress: {gw_priority: 1}
+    volumes:
+      - penpot_assets:/opt/data/assets
+    environment:
+      PENPOT_FLAGS: *flags
+      PENPOT_PUBLIC_URI: https://design.tuannguyenviet.site
+      PENPOT_SECRET_KEY: ${PENPOT_SECRET_KEY:?master secret required}
+      PENPOT_DATABASE_URI: postgresql://penpot-postgres/penpot
+      PENPOT_DATABASE_USERNAME: penpot
+      PENPOT_DATABASE_PASSWORD: ${PENPOT_DB_PASSWORD:?database password required}
+      PENPOT_REDIS_URI: redis://penpot-valkey/0
+      PENPOT_OBJECTS_STORAGE_BACKEND: fs
+      PENPOT_OBJECTS_STORAGE_FS_DIRECTORY: /opt/data/assets
+      PENPOT_EXPORTER_URI: http://penpot-exporter:6061
+    healthcheck:
+      test: [CMD-SHELL, 'test "$$(curl -fsS -w ''%{http_code}'' http://127.0.0.1:6060/readyz)" = OK200']
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 30s
+
+  penpot-exporter:
+    <<: *runtime
+    image: ${PENPOT_EXPORTER_IMAGE:?validated exporter digest required}
+    container_name: penpot-exporter
+    mem_limit: 1g
+    shm_size: 256m
+    networks:
+      penpot: {}
+      egress: {gw_priority: 1}
+    environment:
+      PENPOT_FLAGS: *flags
+      PENPOT_PUBLIC_URI: http://penpot-frontend:8080
+      PENPOT_SECRET_KEY: ${PENPOT_SECRET_KEY:?master secret required}
+    healthcheck:
+      test: [CMD, node, -e, "const n=require('node:net');const s=n.connect(6061,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000)"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+
+  penpot-mcp:
+    <<: *runtime
+    image: ${PENPOT_MCP_IMAGE:?validated MCP digest required}
+    container_name: penpot-mcp
+    mem_limit: 512m
+    networks: [penpot]
+    healthcheck:
+      test: [CMD, node, -e, "const n=require('node:net');let left=2;for(const p of [4401,4402]){const s=n.connect(p,'127.0.0.1',()=>{s.end();if(--left===0)process.exit(0)});s.on('error',()=>process.exit(1))}setTimeout(()=>process.exit(1),3000)"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+
+  penpot-postgres:
+    <<: *runtime
+    image: postgres:15@sha256:7e2070cf6ad06fb3cbbd141b1bafbb7fd5bb63e2b6001e6daf34448eb555e4b3
+    container_name: penpot-postgres
+    mem_limit: 1g
+    networks: [penpot]
+    volumes:
+      - penpot_postgres_v15:/var/lib/postgresql/data
+    environment:
+      POSTGRES_INITDB_ARGS: --data-checksums
+      POSTGRES_DB: penpot
+      POSTGRES_USER: penpot
+      POSTGRES_PASSWORD: ${PENPOT_DB_PASSWORD:?database password required}
+    healthcheck:
+      test: [CMD, pg_isready, -U, penpot, -d, penpot]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+
+  penpot-valkey:
+    <<: *runtime
+    image: valkey/valkey:8.1@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2
+    container_name: penpot-valkey
+    mem_limit: 256m
+    networks: [penpot]
+    command: [valkey-server, --maxmemory, 128mb, --maxmemory-policy, volatile-lfu]
+    healthcheck:
+      test: [CMD-SHELL, 'test "$$(valkey-cli ping)" = PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 36
+
+networks:
+  penpot:
+    internal: true
+    labels: {vps-deploy.app: penpot}
+  egress:
+    name: penpot-egress
+    labels: {vps-deploy.app: penpot}
+  edge:
+    external: true
+    name: edge-penpot
+
+volumes:
+  penpot_postgres_v15:
+    external: true
+    name: penpot_postgres_v15
+  penpot_assets:
+    external: true
+    name: penpot_assets
