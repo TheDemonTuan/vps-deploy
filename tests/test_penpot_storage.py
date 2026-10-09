@@ -225,7 +225,7 @@ class PenpotComposeContract(unittest.TestCase):
             self.assertNotIn('privileged', service)
             self.assertFalse(any('docker.sock' in volume for volume in service.get('volumes', [])))
             self.assertEqual('edge' in service['networks'], name == 'penpot-frontend')
-            self.assertEqual('egress' in service['networks'], name in ('penpot-backend', 'penpot-exporter'))
+            self.assertEqual('egress' in service['networks'], name in ('penpot-frontend', 'penpot-backend', 'penpot-exporter'))
         self.assertTrue(value['networks']['penpot']['internal'])
         self.assertEqual(value['networks']['edge'], {'external': True, 'name': 'edge-penpot'})
         for volume in value['volumes'].values():

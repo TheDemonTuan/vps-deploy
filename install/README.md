@@ -16,6 +16,12 @@ Production activation still fails with `PENPOT_RELEASE_ENGINE_NOT_READY`; only a
 authorized `fixture-local` disposable CI profile may pass the preparation fence.
 Native recovery evidence, not source-only tests, is required to remove that fence.
 
+Frontend, backend and exporter share the outbound `penpot-egress` network;
+datastores and MCP remain on the internal network. Frontend needs external DNS
+and HTTPS for its GitHub template and Google Fonts proxies, including nginx
+startup resolution. Exporter uses `redis://penpot-valkey/0`, not the upstream
+default hostname `redis`.
+
 Bootstrap uses the host CA `/opt/platform/edge/cloudflare-ca/origin-ca.pem`, mounted
 read-only at `/etc/cloudflare-origin-ca` in `edge-cloudflared`. Its origin probe runs
 the checked frontend digest in that container's network namespace, with design

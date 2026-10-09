@@ -16,7 +16,10 @@ services:
       penpot-backend: {condition: service_healthy}
       penpot-exporter: {condition: service_started}
       penpot-mcp: {condition: service_started}
-    networks: [penpot, edge]
+    networks:
+      penpot: {}
+      edge: {}
+      egress: {gw_priority: 1}
     volumes:
       - penpot_assets:/opt/data/assets:ro
     environment:
@@ -77,6 +80,7 @@ services:
       PENPOT_FLAGS: *flags
       PENPOT_PUBLIC_URI: http://penpot-frontend:8080
       PENPOT_SECRET_KEY: ${PENPOT_SECRET_KEY:?master secret required}
+      PENPOT_REDIS_URI: redis://penpot-valkey/0
     healthcheck:
       test: [CMD, node, -e, "const n=require('node:net');const s=n.connect(6061,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000)"]
       interval: 5s

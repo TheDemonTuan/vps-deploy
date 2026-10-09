@@ -111,7 +111,7 @@ def stack_health(profile, entry):
         networks = {private_network}
         if name == 'penpot-frontend':
             networks.add(profile['edge_network'])
-        elif name in ('penpot-backend', 'penpot-exporter'):
+        if name in ('penpot-frontend', 'penpot-backend', 'penpot-exporter'):
             networks.add('penpot-egress')
         require(set(settings.get('Networks', {})) == networks, 'PENPOT_CONTAINER_NETWORKS')
 

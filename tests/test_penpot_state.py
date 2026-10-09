@@ -42,7 +42,7 @@ class PenpotState(unittest.TestCase):
         networks = {'penpot_penpot': {}}
         if name == 'penpot-frontend':
             networks['edge-penpot'] = {}
-        if name in ('penpot-backend', 'penpot-exporter'):
+        if name in ('penpot-frontend', 'penpot-backend', 'penpot-exporter'):
             networks['penpot-egress'] = {}
         return {'State': {'Running': True, 'Health': {'Status': 'healthy'}},
                 'Config': {'Labels': {'vps-deploy.app': 'penpot',
