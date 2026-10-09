@@ -195,10 +195,35 @@ class PenpotIngressSurvey(unittest.TestCase):
                 client.get('/zones?per_page=1')
             self.assertEqual(opened.call_count, 2)
 
+    def test_ruleset_cursor_pages_include_late_cache_entrypoint(self):
+        module = self.module()
+        responses = [
+            {'success': True, 'result': [{'id': 'foreign'}], 'result_info': {'cursors': {'after': 'next+/='}}},
+            {'success': True, 'result': [{'id': 'cache', 'phase': 'http_request_cache_settings'}],
+             'result_info': {'cursors': {}}}]
+        with self.client(module, responses) as (client, opened):
+            result = client.get('/zones/' + 'b' * 32 + '/rulesets?per_page=50')
+            self.assertEqual([item['id'] for item in result], ['foreign', 'cache'])
+            query = module.urllib.parse.parse_qs(module.urllib.parse.urlsplit(opened.call_args.args[0].full_url).query)
+            self.assertEqual(query, {'per_page': ['50'], 'cursor': ['next+/=']})
+
+    def test_ruleset_cursor_inventory_rejects_missing_and_repeated_metadata(self):
+        module = self.module()
+        path = '/zones/' + 'b' * 32 + '/rulesets?per_page=50'
+        for responses in (
+                [{'success': True, 'result': []}],
+                [{'success': True, 'result': [], 'result_info': {'cursors': {'after': 'next'}}}],
+                [{'success': True, 'result': [{'id': 'one'}], 'result_info': {'cursors': {'after': 'next'}}},
+                 {'success': True, 'result': [{'id': 'two'}], 'result_info': {'cursors': {'after': 'next'}}}]):
+            with self.subTest(responses=responses), self.client(module, responses) as (client, opened):
+                with self.assertRaisesRegex(module.Failure, 'CLOUDFLARE_PAGINATION_REQUIRED'):
+                    client.get(path)
+        with self.client(module, [{'success': True, 'result': [], 'result_info': {'cursors': {}}}]) as (client, opened):
+            self.assertEqual(client.get(path), [])
+
     def test_nonpaginated_endpoints_and_object_responses_keep_contract(self):
         module = self.module()
         for path, result in [('/accounts/' + 'a' * 32 + '/cfd_tunnel/test/connections', [{'id': 'connector'}]),
-                             ('/zones/' + 'b' * 32 + '/rulesets?per_page=100', []),
                              ('/accounts/' + 'a' * 32 + '/cfd_tunnel/test/configurations', {'version': 7})]:
             with self.subTest(path=path), self.client(module, [{'success': True, 'result': result}]) as (client, opened):
                 self.assertEqual(client.get(path), result)
@@ -230,7 +255,7 @@ class PenpotIngressSurvey(unittest.TestCase):
                      self.page([{'id': 'wildcard', 'domain': '*.tuannguyenviet.site',
                                  'self_hosted_domains': [module.HOST]}], page=2, per_page=1,
                                total_count=2, total_pages=2),
-                     {'success': True, 'result': []}]
+                     {'success': True, 'result': [], 'result_info': {'cursors': {}}}]
         with self.client(module, responses) as (client, opened):
             receipt = module.survey(client.get, client.account)
             self.assertIn('ACCESS_SCOPE_CONFLICT', receipt['conflicts'])

@@ -60,6 +60,8 @@ class Client:
 
         endpoint, separator, query = path.partition('?')
         parameters = urllib.parse.parse_qsl(query, keep_blank_values=True)
+        if re.fullmatch(r'/zones/[0-9a-f]{32}/rulesets', endpoint):
+            return self._cursor_inventory(endpoint, parameters, data, size)
         pages = [value for key, value in parameters if key == 'page']
         per_pages = [value for key, value in parameters if key == 'per_page']
         if pages not in ([], ['1']) or len(per_pages) > 1:
@@ -67,8 +69,7 @@ class Client:
         if 'result_info' not in data:
             # These endpoints return all objects without pagination. Paginated
             # inventories (notably Access apps) must supply complete metadata.
-            if re.fullmatch(r'/accounts/[0-9a-f]{32}/cfd_tunnel/[^/]+/connections', endpoint) or re.fullmatch(
-                    r'/zones/[0-9a-f]{32}/rulesets', endpoint):
+            if re.fullmatch(r'/accounts/[0-9a-f]{32}/cfd_tunnel/[^/]+/connections', endpoint):
                 return data['result']
             raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
 
@@ -93,6 +94,34 @@ class Client:
                         raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
                     seen_ids.add(item['id'])
         return result
+
+    def _cursor_inventory(self, endpoint, parameters, data, size):
+        if any(key in ('page', 'cursor') for key, value in parameters):
+            raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+        result, cursors, ids = [], set(), set()
+        for number in range(MAX_INVENTORY_PAGES):
+            items = inventory_list(data.get('result'))
+            for item in items:
+                identity = item.get('id')
+                if type(identity) is not str or not identity or identity in ids:
+                    raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+                ids.add(identity)
+            result.extend(items)
+            info = data.get('result_info')
+            if type(info) is not dict or type(info.get('cursors')) is not dict:
+                raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+            after = info['cursors'].get('after')
+            if after is None:
+                return result
+            if type(after) is not str or not after or after in cursors or not items:
+                raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
+            cursors.add(after)
+            next_path = endpoint + '?' + urllib.parse.urlencode(parameters + [('cursor', after)])
+            data, page_size = self._response('GET', next_path, None)
+            size += page_size
+            if size > MAX_RESPONSE_BYTES:
+                raise Failure('CLOUDFLARE_RESPONSE_TOO_LARGE')
+        raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
 
     def _pagination(self, data, page, endpoint):
         info = data.get('result_info')
@@ -156,7 +185,7 @@ def survey(api, account):
     connections = api(base + '/cfd_tunnel/' + TUNNEL + '/connections')
     config = api(base + '/cfd_tunnel/' + TUNNEL + '/configurations')
     apps = api(base + '/access/apps?per_page=100')
-    rulesets = api('/zones/' + zone + '/rulesets?per_page=100')
+    rulesets = api('/zones/' + zone + '/rulesets?per_page=50')
     for value in (records, connections, apps, rulesets):
         inventory_list(value)
     if type(config) is not dict or type(config.get('version')) is not int:

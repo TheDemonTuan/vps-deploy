@@ -43,7 +43,9 @@ integer `page`, `per_page`, `count` and `total_count`; `total_pages` may be deri
 from the counts when absent, but a present value must agree. Empty inventories
 accept zero or one total page only with zero counts and page 1. Missing metadata,
 short pages, overlapping resource IDs or changing totals fail closed; only the
-nonpaginated tunnel-connections and ruleset-list endpoints may omit metadata.
+nonpaginated tunnel-connections endpoint may omit metadata. Ruleset lists use
+`per_page=50` and follow `result_info.cursors.after` until no next cursor remains;
+missing metadata, repeated cursors and overlapping IDs fail closed.
 Inventory reads are bounded to 1,000 pages and 4 MiB total response bytes, keep
 filters and block redirects. Writes remain single requests without retries or
 pagination. A failed survey does not establish that ownership conflicts are absent.
