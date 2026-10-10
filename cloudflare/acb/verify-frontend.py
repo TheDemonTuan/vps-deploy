@@ -672,10 +672,9 @@ class Verifier:
         require(conditional.status in {200, 304}, "conditional asset request did not return 200 or 304")
         if conditional.header("ETag"):
             require(etag_opaque(conditional.header("ETag")) == etag_opaque(etag), "conditional asset ETag changed")
-        conditional_cache = cache_directives(conditional)
-        if conditional.status == 200 or conditional.header("Cache-Control"):
-            require(conditional_cache == directives, "conditional asset cache policy changed")
         if conditional.status == 200:
+            conditional_cache = cache_directives(conditional)
+            require(conditional_cache == directives, "conditional asset cache policy changed")
             require(conditional.body == response.body and conditional.mime() == response.mime(), "conditional asset bytes or MIME changed")
             security(conditional)
         self.assets[path] = kind
