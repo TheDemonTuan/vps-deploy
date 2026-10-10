@@ -209,6 +209,19 @@ class FrontendTests(unittest.TestCase):
             return status, headers, body
         self.fail_mutation(mutation, "ETag changed")
 
+    def test_conditional_weak_etag_opaque_equivalence_passes(self):
+        count = {}
+        def mutation(path, status, headers, body):
+            count[path] = count.get(path, 0) + 1
+            if path.endswith(".js"):
+                if count[path] == 1:
+                    headers["ETag"] = 'W/"fixture"'
+                elif count[path] == 2:
+                    headers["ETag"] = '"fixture"'
+            return status, headers, body
+        self.mutate = mutation
+        self.run_static()
+
     def test_missing_asset_404_allowed_with_nosniff(self):
         def mutation(path, status, headers, body):
             return (404, headers, b"synthetic not found") if path == "/assets/definitely-missing.js" else (status, headers, body)
