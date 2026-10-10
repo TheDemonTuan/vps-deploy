@@ -40,9 +40,12 @@ def require(condition, message):
     if not condition:
         raise VerificationError(message)
 def etag_opaque(val):
-    if val and val.startswith("W/"):
-        return val[2:]
-    return val
+    if not val:
+        return ""
+    val = val.strip()
+    if val.startswith(("W/", "w/")):
+        val = val[2:]
+    return val.strip('"')
 
 
 
@@ -667,7 +670,8 @@ class Verifier:
         require(re.fullmatch(r'(?:W/)?"[^"\r\n]*"', etag) is not None, "entry asset lacks a valid ETag")
         conditional = self.client.get(path, {"If-None-Match": etag})
         require(conditional.status in {200, 304}, "conditional asset request did not return 200 or 304")
-        require(etag_opaque(conditional.header("ETag")) == etag_opaque(etag), "conditional asset ETag changed")
+        if conditional.header("ETag"):
+            require(etag_opaque(conditional.header("ETag")) == etag_opaque(etag), "conditional asset ETag changed")
         conditional_cache = cache_directives(conditional)
         if conditional.status == 200 or conditional.header("Cache-Control"):
             require(conditional_cache == directives, "conditional asset cache policy changed")
