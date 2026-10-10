@@ -368,11 +368,16 @@ class Publisher:
         if len(set(ids)) != 1:
             raise ReleaseError('Current Wrangler upload did not return one exact version ID')
         version_id = ids[0]
-        listed = json.loads(self.wrangler('versions', 'list', '--json'))
-        if not isinstance(listed, list):
-            raise ReleaseError('Malformed Wrangler version list')
-        matches = [item for item in listed if item.get('id') == version_id and
-                   item.get('annotations', {}).get('workers/tag') == sha]
+        matches = []
+        for _ in range(5):
+            listed = json.loads(self.wrangler('versions', 'list', '--json'))
+            if not isinstance(listed, list):
+                raise ReleaseError('Malformed Wrangler version list')
+            matches = [item for item in listed if item.get('id') == version_id and
+                       item.get('annotations', {}).get('workers/tag') == sha]
+            if len(matches) == 1:
+                break
+            time.sleep(2)
         if len(matches) != 1:
             raise ReleaseError('Upload ID and tagged Wrangler version list disagree')
         version, _ = self.api.version(version_id)
