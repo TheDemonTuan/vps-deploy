@@ -479,6 +479,8 @@ gh workflow run cloudflare-deploy.yml -R TheDemonTuan/vps-deploy -f app=acb -f m
 
 Receipts distinguish source validation, upload, active version and public checks; ACB Access redirect checks never claim an authenticated bank-browser SHA. Rollback requires exact registered Worker UUID(s) and matching expected SHA, not latest/list order. Backend rollback never reads or changes these frontend versions.
 
+ACB HTML integrity comparison permits only whitespace between tags after tightly allowlisted Cloudflare analytics/security injections are removed. Joining adjacent tags is equivalent to indentation; text, attributes, script bodies and JS/CSS assets remain exact. No scanner or checksum bypass is used.
+
 
 ### Observed acceptance boundary (2026-10-04)
 

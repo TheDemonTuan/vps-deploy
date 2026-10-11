@@ -530,7 +530,7 @@ def without_edge_security_bootstrap(body, expected=None):
     elif end < len(body) and body[end:end + 1] in (b"\n", b"\r"):
         end += 1
     cleaned = body[:start] + body[end:]
-    if expected and cleaned != expected and cleaned.split() == expected.split():
+    if expected and cleaned != expected:
         if re.sub(rb">\s+<", rb"><", cleaned) == re.sub(rb">\s+<", rb"><", expected):
             return expected, True
     return cleaned, True
@@ -582,7 +582,7 @@ class Artifact:
             normalized = without_edge_beacon(body)
             beacon_removed = normalized != body
             normalized, security_removed = without_edge_security_bootstrap(normalized, expected)
-            if expected and normalized != expected and normalized.split() == expected.split():
+            if expected and normalized != expected:
                 if re.sub(rb">\s+<", rb"><", normalized) == re.sub(rb">\s+<", rb"><", expected):
                     normalized = expected
             if normalized == expected:

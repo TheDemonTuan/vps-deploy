@@ -7,6 +7,7 @@ import email
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
+import re
 import ssl
 import subprocess
 import sys
@@ -143,6 +144,21 @@ class FrontendTests(unittest.TestCase):
                 body = body.replace(b"</body>", beacon + b"</body>")
             return status, headers, body
         self.mutate = inject
+
+    def test_edge_intertag_whitespace_does_not_hide_html_tampering(self):
+        def inject(path, status, headers, body):
+            if headers.get("Content-Type", "").startswith("text/html"):
+                body = body.replace(b"</div>", b"</div>" + BEACON)
+                body = re.sub(rb">\s+<", b"><", body)
+            return status, headers, body
+        self.mutate = inject
+        self.assertIn("checksums verified", self.run_static("viewer"))
+        def tamper(path, status, headers, body):
+            status, headers, body = inject(path, status, headers, body)
+            if path == "/":
+                body = body.replace(b'id="root"', b'id="root" data-tampered="true"')
+            return status, headers, body
+        self.fail_mutation(tamper, "checksum does not match")
 
     def test_edge_security_bootstrap_and_beacon_excluded_without_hiding_tampering(self):
         def inject(path, status, headers, body):
