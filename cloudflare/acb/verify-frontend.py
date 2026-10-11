@@ -412,7 +412,7 @@ def security(response, credentials=False, api=False):
                 "credentials CSP must be the strict policy or the approved policy intersection")
         require("no-store" in cache_directives(response), "credentials response is not no-store")
     else:
-        require(policies == [global_policy], "global CSP policy mismatch")
+        require(policies == [global_policy], "global CSP policy mismatch: " + response.mime())
 
 
 class EntryHTML(HTMLParser):
