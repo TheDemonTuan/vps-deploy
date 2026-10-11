@@ -81,6 +81,7 @@ class FrontendTests(unittest.TestCase):
                 elif path == "/api/public/v1/transactions":
                     body = b'{"items":[],"summary":{}}'
                     headers.update({"Content-Type": "application/json", "Cache-Control": "no-store"})
+                    headers['Content-Security-Policy'] = verify.GLOBAL_CSP.replace("media-src 'self' blob: data:; ", '')
                 elif path == "/api/public/v1/events":
                     body = b'event: initial_state\ndata: {"epoch":"ep1","watermark":0}\n\nevent: stream.heartbeat\ndata: {"slot":"green"}\n\n'
                     headers.update({"Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform"})

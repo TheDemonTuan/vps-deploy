@@ -392,7 +392,7 @@ def csp_policy(value):
     return directives
 
 
-def security(response, credentials=False):
+def security(response, credentials=False, api=False):
     require(response.header("X-Content-Type-Options").strip().lower() == "nosniff", "nosniff header mismatch")
     require(response.header("X-Frame-Options").strip().upper() == "DENY", "frame protection header mismatch")
     referrer = response.header("Referrer-Policy").strip().lower()
@@ -402,6 +402,9 @@ def security(response, credentials=False):
     require(all(value.strip() for value in values), "missing CSP policy")
     policies = [csp_policy(value) for value in values]
     global_policy, strict_policy = csp_policy(GLOBAL_CSP), csp_policy(CREDENTIALS_CSP)
+    if api:
+        # Gateway JSON has no playback surface and retains the stricter policy.
+        global_policy.pop('media-src')
     if credentials:
         # Multiple CSP policies are enforced by intersection, not last-write wins.
         # Strict script-src also governs script-src-elem absent from that policy.
@@ -630,7 +633,7 @@ class Verifier:
         require(response.status == 200, "transactions API did not return 200")
         require(response.mime() == "application/json", "transactions API MIME mismatch")
         require("no-store" in cache_directives(response), "transactions API is not no-store")
-        security(response)
+        security(response, api=True)
         try:
             data = json.loads(response.body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
