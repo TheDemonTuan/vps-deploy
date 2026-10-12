@@ -32,7 +32,16 @@ LIBEXEC = Path('/usr/local/libexec')
 
 
 def run(*args, timeout=30, check=True):
-    result = subprocess.run(args, capture_output=True, timeout=timeout)
+    try:
+        result = subprocess.run(args, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        if len(args)>1 and Path(args[0]).name=='bash' and Path(args[1]).name=='install-key.sh':
+            evidence=error.stderr or b''
+            if type(evidence) is bytes and len(evidence)<=65536:
+                stages=re.findall(rb'(?m)^KEY_ENROLLMENT_L([0-9]{1,4})$',evidence)
+                if stages:
+                    raise Failure('INSTALL_KEY_TIMEOUT_L'+stages[-1].decode('ascii')) from None
+        raise
     if check and result.returncode:
         # Only the trusted controller emits a structured, non-secret error code.
         # Never forward arbitrary command output, arguments or stderr.

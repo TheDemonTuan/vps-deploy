@@ -32,6 +32,9 @@ installer's own source, without traceback text, paths, messages or local values.
 For subprocess exceptions, the line identifies the caller, not the shared `run` wrapper.
 Native command failures retain only a bounded uppercase structured `error_code`
 from JSON stdout, never other stdout fields, so backup failures remain diagnosable.
+Key enrollment emits numeric source progress markers, without expanded commands.
+On timeout only its last validated marker becomes `INSTALL_KEY_TIMEOUT_L<line>`;
+raw stderr stays private and the timeout remains unchanged.
 
 
 First Penpot enrollment adopts in-process from the immutable installed controller
