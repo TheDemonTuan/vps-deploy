@@ -261,8 +261,12 @@ class Harness:
         runtime = 'PENPOT_SECRET_KEY='+self.secret_values[0]+'\nPENPOT_DB_PASSWORD='+self.secret_values[1]+'\n'
         self.put(WORK/'.env',runtime)
         self.put(CFG/'runtime.env',runtime)
-        self.run('ssh-keygen','-q','-t','ed25519','-N','','-f',self.private/'key')
-        self.run('ssh-keygen','-q','-t','ed25519','-N','','-f',self.private/'hostkey')
+        for name in ('key','hostkey'):
+            private_key=self.private/name
+            self.run('ssh-keygen','-q','-t','ed25519','-N','','-f',private_key)
+            require(private_key.is_file() and not private_key.is_symlink() and
+                    private_key.stat().st_uid==0,'FIXTURE_UNTRUSTED_PRIVATE_KEY')
+            private_key.chmod(0o600)
         key = (self.private/'hostkey.pub').read_text().split()
         fingerprint = self.run('ssh-keygen','-lf',self.private/'hostkey.pub').stdout.decode().split()[1]
         inventory = yaml.safe_load((self.release_source/'hosts/oracle-main.yml').read_bytes())
