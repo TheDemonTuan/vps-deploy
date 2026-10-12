@@ -37,6 +37,9 @@ On timeout only its last validated marker becomes `INSTALL_KEY_TIMEOUT_L<line>`;
 raw stderr stays private and the timeout remains unchanged.
 Key timeouts also retain at most 16 allowlisted account-process names and kernel
 wait symbols, never process arguments, environment, account files or hook contents.
+For `useradd`, evidence also includes the syscall number without arguments,
+at most 16 kernel stack symbols without addresses, and exact allowlisted account
+file categories for open descriptors; arbitrary paths and file contents are omitted.
 
 
 First Penpot enrollment adopts in-process from the immutable installed controller
