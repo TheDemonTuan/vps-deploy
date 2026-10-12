@@ -56,6 +56,24 @@ def run(*args, timeout=30, check=True):
                                     syscall=(proc/'syscall').read_text().split()
                                     if syscall and syscall[0].isdecimal():
                                         print('KEY_USERADD_SYSCALL_'+syscall[0],file=sys.stderr)
+                                    read_number={'aarch64':'63','x86_64':'0'}.get(os.uname().machine)
+                                    if len(syscall)>1 and syscall[0]==read_number and re.fullmatch(r'0x[0-9a-f]{1,8}',syscall[1]):
+                                        descriptor=str(int(syscall[1],16))
+                                        target=os.readlink(proc/'fd'/descriptor)
+                                        categories={
+                                            '/etc/passwd':'PASSWD', '/etc/shadow':'SHADOW',
+                                            '/etc/group':'GROUP', '/etc/gshadow':'GSHADOW',
+                                            '/etc/subuid':'SUBUID', '/etc/subgid':'SUBGID',
+                                            '/etc/login.defs':'LOGIN_DEFS', '/etc/default/useradd':'USERADD_DEFAULTS',
+                                            '/etc/nsswitch.conf':'NSS_CONFIG', '/etc/ld.so.cache':'LOADER_CACHE',
+                                            '/var/log/lastlog':'LASTLOG', '/var/log/faillog':'FAILLOG',
+                                        }
+                                        category=categories.get(target,'OTHER')
+                                        if target.startswith('/etc/skel/'):
+                                            category='HOME_SKELETON'
+                                        elif target.startswith(('/usr/lib/','/lib/')):
+                                            category='SYSTEM_LIBRARY'
+                                        print('KEY_USERADD_READ_'+category,file=sys.stderr)
                                     symbols=re.findall(r'\] ([a-zA-Z0-9_]+)\+', (proc/'stack').read_text())[:16]
                                     for symbol in symbols:
                                         print('KEY_USERADD_STACK_'+symbol.upper(),file=sys.stderr)

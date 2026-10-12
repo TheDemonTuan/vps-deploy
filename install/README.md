@@ -43,6 +43,9 @@ wait symbols, never process arguments, environment, account files or hook conten
 For `useradd`, evidence also includes the syscall number without arguments,
 at most 16 kernel stack symbols without addresses, and exact allowlisted account
 file categories for open descriptors; arbitrary paths and file contents are omitted.
+On native ARM64/x86-64 `read` waits, the active descriptor is classified separately
+as an allowlisted account/config file, home skeleton, system library or `OTHER`.
+This identifies the blocked input category without exposing descriptor paths.
 
 
 First Penpot enrollment adopts in-process from the immutable installed controller
