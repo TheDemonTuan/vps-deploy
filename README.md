@@ -448,6 +448,17 @@ identity của mọi resource foreign có sẵn, assert sau từng lifecycle và
 không dừng builder, không xóa cache hoặc network foreign. CA directory readonly
 được bind đúng topology ở cả Traefik và tunnel namespace; asset UID/GID phải 1001.
 
+`penpot-ingress.yml` survey chỉ đọc inventory. [Connections API của Cloudflare](https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/connections/methods/get/)
+trả `Client[]` với `conns[]` lồng bên trong; `active_connector_count` đếm clients
+có ít nhất một connection mang `is_pending_reconnect: false`, không đếm từng
+edge connection. Parser yêu cầu UUID client/connection không trùng, `client_id`
+khớp client cha, `conns` là list objects và activity flag là boolean rõ ràng.
+Thiếu hoặc sai cấu trúc bị `CLOUDFLARE_INVENTORY_POLICY`; flat legacy response
+không được chấp nhận. Clients không có connection hoặc chỉ pending vẫn gây
+`ACTIVE_CONNECTOR_REQUIRED`. Metadata tùy chọn không là bằng chứng activity;
+receipt không chứa connector IDs, origin IP hay API response thô. Survey không
+thay DNS/ingress/policies và không thay thế origin verification trước apply.
+
 ### Lưu ý an toàn cơ sở dữ liệu Blue/Green
 
 Hai slot blue/green dùng chung volume dữ liệu (như SQLite hoặc DB container). Deployment engine hỗ trợ rollback route và container ngay lập tức, nhưng **không rollback dữ liệu đã thay đổi**.

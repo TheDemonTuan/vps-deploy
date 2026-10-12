@@ -9,6 +9,12 @@ from unittest import mock
 PATH = Path(__file__).resolve().parents[1] / 'penpot_ingress.py'
 
 
+def connector_fixture():
+    # Synthetic Client[] matching the documented Cloudflare response, not a
+    # captured live response or a flat legacy connection list.
+    return json.loads((PATH.parent / 'tests/fixtures/penpot-connections.json').read_text())
+
+
 class PenpotIngressSurvey(unittest.TestCase):
     def module(self):
         spec = importlib.util.spec_from_file_location('penpot_ingress', PATH)
@@ -16,7 +22,7 @@ class PenpotIngressSurvey(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def survey(self, fault=None):
+    def survey(self, fault=None, connectors=None):
         module = self.module()
         account = 'a' * 32
         calls = []
@@ -28,7 +34,7 @@ class PenpotIngressSurvey(unittest.TestCase):
                 return [{'id': 'dns-id', 'name': module.HOST, 'type': 'CNAME', 'proxied': True,
                          'content': ('foreign.example' if fault == 'dns' else module.TUNNEL + '.cfargotunnel.com')}]
             if path.endswith('/connections'):
-                return [] if fault == 'connector' else [{'id': 'connector-id', 'is_pending_reconnect': False}]
+                return ([] if fault == 'connector' else connector_fixture()) if connectors is None else connectors
             if path.endswith('/configurations'):
                 return {'version': 7, 'config': {'ingress': [{'service': 'http_status:404'}]}}
             if '/access/apps?' in path:
@@ -44,8 +50,121 @@ class PenpotIngressSurvey(unittest.TestCase):
         value = self.survey()
         self.assertEqual(value['status'], 'read_only')
         self.assertEqual(value['tunnel_version'], 7)
+        self.assertEqual(value['active_connector_count'], 1)
         self.assertEqual(value['conflicts'], [])
         self.assertNotIn('config', value)
+
+    def test_active_count_is_clients_not_connections_and_checks_every_connection(self):
+        clients = connector_fixture()
+        second = connector_fixture()[0]
+        second['id'] = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        second['conns'] = [{'id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+                            'client_id': second['id'], 'is_pending_reconnect': False}]
+        clients.append(second)
+        self.assertEqual(self.survey(connectors=clients)['active_connector_count'], 2)
+        for connection in second['conns']:
+            connection['is_pending_reconnect'] = True
+        self.assertEqual(self.survey(connectors=clients)['active_connector_count'], 1)
+        clients[0]['conns'][0]['is_pending_reconnect'] = True
+        # The later active connection must still count this client once.
+        self.assertEqual(self.survey(connectors=clients)['active_connector_count'], 1)
+
+    def test_no_clients_empty_connections_and_pending_only_require_active_connector(self):
+        pending = connector_fixture()
+        for connection in pending[0]['conns']:
+            connection['is_pending_reconnect'] = True
+        empty = connector_fixture()
+        empty[0]['conns'] = []
+        for clients in ([], empty, pending):
+            with self.subTest(clients=clients):
+                value = self.survey(connectors=clients)
+                self.assertEqual(value['active_connector_count'], 0)
+                self.assertIn('ACTIVE_CONNECTOR_REQUIRED', value['conflicts'])
+
+    def test_malformed_connector_inventory_fails_closed_without_response_values(self):
+        module = self.module()
+        cases = [None, {}, [None], [[]], ['private-response-canary'],
+                 [{'id': connector_fixture()[0]['id'], 'is_pending_reconnect': False}]]
+        for field, values in [('id', [None, True, '', 'private-response-canary']),
+                              ('conns', [None, {}, True, 'private-response-canary', [None], [[]]])]:
+            missing = connector_fixture()
+            del missing[0][field]
+            cases.append(missing)
+            for value in values:
+                changed = connector_fixture()
+                changed[0][field] = value
+                cases.append(changed)
+        for field, values in [('id', [None, True, '', 'private-response-canary']),
+                              ('client_id', [None, True, '', 'private-response-canary',
+                                             'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']),
+                              ('is_pending_reconnect', [None, 0, 1, 'false', [], {}]),
+                              ('uuid', [None, 1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'])]:
+            if field != 'uuid':
+                missing = connector_fixture()
+                del missing[0]['conns'][1][field]
+                cases.append(missing)
+            for value in values:
+                changed = connector_fixture()
+                changed[0]['conns'][1][field] = value
+                cases.append(changed)
+        duplicate_client = connector_fixture() * 2
+        duplicate_connection = connector_fixture()
+        duplicate_connection[0]['conns'].append(duplicate_connection[0]['conns'][0].copy())
+        case_duplicate = connector_fixture()
+        case_duplicate[0]['id'] = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        for connection in case_duplicate[0]['conns']:
+            connection['client_id'] = case_duplicate[0]['id']
+        upper = json.loads(json.dumps(case_duplicate[0]))
+        upper['id'] = upper['id'].upper()
+        case_duplicate.append(upper)
+        cases.extend([duplicate_client, duplicate_connection, case_duplicate])
+        shared_connection = connector_fixture()
+        second = connector_fixture()[0]
+        second['id'] = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        for connection in second['conns']:
+            connection['client_id'] = second['id']
+        shared_connection.append(second)
+        cases.append(shared_connection)
+        for number, clients in enumerate(cases):
+            with self.subTest(case=number), self.assertRaises(module.Failure) as caught:
+                module.active_connectors(clients)
+            self.assertEqual(str(caught.exception), 'CLOUDFLARE_INVENTORY_POLICY')
+
+    def test_optional_metadata_is_not_required_or_an_activity_signal(self):
+        clients = connector_fixture()
+        clients[0] = {'id': clients[0]['id'], 'conns': clients[0]['conns']}
+        for connection in clients[0]['conns']:
+            for field in list(connection):
+                if field not in ('id', 'client_id', 'is_pending_reconnect'):
+                    del connection[field]
+        self.assertEqual(self.survey(connectors=clients)['active_connector_count'], 1)
+        for connection in clients[0]['conns']:
+            connection['is_pending_reconnect'] = True
+        clients[0]['is_pending_reconnect'] = False
+        self.assertEqual(self.survey(connectors=clients)['active_connector_count'], 0)
+
+    def test_cli_nested_survey_smoke_is_read_only_and_sanitized(self):
+        module = self.module()
+        responses = [self.page([{'id': 'b' * 32, 'name': module.ZONE, 'account': {'id': 'a' * 32}}]),
+                     self.page([], total_count=0, total_pages=0),
+                     {'success': True, 'result': connector_fixture()},
+                     {'success': True, 'result': {'version': 15, 'config': {'ingress': [{'service': 'http_status:404'}]}}},
+                     self.page([], total_count=0, total_pages=0),
+                     {'success': True, 'result': [], 'result_info': {'cursors': {}}}]
+        output = io.StringIO()
+        with self.client(module, responses) as (client, opened), \
+             mock.patch.object(module.sys, 'argv', ['penpot_ingress.py', '--operation', 'survey']), \
+             contextlib.redirect_stdout(output):
+            module.main()
+        value = json.loads(output.getvalue())
+        self.assertEqual(value['status'], 'read_only')
+        self.assertEqual(value['active_connector_count'], 1)
+        self.assertEqual(value['conflicts'], [])
+        self.assertEqual(opened.call_count, 6)
+        self.assertTrue(all(call.args[0].get_method() == 'GET' for call in opened.call_args_list))
+        for private in ('secret-canary', '192.0.2.10', connector_fixture()[0]['id'],
+                        connector_fixture()[0]['conns'][0]['id']):
+            self.assertNotIn(private, output.getvalue())
 
     def test_foreign_dns_inactive_connector_and_wildcard_access_are_conflicts(self):
         for fault, expected in [('dns', 'DNS_OWNERSHIP_CONFLICT'), ('connector', 'ACTIVE_CONNECTOR_REQUIRED'),
@@ -250,7 +369,7 @@ class PenpotIngressSurvey(unittest.TestCase):
 
     def test_nonpaginated_endpoints_and_object_responses_keep_contract(self):
         module = self.module()
-        for path, result in [('/accounts/' + 'a' * 32 + '/cfd_tunnel/test/connections', [{'id': 'connector'}]),
+        for path, result in [('/accounts/' + 'a' * 32 + '/cfd_tunnel/test/connections', connector_fixture()),
                              ('/accounts/' + 'a' * 32 + '/cfd_tunnel/test/configurations', {'version': 7})]:
             with self.subTest(path=path), self.client(module, [{'success': True, 'result': result}]) as (client, opened):
                 self.assertEqual(client.get(path), result)
@@ -276,7 +395,7 @@ class PenpotIngressSurvey(unittest.TestCase):
         zone = 'b' * 32
         responses = [self.page([{'id': zone, 'name': module.ZONE, 'account': {'id': 'a' * 32}}]),
                      self.page([], total_count=0, total_pages=0),
-                     {'success': True, 'result': [{'id': 'connector', 'is_pending_reconnect': False}]},
+                     {'success': True, 'result': connector_fixture()},
                      {'success': True, 'result': {'version': 7, 'config': {'ingress': [{'service': 'http_status:404'}]}}},
                      self.page([{'id': 'foreign', 'domain': 'other.example'}], per_page=1, total_count=2, total_pages=2),
                      self.page([{'id': 'wildcard', 'domain': '*.tuannguyenviet.site',

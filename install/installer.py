@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -322,7 +323,11 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                         run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
                     else:
                         if profile['registration']['manifest']['strategy'] == 'penpot':
-                            run(str(destination / 'bin/deployctl'), 'adopt', '--app', app)
+                            # Activation already holds the operation lock. Reopening
+                            # it in a child would contend with this installation.
+                            controller = runpy.run_path(str(destination / 'bin/deployctl'))
+                            profile = controller['load_profile'](cfg, app)
+                            controller['adopt_locked'](cfg, state, LOCKS, profile)
                             run(str(destination / 'bin/deployctl'), 'status', '--app', app, '--strict')
                     run('/usr/bin/bash', str(destination / 'install/install-key.sh'), '--app', app, str(args.public_key))
                     singleton = registration['manifest']['strategy'] == 'penpot'

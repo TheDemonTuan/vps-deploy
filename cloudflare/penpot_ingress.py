@@ -184,6 +184,38 @@ def inventory_list(value):
     return value
 
 
+def active_connectors(value):
+    """Count Client objects, not their individual Cloudflare edge connections.
+
+    The connections endpoint returns Client[] with nested conns; only a
+    validated connection explicitly reporting false is evidence of activity.
+    Missing/ambiguous identities or activity fields fail closed without
+    exposing response values. Optional API metadata is not an activity signal.
+    """
+    clients, connections, count = set(), set(), 0
+    uuid = r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
+    for client in inventory_list(value):
+        identity = client.get('id')
+        if type(identity) is not str or not re.fullmatch(uuid, identity) or identity.lower() in clients:
+            raise Failure('CLOUDFLARE_INVENTORY_POLICY')
+        clients.add(identity.lower())
+        active = False
+        for connection in inventory_list(client.get('conns')):
+            connection_id, client_id = connection.get('id'), connection.get('client_id')
+            pending = connection.get('is_pending_reconnect')
+            if (type(connection_id) is not str or not re.fullmatch(uuid, connection_id) or
+                    connection_id.lower() in connections or type(client_id) is not str or
+                    client_id.lower() != identity.lower() or type(pending) is not bool):
+                raise Failure('CLOUDFLARE_INVENTORY_POLICY')
+            if 'uuid' in connection and (type(connection['uuid']) is not str or
+                                         connection['uuid'].lower() != connection_id.lower()):
+                raise Failure('CLOUDFLARE_INVENTORY_POLICY')
+            connections.add(connection_id.lower())
+            active = active or pending is False
+        count += active
+    return count
+
+
 def survey(api, account):
     if type(account) is not str or not re.fullmatch('[0-9a-f]{32}', account):
         raise Failure('EXACT_ACCOUNT_REQUIRED')
@@ -200,6 +232,7 @@ def survey(api, account):
     rulesets = api('/zones/' + zone + '/rulesets?per_page=50')
     for value in (records, connections, apps, rulesets):
         inventory_list(value)
+    connector_count = active_connectors(connections)
     if type(config) is not dict or type(config.get('version')) is not int:
         raise Failure('CLOUDFLARE_INVENTORY_POLICY')
     conflicts = []
@@ -207,7 +240,7 @@ def survey(api, account):
                               item.get('content', '').rstrip('.') != TUNNEL + '.cfargotunnel.com' or
                               item.get('proxied') is not True for item in records):
         conflicts.append('DNS_OWNERSHIP_CONFLICT')
-    if not any(item.get('is_pending_reconnect') is False for item in connections):
+    if connector_count == 0:
         conflicts.append('ACTIVE_CONNECTOR_REQUIRED')
     ingress = config.get('config', {}).get('ingress', [])
     inventory_list(ingress)
@@ -234,8 +267,7 @@ def survey(api, account):
                           'penpot_rule_ids': [rule.get('id') for rule in detail.get('rules', [])
                                               if rule.get('description') == 'penpot-bypass-cache']})
     return {'status': 'read_only', 'host': HOST, 'zone_id': zone, 'tunnel_id': TUNNEL,
-            'tunnel_version': config.get('version'), 'active_connector_count': sum(
-                item.get('is_pending_reconnect') is False for item in connections),
+            'tunnel_version': config.get('version'), 'active_connector_count': connector_count,
             'dns_record_ids': [item.get('id') for item in records], 'exact_ingress_count': len(selected),
             'access_apps': access, 'cache_rulesets': cache, 'conflicts': sorted(set(conflicts)),
             'note': 'No DNS, tunnel, Access, cache rules, certificates or VPS state modified'}
