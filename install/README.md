@@ -22,6 +22,16 @@ Installer failures preserve the trusted controller's structured error code.
 They never include subprocess arguments, stderr or free-form error details;
 unstructured command failures still report `COMMAND_FAILED`.
 
+First Penpot enrollment adopts in-process from the immutable installed controller
+while activation still holds the selected app operation lock. Adoption never
+reopens that lock in a child process: a second open conflicts with the installer
+even on the same host. The shared adoption entry keeps the preparation fence,
+route lock/preflight/acknowledgement, manifest and live-image identity checks before
+writing state. Standalone `deployctl adopt` still acquires the app operation lock;
+concurrent operations remain excluded through adoption and installer completion.
+Real-lock installer regressions can run without host root privileges using
+`unshare --user --map-root-user -- env PYTHONPATH=tests python3 -m unittest test_preflight.InstallerPenpotAdoption -v`.
+
 Frontend, backend and exporter share the outbound `penpot-egress` network;
 datastores and MCP remain on the internal network. Frontend needs external DNS
 and HTTPS for its GitHub template and Google Fonts proxies, including nginx

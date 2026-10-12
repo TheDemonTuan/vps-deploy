@@ -1,5 +1,6 @@
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -26,6 +27,7 @@ class CloudflareFixture:
                            'action': 'set_cache_settings', 'action_parameters': {'cache': True}, 'enabled': True}]}
         self.drift = False
         self.connected = True
+        self.connectors = json.loads((ROOT / 'tests/fixtures/penpot-connections.json').read_text())
 
     def get(self, path):
         if path.startswith('/zones?'):
@@ -33,7 +35,7 @@ class CloudflareFixture:
         elif '/dns_records?' in path:
             result = self.dns
         elif path.endswith('/connections'):
-            result = [{'is_pending_reconnect': False}] if self.connected else []
+            result = self.connectors if self.connected else []
         elif path.endswith('/configurations'):
             result = self.tunnel
         elif '/access/apps?' in path:
@@ -116,6 +118,24 @@ class PenpotApplyTests(unittest.TestCase):
                                            'action': 'set_cache_settings', 'action_parameters': {'cache': False}})
             with self.subTest(fault=fault), self.assertRaises(Failure):
                 module.apply(api, api.account, origin)
+            self.assertEqual(api.writes, [])
+
+    def test_malformed_nested_connectors_fail_before_every_apply_write(self):
+        module = self.module()
+        for fault in ('flat', 'missing-activity', 'foreign-client', 'duplicate-client', 'duplicate-connection'):
+            api = CloudflareFixture()
+            if fault == 'flat':
+                api.connectors = [{'id': api.connectors[0]['id'], 'is_pending_reconnect': False}]
+            elif fault == 'missing-activity':
+                del api.connectors[0]['conns'][1]['is_pending_reconnect']
+            elif fault == 'foreign-client':
+                api.connectors[0]['conns'][1]['client_id'] = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+            elif fault == 'duplicate-client':
+                api.connectors.append(copy.deepcopy(api.connectors[0]))
+            elif fault == 'duplicate-connection':
+                api.connectors[0]['conns'].append(copy.deepcopy(api.connectors[0]['conns'][0]))
+            with self.subTest(fault=fault), self.assertRaisesRegex(Failure, '^CLOUDFLARE_INVENTORY_POLICY$'):
+                module.apply(api, api.account, lambda: None)
             self.assertEqual(api.writes, [])
 
     def test_access_removes_only_design_and_preserves_other_domains_and_policy(self):

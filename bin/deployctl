@@ -226,58 +226,65 @@ def run(req_id, cfg, state_dir, locks, profile):
     return receipt
 
 
-def adopt(cfg, state_dir, locks, profile):
+def adopt_locked(cfg, state_dir, locks, profile):
+    """Adopt under the caller's app operation lock; acquire the route lock here."""
     ready_engine(profile)
-    with lock(locks / (profile['app'] + '@operation.lock')):
-        require(not (state_dir / 'state.json').exists(), 'ALREADY_ADOPTED')
-        with lock(locks / 'traefik.lock', 60):
-            target, raw, _ = route.preflight(route.dynamic(profile), profile)
-            slot, generation = route.route_state(raw, profile)
-            route.ack(profile, (slot, generation))
-            if profile['registration']['manifest']['strategy'] == 'penpot':
-                require(slot == 'single', 'ROUTE_MISMATCH')
-                _, mh = registered(cfg, profile['registration'])
-                from penpot import adopt_state
-                state = adopt_state(profile, mh, generation)
-                trusted_path(state_dir, directory=True)
-                save(state_dir / 'state.json', state)
-                return state_status(state_dir, None, cfg, profile)
-            from core import container, container_digest
-            live = container(profile['app'] + '-' + slot, running=True)
-            image = container_digest(live, profile['image_repository'])
+    require(not (state_dir / 'state.json').exists(), 'ALREADY_ADOPTED')
+    with lock(locks / 'traefik.lock', 60):
+        target, raw, _ = route.preflight(route.dynamic(profile), profile)
+        slot, generation = route.route_state(raw, profile)
+        route.ack(profile, (slot, generation))
+        if profile['registration']['manifest']['strategy'] == 'penpot':
+            require(slot == 'single', 'ROUTE_MISMATCH')
             _, mh = registered(cfg, profile['registration'])
-            active = {'slot': slot, 'image': image, 'platform_ref': profile['platform_ref'], 'manifest_sha256': mh}
-            if slot == 'single':
-                previous = None
-            else:
-                __import__('operations').health(profile, slot, image)
-                other = 'green' if slot == 'blue' else 'blue'
-                try:
-                    previous_obj = container(profile['app'] + '-' + other)
-                except Failure as exc:
-                    if exc.code != 'COMMAND_FAILED':
-                        raise
-                    previous = None
-                else:
-                    previous_image = container_digest(previous_obj, profile['image_repository'])
-                    previous = dict(active, slot=other, image=previous_image)
-            rtk = None
-            if profile['rtk_image_repository'] is not None:
-                name = profile['app'] + '-rtk-rtk-1'
-                rtk_container = container(name, running=True)
-                rtk_image = container_digest(rtk_container, profile['rtk_image_repository'])
-                rtk_wait(profile, name, rtk_image)
-                rtk = {'current': rtk_image, 'previous': None}
-            state = {'version': 1, 'revision': 1, 'active': active, 'previous': previous, 'rtk': rtk, 'generation': generation, 'operation': None, 'draining': None}
-            if profile.get('cgw_image_repository'):
-                live_cgw = container('9router-cgw-runtime', running=True)
-                cgw_image = container_digest(live_cgw, profile['cgw_image_repository'])
-                proof = cgw_diagnostics(profile, cgw_image)
-                require(proof.get('operationFence') is None, 'CGW_FENCE')
-                state['cgw'] = {'current': cgw_image, 'previous': None}
+            from penpot import adopt_state
+            state = adopt_state(profile, mh, generation)
             trusted_path(state_dir, directory=True)
             save(state_dir / 'state.json', state)
+            return state_status(state_dir, None, cfg, profile)
+        from core import container, container_digest
+        live = container(profile['app'] + '-' + slot, running=True)
+        image = container_digest(live, profile['image_repository'])
+        _, mh = registered(cfg, profile['registration'])
+        active = {'slot': slot, 'image': image, 'platform_ref': profile['platform_ref'], 'manifest_sha256': mh}
+        if slot == 'single':
+            previous = None
+        else:
+            __import__('operations').health(profile, slot, image)
+            other = 'green' if slot == 'blue' else 'blue'
+            try:
+                previous_obj = container(profile['app'] + '-' + other)
+            except Failure as exc:
+                if exc.code != 'COMMAND_FAILED':
+                    raise
+                previous = None
+            else:
+                previous_image = container_digest(previous_obj, profile['image_repository'])
+                previous = dict(active, slot=other, image=previous_image)
+        rtk = None
+        if profile['rtk_image_repository'] is not None:
+            name = profile['app'] + '-rtk-rtk-1'
+            rtk_container = container(name, running=True)
+            rtk_image = container_digest(rtk_container, profile['rtk_image_repository'])
+            rtk_wait(profile, name, rtk_image)
+            rtk = {'current': rtk_image, 'previous': None}
+        state = {'version': 1, 'revision': 1, 'active': active, 'previous': previous, 'rtk': rtk, 'generation': generation, 'operation': None, 'draining': None}
+        if profile.get('cgw_image_repository'):
+            live_cgw = container('9router-cgw-runtime', running=True)
+            cgw_image = container_digest(live_cgw, profile['cgw_image_repository'])
+            proof = cgw_diagnostics(profile, cgw_image)
+            require(proof.get('operationFence') is None, 'CGW_FENCE')
+            state['cgw'] = {'current': cgw_image, 'previous': None}
+        trusted_path(state_dir, directory=True)
+        save(state_dir / 'state.json', state)
     return state_status(state_dir, None, cfg, profile)
+
+
+def adopt(cfg, state_dir, locks, profile):
+    # Refuse fenced profiles before creating a lock; the shared entry also gates.
+    ready_engine(profile)
+    with lock(locks / (profile['app'] + '@operation.lock')):
+        return adopt_locked(cfg, state_dir, locks, profile)
 
 
 def main():
