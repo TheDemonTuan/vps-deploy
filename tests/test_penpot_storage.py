@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import tarfile
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -213,6 +214,22 @@ class PenpotStorage(unittest.TestCase):
                     {'Name': 'foreign', 'Driver': 'local', 'Options': None, 'Labels': {'vps-deploy.app': 'penpot'}}):
             with self.subTest(bad=bad), mock.patch.object(penpot, 'inspect', return_value=bad), self.assertRaisesRegex(core.Failure, 'PENPOT_VOLUME_OWNERSHIP'):
                 penpot.owned_volumes(current_profile)
+
+
+class PenpotDumpInput(unittest.TestCase):
+    def test_validator_child_receives_entire_binary_dump_after_header_check(self):
+        data = b'PGDMP' + bytes(range(256)) * 128
+        digest = hashlib.sha256(data).hexdigest()
+        native_run = penpot.subprocess.run
+        def validate_in_child(argv, **kwargs):
+            return native_run([sys.executable, '-c',
+                               'import hashlib,sys; sys.exit(0 if hashlib.sha256(sys.stdin.buffer.read()).hexdigest()==sys.argv[1] else 1)',
+                               digest], **kwargs)
+        with tempfile.TemporaryDirectory() as directory:
+            dump = Path(directory) / 'database.dump'
+            dump.write_bytes(data)
+            with mock.patch.object(penpot.subprocess, 'run', side_effect=validate_in_child):
+                penpot.check_dump(dump)
 
 
 class PenpotComposeContract(unittest.TestCase):

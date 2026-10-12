@@ -789,7 +789,8 @@ def safe_assets(path):
 
 
 def check_dump(path):
-    with open(path, 'rb') as source:
+    # The child inherits the descriptor offset, not a buffered reader's position.
+    with open(path, 'rb', buffering=0) as source:
         require(source.read(5) == b'PGDMP', 'PENPOT_INVALID_DUMP')
         source.seek(0)
         process = subprocess.run(['/usr/bin/docker', 'exec', '-i', 'penpot-postgres',
