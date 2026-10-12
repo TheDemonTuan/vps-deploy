@@ -70,7 +70,7 @@ def check(root, registration, binding, runtime, source_sha, platform_ref):
                 any(value in ('no-new-privileges', 'no-new-privileges:true')
                     for value in host.get('SecurityOpt') or []), 'PENPOT_CONTAINER_SECURITY')
         if name in penpot.APP_SERVICES:
-            users = {'node', '1000', '1000:1000'} if name == 'penpot-mcp' else {'penpot', '1001', '1001:1001'}
+            users = {'node', '1000', '1000:1000'} if name == 'penpot-mcp' else {'penpot', 'penpot:penpot', '1001', '1001:1001'}
             require(config.get('User') in users, 'PENPOT_CONTAINER_SECURITY')
         require(type(service.get('mem_limit')) is int and service['mem_limit'] > 0 and
                 host.get('Memory') == service['mem_limit'], 'PENPOT_RESOURCE_PARITY')

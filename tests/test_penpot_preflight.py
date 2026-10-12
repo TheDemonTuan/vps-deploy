@@ -54,7 +54,7 @@ class PenpotEnrollmentParity(unittest.TestCase):
             networks = {self.composed['networks'][key]['name']: {} for key in service['networks']}
             mounts = [dict(Type='volume', Name=row['source'], Destination=row['target'], RW=not row['read_only'])
                       for row in service['volumes']]
-            user = 'node' if name == 'penpot-mcp' else 'penpot' if name in penpot.APP_SERVICES else ''
+            user = 'node' if name == 'penpot-mcp' else 'penpot:penpot' if name in penpot.APP_SERVICES else ''
             self.live[name] = {'Image': service['image'], 'State': {'Running': True, 'Health': {'Status': 'healthy'}},
                 'Config': {'User': user, 'Env': [key + '=' + str(value) for key, value in service.get('environment', {}).items()],
                     'Labels': {'vps-deploy.app': 'penpot', 'com.docker.compose.project': 'penpot',
