@@ -21,6 +21,10 @@ unchanged, and fixture cleanup removes its owned baseline release.
 Installer failures preserve the trusted controller's structured error code.
 They never include subprocess arguments, stderr or free-form error details;
 unstructured command failures still report `COMMAND_FAILED`.
+Unexpected installer exceptions report `INSTALL_IO_ERROR_<CLASS>_L<line>`;
+OS errors also include numeric `_E<errno>`. The location is restricted to the
+installer's own source, without traceback text, paths, messages or local values.
+
 
 First Penpot enrollment adopts in-process from the immutable installed controller
 while activation still holds the selected app operation lock. Adoption never
