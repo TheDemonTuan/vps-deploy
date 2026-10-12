@@ -27,7 +27,7 @@ def archive_hash(path):
     return value.hexdigest()
 
 
-def publish(archive, metadata, source, platform):
+def load_bundle(archive, metadata, source, platform):
     require(type(source) is str and SHA.fullmatch(source) and type(platform) is str and SHA.fullmatch(platform),
             'PENPOT_BUILD_IDENTITY')
     require(type(metadata) is dict and set(metadata) == {
@@ -41,7 +41,7 @@ def publish(archive, metadata, source, platform):
             and archive_hash(path) == metadata['archiveSha256'], 'PENPOT_BUILD_CHECKSUM')
     docker('load', '--input', str(path), timeout=600)
     tags = {role: repository + ':sha-' + source for role, repository in PENPOT_REPOSITORIES.items()}
-    # Validate the complete set before the first push; a mixed release has no output.
+    # Validate all four images before any diagnostic execution or publication.
     for role, tag in tags.items():
         value = inspect('image', tag)
         config = value.get('Config') or {}
@@ -50,6 +50,11 @@ def publish(archive, metadata, source, platform):
                 and labels.get('org.opencontainers.image.source') == 'https://github.com/TheDemonTuan/penpot'
                 and labels.get('org.opencontainers.image.revision') == source
                 and config.get('User', '').split(':')[0] not in ('', '0', 'root'), 'PENPOT_IMAGE_REVISION')
+    return tags
+
+
+def publish(archive, metadata, source, platform):
+    tags = load_bundle(archive, metadata, source, platform)
     images = {}
     for role, tag in tags.items():
         docker('push', tag, timeout=600)

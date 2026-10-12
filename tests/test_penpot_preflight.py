@@ -39,7 +39,7 @@ class PenpotEnrollmentParity(unittest.TestCase):
         self.values = {'PENPOT_SECRET_KEY': 'S' * 64, 'PENPOT_DB_PASSWORD': 'a' * 64}
         self.values.update({'PENPOT_' + role.upper() + '_IMAGE': ref for role, ref in self.req['images'].items()})
         raw = (ROOT / 'apps/penpot/docker-compose.prod.yml').read_text()
-        self.composed = yaml.safe_load(re.sub(r'\$\{([A-Z_]+):\?[^}]+\}', lambda m: self.values[m[1]], raw))
+        self.composed = yaml.safe_load(re.sub(r'\$\{([A-Z_]+):\?[^}]+\}', lambda m: self.values[m[1]], raw).replace('$$', '$'))
         self.composed = {key: value for key, value in self.composed.items() if not key.startswith('x-')}
         for key, value in self.composed['networks'].items():
             value.setdefault('name', 'penpot_' + key)
@@ -91,7 +91,7 @@ class PenpotEnrollmentParity(unittest.TestCase):
             stack.enter_context(mock.patch.object(penpot, 'owned_volumes'))
             stack.enter_context(mock.patch.object(penpot, 'docker', return_value=self.ready_response))
             stack.enter_context(mock.patch.object(preflight.subprocess, 'run', return_value=SimpleNamespace(
-                returncode=0, stdout=json.dumps(self.composed).encode())))
+                returncode=0, stdout=json.dumps(self.composed).replace('$', '$$').encode())))
             return preflight.check(ROOT, 'penpot', self.registration, self.profile, self.runtime, None,
                                    source_sha=self.req['source_sha'], platform_ref=self.req['platform_ref'])
 
@@ -120,6 +120,23 @@ class PenpotEnrollmentParity(unittest.TestCase):
             with self.assertRaisesRegex(core.Failure, 'PENPOT_RESOURCE_PARITY'):
                 self.check()
             self.live['penpot-exporter']['HostConfig'][host_field] -= 1
+
+    def test_rendered_dollars_preserve_exact_healthcheck_and_environment(self):
+        service = self.composed['services']['penpot-backend']
+        command = ['CMD-SHELL', 'test "$(printf \'$$literal\')" = \'$$literal\'']
+        service['healthcheck']['test'] = command
+        service['environment']['PENPOT_FLAGS'] = 'literal-$value-$$value'
+        live = self.live['penpot-backend']
+        live['Config']['Healthcheck']['Test'] = command.copy()
+        live['Config']['Env'] = [key + '=' + str(value) for key, value in service['environment'].items()]
+        self.check()
+        live['Config']['Healthcheck']['Test'] = ['CMD-SHELL', command[1].replace('$$literal', '$literal')]
+        with self.assertRaisesRegex(core.Failure, 'PENPOT_HEALTHCHECK_PARITY'):
+            self.check()
+        live['Config']['Healthcheck']['Test'] = command.copy()
+        live['Config']['Env'] = [row.replace('$$value', '$value') for row in live['Config']['Env']]
+        with self.assertRaisesRegex(core.Failure, 'PENPOT_ENV_PARITY'):
+            self.check()
 
     def test_wrong_mount_mode_secret_flags_health_and_capability_fail_closed(self):
         for fault in ('mount_mode', 'secret', 'flags', 'extra_env', 'health', 'root', 'capability', 'paused', 'unlimited'):

@@ -1,0 +1,84 @@
+name: Diagnose unverified native Penpot build
+on:
+  workflow_dispatch:
+    inputs:
+      artifact-id:
+        description: Exact built-unverified artifact ID from TheDemonTuan/penpot
+        required: true
+        type: string
+      run-id:
+        description: Original fork-deploy push/main run ID
+        required: true
+        type: string
+      source-sha:
+        description: Original immutable lowercase 40-hex image source SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+env:
+  SOURCE_SHA: ${{ inputs.source-sha }}
+  PLATFORM_REF: ${{ github.sha }}
+  SOURCE_RUN_ID: ${{ inputs.run-id }}
+  BUILT_ARTIFACT_ID: ${{ inputs.artifact-id }}
+jobs:
+  diagnostic:
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Require platform main and immutable diagnostic inputs
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == TheDemonTuan/vps-deploy && "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$RUNNER_ENVIRONMENT" == github-hosted ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ && "$BUILT_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$(uname -m)" == aarch64 ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: platform
+          persist-credentials: false
+      - name: Install native diagnostic prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml rsync zstd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: TheDemonTuan/penpot
+          ref: ${{ inputs.source-sha }}
+          path: source
+          persist-credentials: false
+      - name: Verify fork provenance and checksums, then load all four unverified images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 platform/scripts/diagnose-penpot.py \
+            --run-id "$SOURCE_RUN_ID" --artifact-id "$BUILT_ARTIFACT_ID" \
+            --source-sha "$SOURCE_SHA" --directory "$RUNNER_TEMP/penpot-native-bundle"
+      - name: Diagnose native lifecycle using this exact platform commit
+        id: lifecycle
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 "$RUNNER_TEMP/penpot-diagnostic"
+          sudo env CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            PENPOT_DISPOSABLE_VM=1 PENPOT_APP_REF="$SOURCE_SHA" \
+            PENPOT_PLATFORM_REF="$PLATFORM_REF" \
+            PENPOT_CI_APP_DIR="$GITHUB_WORKSPACE/source" \
+            PENPOT_CI_REPORT_DIR="$RUNNER_TEMP/penpot-diagnostic" \
+            bash platform/tests/integration/penpot-runtime-ci.sh
+      - name: Retain diagnostic evidence only, never release approval
+        if: ${{ always() && steps.lifecycle.outcome != 'skipped' && steps.lifecycle.outcome != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: penpot-native-diagnostic-${{ inputs.source-sha }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/penpot-diagnostic/lifecycle.json
+            ${{ runner.temp }}/penpot-diagnostic/logs/*.log
+          if-no-files-found: error
+          retention-days: 7

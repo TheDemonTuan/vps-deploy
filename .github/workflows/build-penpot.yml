@@ -71,6 +71,38 @@ jobs:
       - name: Build local devenv and all four native source images
         working-directory: source
         run: bash .deploy/build-images.sh
+      - name: Save four built but unverified images before any runtime proof
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/penpot-native-bundle"
+          mkdir -m 0700 "$bundle"
+          images=()
+          for role in frontend backend exporter mcp; do
+            images+=("ghcr.io/thedemontuan/penpot-$role:sha-$SOURCE_SHA")
+          done
+          docker save "${images[@]}" | zstd -T0 -3 -o "$bundle/images.tar.zst"
+          python3 - "$bundle" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          bundle = Path(sys.argv[1])
+          digest = hashlib.sha256()
+          with (bundle / 'images.tar.zst').open('rb') as stream:
+              for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                  digest.update(chunk)
+          metadata = {'schemaVersion': 1, 'sourceSha': os.environ['SOURCE_SHA'],
+                      'platformRef': os.environ['PLATFORM_REF'], 'platform': 'linux/arm64',
+                      'archiveSha256': digest.hexdigest()}
+          (bundle / 'build.json').write_text(json.dumps(metadata, sort_keys=True), encoding='ascii')
+          PY
+      - name: Retain built unverified images even when later proof fails
+        id: archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: penpot-built-unverified-${{ inputs.source-sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/penpot-native-bundle/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
       - name: Smoke disposable six-service stack without host ports
         working-directory: source
         run: |
@@ -105,39 +137,6 @@ jobs:
             ${{ runner.temp }}/penpot-proof/logs/*.log
           if-no-files-found: error
           retention-days: 30
-      - name: Save the exact tested local images for the publication job
-        if: ${{ success() && steps.lifecycle.outcome == 'success' && steps.proof.outcome == 'success' }}
-        run: |
-          set -euo pipefail
-          bundle="$RUNNER_TEMP/penpot-native-bundle"
-          mkdir -m 0700 "$bundle"
-          images=()
-          for role in frontend backend exporter mcp; do
-            images+=("ghcr.io/thedemontuan/penpot-$role:sha-$SOURCE_SHA")
-          done
-          docker save "${images[@]}" | zstd -T0 -3 -o "$bundle/images.tar.zst"
-          python3 - "$bundle" <<'PY'
-          import hashlib, json, os, sys
-          from pathlib import Path
-          bundle = Path(sys.argv[1])
-          digest = hashlib.sha256()
-          with (bundle / 'images.tar.zst').open('rb') as stream:
-              for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                  digest.update(chunk)
-          metadata = {'schemaVersion': 1, 'sourceSha': os.environ['SOURCE_SHA'],
-                      'platformRef': os.environ['PLATFORM_REF'], 'platform': 'linux/arm64',
-                      'archiveSha256': digest.hexdigest()}
-          (bundle / 'build.json').write_text(json.dumps(metadata, sort_keys=True), encoding='ascii')
-          PY
-      - name: Upload this run's tested images only
-        id: archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: penpot-native-${{ inputs.source-sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/penpot-native-bundle/
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
   publish:
     needs: build
     runs-on: ubuntu-24.04-arm
