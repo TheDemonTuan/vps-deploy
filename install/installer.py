@@ -450,5 +450,18 @@ if __name__ == '__main__':
     try:
         main()
     except (Failure, OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired) as exc:
-        print(exc.code if isinstance(exc, Failure) else 'INSTALL_IO_ERROR', file=sys.stderr)
+        code = exc.code if isinstance(exc, Failure) else 'INSTALL_IO_ERROR'
+        if not isinstance(exc, Failure):
+            # Only fixed exception classes and this file's numeric location;
+            # never exception messages, paths, arguments or local values.
+            location = 0
+            trace = exc.__traceback__
+            while trace is not None:
+                if trace.tb_frame.f_code.co_filename == __file__:
+                    location = trace.tb_lineno
+                trace = trace.tb_next
+            code += '_' + type(exc).__name__.upper() + '_L' + str(location)
+            if isinstance(exc, OSError) and type(exc.errno) is int:
+                code += '_E' + str(exc.errno)
+        print(code, file=sys.stderr)
         sys.exit(1)
