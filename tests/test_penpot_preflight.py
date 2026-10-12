@@ -101,6 +101,26 @@ class PenpotEnrollmentParity(unittest.TestCase):
         self.assertEqual(set(self.check()['services']), set(self.live))
         self.assertEqual({path.name: path.read_bytes() for path in self.cfg.iterdir()}, before)
 
+    def test_compose_decimal_byte_strings_require_exact_live_limits(self):
+        for service in self.composed['services'].values():
+            for field in ('mem_limit', 'shm_size'):
+                if field in service:
+                    service[field] = str(service[field])
+        self.check()
+        for field, host_field in (('mem_limit', 'Memory'), ('shm_size', 'ShmSize')):
+            service = self.composed['services']['penpot-exporter']
+            expected = service[field]
+            for value in (str(int(expected) + 1), '0', '-1', '1g', '1.0', True, None):
+                with self.subTest(field=field, value=value):
+                    service[field] = value
+                    with self.assertRaisesRegex(core.Failure, 'PENPOT_RESOURCE_PARITY'):
+                        self.check()
+            service[field] = expected
+            self.live['penpot-exporter']['HostConfig'][host_field] += 1
+            with self.assertRaisesRegex(core.Failure, 'PENPOT_RESOURCE_PARITY'):
+                self.check()
+            self.live['penpot-exporter']['HostConfig'][host_field] -= 1
+
     def test_wrong_mount_mode_secret_flags_health_and_capability_fail_closed(self):
         for fault in ('mount_mode', 'secret', 'flags', 'extra_env', 'health', 'root', 'capability', 'paused', 'unlimited'):
             original = copy.deepcopy(self.live)

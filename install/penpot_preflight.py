@@ -72,10 +72,11 @@ def check(root, registration, binding, runtime, source_sha, platform_ref):
         if name in penpot.APP_SERVICES:
             users = {'node', '1000', '1000:1000'} if name == 'penpot-mcp' else {'penpot', 'penpot:penpot', '1001', '1001:1001'}
             require(config.get('User') in users, 'PENPOT_CONTAINER_SECURITY')
-        require(type(service.get('mem_limit')) is int and service['mem_limit'] > 0 and
-                host.get('Memory') == service['mem_limit'], 'PENPOT_RESOURCE_PARITY')
+        require(type(host.get('Memory')) is int and host['Memory'] > 0 and
+                str(host['Memory']) == str(service.get('mem_limit')), 'PENPOT_RESOURCE_PARITY')
         if 'shm_size' in service:
-            require(host.get('ShmSize') == service['shm_size'], 'PENPOT_RESOURCE_PARITY')
+            require(type(host.get('ShmSize')) is int and host['ShmSize'] > 0 and
+                    str(host['ShmSize']) == str(service['shm_size']), 'PENPOT_RESOURCE_PARITY')
         require(config.get('Healthcheck', {}).get('Test') == service.get('healthcheck', {}).get('test'),
                 'PENPOT_HEALTHCHECK_PARITY')
         environment = dict(row.split('=', 1) for row in config.get('Env') or [] if '=' in row)
