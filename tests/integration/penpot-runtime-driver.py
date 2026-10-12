@@ -101,6 +101,14 @@ class Harness:
         except (OSError, subprocess.TimeoutExpired):
             raise HarnessFailure('NATIVE_COMMAND_UNAVAILABLE_OR_TIMEOUT') from None
         if process.returncode and check:
+            if len(process.stdout)<=65536:
+                try:
+                    result=json.loads(process.stdout)
+                    code=result.get('error_code') if type(result) is dict else None
+                    if type(code) is str and re.fullmatch(r'[A-Z][A-Z0-9_]{0,95}',code):
+                        self.log('controller-error: '+code)
+                except (ValueError,UnicodeError):
+                    pass
             self.log(process.stderr)
             raise HarnessFailure('NATIVE_COMMAND_FAILED_' + Path(str(args[0])).name.upper().replace('-', '_'))
         return process
