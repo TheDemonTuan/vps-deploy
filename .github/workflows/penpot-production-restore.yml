@@ -1,0 +1,123 @@
+name: Rehearse production Penpot backup on a separate VM
+on:
+  workflow_dispatch:
+    inputs:
+      backup-id:
+        description: Complete production backup request ID (synthetic acceptance data only)
+        required: true
+        type: string
+      file-id:
+        description: Acceptance file UUID recorded before backup
+        required: true
+        type: string
+      file-sha256:
+        description: Lowercase SHA256 of the acceptance file database fingerprint
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: penpot-production-restore
+  cancel-in-progress: false
+jobs:
+  restore:
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    environment: platform-admin
+    env:
+      BACKUP_ID: ${{ inputs.backup-id }}
+      FILE_ID: ${{ inputs.file-id }}
+      FILE_SHA256: ${{ inputs.file-sha256 }}
+      PLATFORM_REF: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install native restore prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+      - name: Admit immutable inputs on a disposable native runner
+        run: |
+          python3 - <<'PY'
+          import json, os, platform, re, sys, uuid
+          from pathlib import Path
+          sys.path.insert(0, 'lib')
+          from core import REQUEST_ID, SHA, HASH
+          try:
+              assert os.environ['GITHUB_REPOSITORY'] == 'TheDemonTuan/vps-deploy'
+              assert os.environ['GITHUB_REF'] == 'refs/heads/main'
+              assert os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+              assert os.environ['RUNNER_ENVIRONMENT'] == 'github-hosted'
+              assert platform.machine() == 'aarch64'
+              assert SHA.fullmatch(os.environ['PLATFORM_REF'])
+              assert os.environ['PLATFORM_REF'] == os.environ['GITHUB_SHA']
+              assert REQUEST_ID.fullmatch(os.environ['BACKUP_ID'])
+              assert HASH.fullmatch(os.environ['FILE_SHA256'])
+              assert re.fullmatch(r'[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', os.environ['FILE_ID'])
+              uuid.UUID(os.environ['FILE_ID'])
+              (Path(os.environ['RUNNER_TEMP']) / 'penpot-production-restore').mkdir(mode=0o700)
+          except Exception:
+              print(json.dumps({'status': 'failed', 'error_code': 'PENPOT_REHEARSAL_IDENTITY'}))
+              sys.exit(1)
+          PY
+      - name: Verify installed origin and privately stream exactly one backup
+        env:
+          VPS_PLATFORM_ADMIN_SSH_KEY: ${{ secrets.VPS_PLATFORM_ADMIN_SSH_KEY }}
+        run: |
+          python3 scripts/download-penpot-backup.py --backup-id "$BACKUP_ID" \
+            --archive "$RUNNER_TEMP/penpot-production-restore/backup.tar" \
+            --origin-receipt "$RUNNER_TEMP/penpot-production-restore/origin.json"
+      - name: Restore and verify on this VM without production credentials
+        id: rehearsal
+        run: |
+          umask 077
+          exec > "$RUNNER_TEMP/penpot-production-restore/report.json"
+          sudo env -i PATH=/usr/bin:/bin LANG=C HOME=/root \
+            CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted PENPOT_DISPOSABLE_VM=1 \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_REF="$GITHUB_REF" \
+            GITHUB_SHA="$GITHUB_SHA" PLATFORM_REF="$PLATFORM_REF" \
+            python3 scripts/rehearse-penpot-backup.py \
+              --archive "$RUNNER_TEMP/penpot-production-restore/backup.tar" \
+              --origin-receipt "$RUNNER_TEMP/penpot-production-restore/origin.json" \
+              --file-id "$FILE_ID" --file-sha256 "$FILE_SHA256"
+      - name: Publish only the sanitized rehearsal result
+        if: ${{ always() && steps.rehearsal.outcome != 'skipped' && steps.rehearsal.outcome != '' }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          try:
+              report = Path(os.environ['RUNNER_TEMP']) / 'penpot-production-restore/report.json'
+              assert report.stat().st_size <= 4096
+              value = json.loads(report.read_text())
+              if value.get('status') == 'passed':
+                  assert set(value) == {'status', 'snapshotVerified', 'databaseMatches', 'assetsMatch', 'readiness', 'sourceSha', 'platformRef', 'dataTimestamp'}
+                  assert all(value[key] is True for key in ('snapshotVerified', 'databaseMatches', 'assetsMatch', 'readiness'))
+                  assert re.fullmatch(r'[0-9a-f]{40}', value['sourceSha'])
+                  assert value['platformRef'] == os.environ['GITHUB_SHA']
+                  assert re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)', value['dataTimestamp'])
+              else:
+                  assert set(value) == {'status', 'error_code'} and value['status'] == 'failed'
+                  assert re.fullmatch(r'[A-Z][A-Z0-9_]{0,95}', value['error_code'])
+          except Exception:
+              value = {'status': 'failed', 'error_code': 'PENPOT_REHEARSAL_FAILED'}
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write('## Separate-VM Penpot restore rehearsal\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n')
+          if value['status'] != 'passed':
+              raise SystemExit(1)
+          PY
+      - name: Remove private downloaded material from this runner
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          private = Path(os.environ['RUNNER_TEMP']) / 'penpot-production-restore'
+          for name in ('backup.tar', 'origin.json', 'report.json'):
+              (private / name).unlink(missing_ok=True)
+          if private.exists():
+              private.rmdir()
+          PY

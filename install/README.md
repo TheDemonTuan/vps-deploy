@@ -88,6 +88,46 @@ After a reviewed platform revision reaches `main`, run the read-only smoke with
 and inspect that exact run's sanitized summary before considering apply. Local
 focused coverage is `python3 -m unittest discover -s cloudflare/tests -p 'test_penpot_ingress.py' -v`.
 
+## Separate-VM Penpot production backup rehearsal
+
+`penpot-production-restore.yml` is a manual, central-repository `main` workflow
+using the protected `platform-admin` environment and a one-use GitHub-hosted
+`ubuntu-24.04-arm` runner. It does not install or restore anything on production.
+Keep automatic deployments and the backup timer disabled until native lifecycle,
+public Web/export/MCP acceptance, log safety, backup verification and this separate-VM
+restore all pass. Preparation-fence removal still requires native diagnostic proof.
+
+Only synthetic acceptance data may be sent to this runner. A backup includes
+private runtime credentials, database contents and assets: if real user data is
+already present, do not dispatch; use an explicitly approved private ARM64 VM
+instead. Never upload the archive, private receipt, environment or restore data
+as artifacts or cache entries. Only the bounded sanitized helper result appears
+in the job summary; no successful production rehearsal is implied by local tests.
+
+Close browser/MCP writers after Saved, validate the acceptance file UUID, and keep
+only the SHA256 of the approved `file`/ordered `file_data` query stdout with its
+trailing newline removed. Take the root production backup, require a complete
+receipt, and confirm the fingerprint is unchanged after backup. Use its exact
+request ID, file UUID and lowercase 64-hex fingerprint:
+
+```bash
+gh workflow run penpot-production-restore.yml --repo TheDemonTuan/vps-deploy --ref main \
+  -f backup-id="$BACKUP_ID" -f file-id="$FILE_ID" -f file-sha256="$FILE_SHA256"
+```
+
+The main checkout SHA must equal the installed origin and snapshot platform SHA.
+The downloader consumes only the protected admin SSH secret, verifies the origin
+first, pins the existing Oracle SSH fingerprint, and reads exactly six root-owned
+private regular files from the selected backup directory without following links.
+It streams a private tar plus a separate sanitized origin receipt; no production
+file is created or changed. The root helper runs with an explicit clean environment,
+without admin SSH or Cloudflare credentials, stages its own root-owned configuration,
+and checks snapshot identity/integrity, the acceptance-file fingerprint, every asset
+path/hash/size and six-service readiness. It tears down only resources it created.
+Require all four success booleans and exact source/platform/data timestamp in the
+summary before enabling the backup timer; a failed run does not authorize fallback
+to another snapshot or an in-place production restore.
+
 ## Upgrade 9router
 
 1. Pause all caller workflows (`deploy.yml`, `deploy-ops.yml`, `rtk-sidecar.yml`, and `chatgpt-web-runtime.yml` once enrolled). Wait for pending receipts, transient deployments, and old drain service to finish; reconcile any pending intent using the **old** engine. Capture old `status --app 9router --strict`; compare the active/previous image digests, state revision, route generation, route bytes, volumes, environment names, and long-lived connections. Keep existing route and state untouched. Back up selected-app `/etc/vps-deploy/apps/9router/{host.json,app.yml,runtime.env}`, both `/usr/local/libexec/vps-deploy-{9router,drain-9router}`, sudoers, authorized key, legacy service/timer enable state, and owned route **outside** Traefik's watched directory. Never put private env/key contents in logs.

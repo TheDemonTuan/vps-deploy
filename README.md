@@ -437,6 +437,10 @@ sentinels phải pass trước activation. Retention là newest seven cộng ref
 theo engine; variants cùng F vẫn là previous-source references, không xóa state
 để ép số backup thành bảy. Query-token regression giữ error causes ở success,
 404, connection refused và timeout; leak là fail, không tắt logging để lấy xanh.
+SSH daemon fixture dùng `-E` để ghi startup errors vào private log. Khi daemon
+trả exit code khác 0, harness giữ tối đa 64 KiB qua cùng bộ redaction của runtime
+log, vẫn fail bằng `NATIVE_COMMAND_FAILED_SSHD`; không retry hay bỏ SSH gate.
+
 
 P0 vẫn chặn production bằng `PENPOT_RELEASE_ENGINE_NOT_READY`: chỉ profile có
 `fixture_ci: true`, registry host `fixture-local` và marker root-owned regular
