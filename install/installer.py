@@ -40,6 +40,23 @@ def run(*args, timeout=30, check=True):
             if type(evidence) is bytes and len(evidence)<=65536:
                 stages=re.findall(rb'(?m)^KEY_ENROLLMENT_L([0-9]{1,4})$',evidence)
                 if stages:
+                    allowed={'useradd','run-parts','sss_cache','nscd','systemctl','userdbctl','dbus-send','sh'}
+                    remaining=16
+                    for proc in Path('/proc').iterdir():
+                        if not proc.name.isdecimal():
+                            continue
+                        try:
+                            name=(proc/'comm').read_text().strip()
+                            if name not in allowed:
+                                continue
+                            wait=(proc/'wchan').read_text().strip()
+                            if re.fullmatch(r'[a-zA-Z0-9_]{1,48}',wait):
+                                print('KEY_WAIT_'+name.upper().replace('-','_')+'_'+wait.upper(),file=sys.stderr)
+                                remaining-=1
+                                if remaining==0:
+                                    break
+                        except OSError:
+                            continue
                     raise Failure('INSTALL_KEY_TIMEOUT_L'+stages[-1].decode('ascii')) from None
         raise
     if check and result.returncode:
