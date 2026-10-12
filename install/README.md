@@ -26,6 +26,9 @@ startup resolution. Exporter uses `redis://penpot-valkey/0`, not the upstream
 default hostname `redis`.
 Datastore references use canonical `repository@sha256:digest` form, without a
 tag, so exact identity checks match Docker's `RepoDigests` representation.
+Enrollment compares Docker's integer byte limits with Compose's decimal byte
+strings or integers. Memory and declared shared-memory limits must be positive
+and match exactly; missing, unlimited and mismatched limits fail enrollment.
 
 Bootstrap uses the host CA `/opt/platform/edge/cloudflare-ca/origin-ca.pem`, mounted
 read-only at `/etc/cloudflare-origin-ca` in `edge-cloudflared`. Its origin probe runs
