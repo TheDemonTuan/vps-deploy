@@ -480,7 +480,16 @@ class Harness:
                          'PasswordAuthentication no','KbdInteractiveAuthentication no','PermitRootLogin no',
                          'UsePAM no','AllowUsers deploy-penpot','LogLevel ERROR'])+'\n'
         self.put(self.private/'sshd_config',config)
-        self.run('/usr/sbin/sshd','-f',self.private/'sshd_config','-E',self.private/'sshd.log')
+        startup=self.run('/usr/sbin/sshd','-f',self.private/'sshd_config','-E',self.private/'sshd.log',check=False)
+        if startup.returncode:
+            # -E redirects startup errors away from stderr; retain bounded,
+            # redacted evidence rather than only the executable's error code.
+            diagnostic=self.private/'sshd.log'
+            if diagnostic.is_file() and not diagnostic.is_symlink():
+                with diagnostic.open('rb') as stream:
+                    self.log(stream.read(65536))
+            self.log(startup.stderr)
+            raise HarnessFailure('NATIVE_COMMAND_FAILED_SSHD')
         self.sshd=int((self.private/'sshd.pid').read_text())
         self.put(self.private/'known_hosts','[127.0.0.1]:22222 '+' '.join((self.private/'hostkey.pub').read_text().split()[:2])+'\n')
         self.ssh=['ssh','-i',str(self.private/'key'),'-p','22222','-o','UserKnownHostsFile='+str(self.private/'known_hosts'),
