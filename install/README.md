@@ -18,6 +18,8 @@ Native recovery evidence, not source-only tests, is required to remove that fenc
 The native fixture seeds the previous enrolled release before installer `--check`;
 the new target release remains absent until apply. Production trust checks are
 unchanged, and fixture cleanup removes its owned baseline release.
+Fixture SSH client and host private keys are explicitly root-owned regular files
+with mode 0600 at creation; OpenSSH rejects a 0644 private key before startup.
 Installer failures preserve the trusted controller's structured error code.
 They never include subprocess arguments, stderr or free-form error details;
 unstructured command failures still report `COMMAND_FAILED`.
