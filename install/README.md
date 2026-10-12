@@ -35,6 +35,8 @@ from JSON stdout, never other stdout fields, so backup failures remain diagnosab
 Key enrollment emits numeric source progress markers, without expanded commands.
 On timeout only its last validated marker becomes `INSTALL_KEY_TIMEOUT_L<line>`;
 raw stderr stays private and the timeout remains unchanged.
+Key timeouts also retain at most 16 allowlisted account-process names and kernel
+wait symbols, never process arguments, environment, account files or hook contents.
 
 
 First Penpot enrollment adopts in-process from the immutable installed controller
