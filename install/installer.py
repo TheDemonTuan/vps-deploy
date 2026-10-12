@@ -33,6 +33,16 @@ LIBEXEC = Path('/usr/local/libexec')
 def run(*args, timeout=30, check=True):
     result = subprocess.run(args, capture_output=True, timeout=timeout)
     if check and result.returncode:
+        # Only the trusted controller emits a structured, non-secret error code.
+        # Never forward arbitrary command output, arguments or stderr.
+        if Path(args[0]).name == 'deployctl' and len(result.stdout) <= 65536:
+            try:
+                report = json.loads(result.stdout)
+                code = report.get('error_code') if type(report) is dict else None
+                if report.get('status') == 'failed' and type(code) is str and re.fullmatch(r'[A-Z][A-Z0-9_]{0,95}', code):
+                    raise Failure(code)
+            except (ValueError, AttributeError):
+                pass
         raise Failure('COMMAND_FAILED')
     return result
 
