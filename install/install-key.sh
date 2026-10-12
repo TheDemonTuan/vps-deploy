@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Numeric source locations only: no shell tracing or expanded arguments.
+trap 'printf "KEY_ENROLLMENT_L%s\n" "$LINENO" >&2' DEBUG
 [[ $(id -u) == 0 && $# == 3 && $1 == --app && $2 =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ && -f $3 && ! -L $3 ]] || { echo 'Usage: install-key.sh --app <id> <operator-reviewed-ed25519-public-key-file>' >&2; exit 1; }
 APP=$2; KEY=$3
 [[ $(wc -l < "$KEY") == 1 ]] || { echo EXPECT_ONE_PUBLIC_KEY >&2; exit 1; }
