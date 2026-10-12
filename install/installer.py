@@ -52,6 +52,19 @@ def run(*args, timeout=30, check=True):
                             wait=(proc/'wchan').read_text().strip()
                             if re.fullmatch(r'[a-zA-Z0-9_]{1,48}',wait):
                                 print('KEY_WAIT_'+name.upper().replace('-','_')+'_'+wait.upper(),file=sys.stderr)
+                                if name=='useradd':
+                                    syscall=(proc/'syscall').read_text().split()
+                                    if syscall and syscall[0].isdecimal():
+                                        print('KEY_USERADD_SYSCALL_'+syscall[0],file=sys.stderr)
+                                    symbols=re.findall(r'\] ([a-zA-Z0-9_]+)\+', (proc/'stack').read_text())[:16]
+                                    for symbol in symbols:
+                                        print('KEY_USERADD_STACK_'+symbol.upper(),file=sys.stderr)
+                                    known={'/etc/passwd','/etc/shadow','/etc/group','/etc/gshadow',
+                                           '/etc/subuid','/etc/subgid','/var/log/lastlog','/var/log/faillog'}
+                                    for fd in (proc/'fd').iterdir():
+                                        target=os.readlink(fd)
+                                        if target in known:
+                                            print('KEY_USERADD_FD_'+Path(target).name.upper(),file=sys.stderr)
                                 remaining-=1
                                 if remaining==0:
                                     break
