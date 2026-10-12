@@ -195,6 +195,31 @@ class RuntimeAdoption(unittest.TestCase):
         self.assertEqual((cfg / 'app.yml').read_bytes(), b'old-manifest')
 
 
+class InstallerCommandErrors(unittest.TestCase):
+    def test_controller_error_survives_without_forwarding_secret_output(self):
+        report = json.dumps({'status': 'failed', 'error_code': 'PENPOT_PUBLIC_HEALTH',
+                             'detail': 'private credential'}).encode()
+        result = SimpleNamespace(returncode=1, stdout=report, stderr=b'private credential')
+        with mock.patch.object(installer.subprocess, 'run', return_value=result):
+            with self.assertRaises(Failure) as caught:
+                installer.run('/fixture/bin/deployctl', 'adopt', '--app', 'penpot')
+        self.assertEqual(caught.exception.code, 'PENPOT_PUBLIC_HEALTH')
+        self.assertNotIn('private credential', str(caught.exception))
+
+    def test_unstructured_or_foreign_command_output_stays_private(self):
+        for command, output in (
+                ('/fixture/bin/deployctl', b'private credential'),
+                ('/fixture/bin/deployctl', b'[]'),
+                ('/fixture/bin/deployctl', b'{"status":"failed","error_code":"private credential"}'),
+                ('/bin/bash', b'{"status":"failed","error_code":"PENPOT_PUBLIC_HEALTH"}')):
+            with self.subTest(command=command, output=output):
+                result = SimpleNamespace(returncode=1, stdout=output, stderr=b'private credential')
+                with mock.patch.object(installer.subprocess, 'run', return_value=result):
+                    with self.assertRaises(Failure) as caught:
+                        installer.run(command)
+                self.assertEqual(caught.exception.code, 'COMMAND_FAILED')
+
+
 class RuntimePolicy(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
