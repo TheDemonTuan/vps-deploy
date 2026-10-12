@@ -457,7 +457,7 @@ if __name__ == '__main__':
             location = 0
             trace = exc.__traceback__
             while trace is not None:
-                if trace.tb_frame.f_code.co_filename == __file__:
+                if trace.tb_frame.f_code.co_filename == __file__ and trace.tb_frame.f_code.co_name != 'run':
                     location = trace.tb_lineno
                 trace = trace.tb_next
             code += '_' + type(exc).__name__.upper() + '_L' + str(location)

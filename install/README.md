@@ -29,6 +29,7 @@ unstructured command failures still report `COMMAND_FAILED`.
 Unexpected installer exceptions report `INSTALL_IO_ERROR_<CLASS>_L<line>`;
 OS errors also include numeric `_E<errno>`. The location is restricted to the
 installer's own source, without traceback text, paths, messages or local values.
+For subprocess exceptions, the line identifies the caller, not the shared `run` wrapper.
 Native command failures retain only a bounded uppercase structured `error_code`
 from JSON stdout, never other stdout fields, so backup failures remain diagnosable.
 
