@@ -778,8 +778,12 @@ class Harness:
         state_before=self.state()
         previous_source=(state_before.get('previous') or {}).get('source_sha')
         operation_snapshot=(state_before.get('operation') or {}).get('snapshot')
+        # A fresh enrollment has no snapshots; operator_backup creates the
+        # private backup root on its first successful invocation.
+        backups=STATE/'backups'
+        existing=backups.iterdir() if backups.exists() else ()
         recorded={str(p):penpot.verify_snapshot(p,self.profile['registration'])
-                  for p in (STATE/'backups').iterdir() if (p/'manifest.json').exists()}
+                  for p in existing if (p/'manifest.json').exists()}
         existing_references={name for name,metadata in recorded.items()
                              if metadata['sourceSha']==previous_source or name==operation_snapshot}
         # Calculate expected retention from snapshots observed BEFORE pruning,

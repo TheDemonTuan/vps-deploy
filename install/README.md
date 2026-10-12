@@ -20,6 +20,9 @@ the new target release remains absent until apply. Production trust checks are
 unchanged, and fixture cleanup removes its owned baseline release.
 Fixture SSH client and host private keys are explicitly root-owned regular files
 with mode 0600 at creation; OpenSSH rejects a 0644 private key before startup.
+Retention starts with an empty snapshot baseline on fresh enrollment: the backup
+root is created by the first backup, not by installer activation. Existing
+snapshots are still verified and included in reference-preservation assertions.
 Installer failures preserve the trusted controller's structured error code.
 They never include subprocess arguments, stderr or free-form error details;
 unstructured command failures still report `COMMAND_FAILED`.
