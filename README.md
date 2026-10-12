@@ -389,6 +389,45 @@ production source tags không bị sửa và variants không được archive/pu
 Đây là lifecycle proof từ cùng source image closure, không phải proof migration
 giữa hai app release khác nhau. Registry chỉ bind loopback, digest immutable.
 
+`build-penpot.yml` lưu bốn source images **built/unverified** ngay sau build,
+trước smoke/lifecycle, trong artifact
+`penpot-built-unverified-<SOURCE_SHA>-<RUN_ID>-<RUN_ATTEMPT>` giữ 7 ngày.
+`build.json` gắn source SHA, platform SHA lúc build, `linux/arm64` và SHA256 của
+`images.tar.zst`. Smoke hoặc lifecycle fail không làm mất bundle đã upload.
+Bundle không phải release: publication vẫn cần smoke, lifecycle và sanitized
+proof thành công trong chính run/attempt build; diagnostic xanh không thay thế
+chuỗi release đó hoặc mở production fence.
+
+Để kiểm tra platform fixes mà không build lại, mở Actions của
+`TheDemonTuan/vps-deploy`, chọn **Diagnose unverified native Penpot build**, chạy
+trên `main`, nhập `artifact-id`, `run-id` của fork build và `source-sha` immutable.
+Ví dụ CLI (thay các giá trị trong dấu `<...>`):
+
+```bash
+gh workflow run penpot-native-diagnostic.yml --repo TheDemonTuan/vps-deploy --ref main \
+  -f artifact-id=<ARTIFACT_ID> -f run-id=<FORK_RUN_ID> -f source-sha=<40_HEX_SOURCE_SHA>
+```
+
+Workflow checkout source tại SHA của images và platform tại chính `github.sha`
+của diagnostic run, không gọi `build-images.sh`. Loader chỉ nhận artifacts của
+`TheDemonTuan/penpot` từ `fork-deploy.yml`, event `push`, branch `main`; kiểm tra
+run/source/builder SHA, tên artifact chính xác, hạn dùng, GitHub ZIP digest,
+allowlist ZIP, archive checksum và architecture/source/revision của đủ bốn images
+trước khi chạy native driver. Platform SHA lúc build giữ nguyên trong
+metadata; platform SHA diagnostic có thể đổi qua mỗi fix. Fork hiện là public,
+workflow dùng built-in read-only `GITHUB_TOKEN`, không cần PAT hay deploy secrets;
+token chỉ ở loader step, không truyền vào root harness. Artifact hết hạn, thiếu,
+mismatch hoặc không đọc được đều fail closed; phải build một bundle mới, không
+dùng image khác thay thế. Run `38202632482` cũ không có bundle để tái sử dụng.
+Chỉ `lifecycle.json` và logs qua redactor của driver được upload trong artifact
+`penpot-native-diagnostic-*`; diagnostic không chạy source smoke hay tạo release
+proof, không có package-write permission, release/deploy outputs hay đường publish. Sau khi
+diagnostic pass, vẫn chạy fork release chain đầy đủ với platform pin đã sửa.
+
+Enrollment chuẩn hóa lớp output escaping `$$` của `docker compose config` về
+giá trị `$` hiệu lực trước khi so sánh với Docker inspect; healthcheck và env vẫn
+phải khớp chính xác, kể cả chuỗi literal dollars lặp lại.
+
 Suite dùng controller/forced SSH/systemd thật, PostgreSQL và asset volume thật,
 TLS Traefik/origin probe thật, installer immutable-copy và fresh backup timer
 inactive. Migration fixture mở JDBC connection riêng để commit dữ liệu rồi

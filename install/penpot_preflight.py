@@ -49,7 +49,9 @@ def check(root, registration, binding, runtime, source_sha, platform_ref):
                             env=dict(PATH='/usr/bin:/bin', HOME='/root', LANG='C', **values),
                             capture_output=True, timeout=30)
     require(result.returncode == 0, 'PENPOT_COMPOSE_POLICY')
-    composed = json.loads(result.stdout)
+    # Compose config doubles every dollar in its output, including JSON.
+    # Undo output escaping, not container command or environment semantics.
+    composed = json.loads(result.stdout.replace(b'$$', b'$'))
     services = composed['services']
     require(set(services) == set(penpot.APP_SERVICES) | set(penpot.DATASTORE_IMAGES), 'PENPOT_COMPOSE_POLICY')
     require(set(composed['volumes']) == set(penpot.VOLUMES.values()), 'PENPOT_COMPOSE_POLICY')
