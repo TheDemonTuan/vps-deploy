@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import traceback
 import urllib.parse
 import uuid
 import zipfile
@@ -984,6 +985,12 @@ class Harness:
             self.result['status']='passed'
         except Exception as error:
             self.result['errorCode']=getattr(error,'code',str(error) if isinstance(error,HarnessFailure) else type(error).__name__)
+            # Report code locations only, never exception values, locals or source
+            # lines: setup failures can otherwise hide paths containing secrets.
+            for frame in traceback.extract_tb(error.__traceback__):
+                filename = Path(frame.filename)
+                if filename.is_relative_to(ROOT):
+                    self.log('native-frame: '+str(filename.relative_to(ROOT))+':'+str(frame.lineno)+':'+frame.name)
             self.log('Harness failed: '+self.result['errorCode'])
         finally:
             if self.containers:

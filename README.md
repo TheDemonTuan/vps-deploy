@@ -440,6 +440,10 @@ theo engine; variants cùng F vẫn là previous-source references, không xóa 
 SSH daemon fixture dùng `-E` để ghi startup errors vào private log. Khi daemon
 trả exit code khác 0, harness giữ tối đa 64 KiB qua cùng bộ redaction của runtime
 log, vẫn fail bằng `NATIVE_COMMAND_FAILED_SSHD`; không retry hay bỏ SSH gate.
+Native harness failures also log platform-relative code locations (file, line,
+function) so a filesystem error during setup can be located. Exception values,
+source lines and locals are not included; private paths and credentials must not
+be emitted to diagnose a missing file.
 
 
 Temporary production preparation fence đã được bỏ sau native ARM64 run
