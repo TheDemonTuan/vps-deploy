@@ -154,7 +154,7 @@ def check(args):
     for name, internal in (('penpot_penpot', True), ('penpot-egress', False)):
         if name in networks:
             value = inspect('network', name)
-            members = set(penpot.APP_SERVICES) | set(penpot.DATASTORE_IMAGES) if internal else {'penpot-backend', 'penpot-exporter'}
+            members = set(penpot.APP_SERVICES) | set(penpot.DATASTORE_IMAGES) if internal else {'penpot-frontend', 'penpot-backend', 'penpot-exporter'}
             require(checkpoint.exists() and value.get('Driver') == 'bridge' and value.get('Internal') is internal and
                     not value.get('Options') and (value.get('Labels') or {}).get('vps-deploy.app') == 'penpot' and
                     {member.get('Name') for member in (value.get('Containers') or {}).values()} <= members,

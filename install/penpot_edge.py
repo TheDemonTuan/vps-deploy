@@ -137,6 +137,7 @@ def origin_ack(profile, entry, generation=None, *, maintenance=False):
             '--entrypoint', '/usr/bin/curl', frontend, '--silent', '--show-error',
             '--cacert', '/ca.pem', '--connect-to',
             'design.tuannguyenviet.site:443:172.31.250.4:8080', '--proto', '=https',
+            '--header', 'CF-Connecting-IP: ' + profile['host_registration']['ssh']['address'],
             '--max-time', str(probe_timeout), '--max-redirs', '0', '--max-filesize', '65536',
             '--dump-header', '-', '--write-out', '\n%{http_code}',
             'https://design.tuannguyenviet.site/readyz'],
