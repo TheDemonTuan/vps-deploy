@@ -461,24 +461,35 @@ class Harness:
         penpot_edge.origin_ack(self.profile,self.state()['active'],self.state()['generation'])
         self.ssh_server()
 
-    def gate_boundary(self):
-        from core import Failure
-        restore=module('fixture_offline_restore',self.release/'install/restore-penpot.py')
-        gate=restore.controller().ready_engine
-        gate(self.profile)
-        for fixture,host in ((False,'fixture-local'),(1,'fixture-local'),(True,'oracle-main')):
-            rejected=dict(self.profile,fixture_ci=fixture,registration=dict(self.profile['registration'],host=host))
-            try:gate(rejected)
-            except Failure as error:require(error.code=='PENPOT_RELEASE_ENGINE_NOT_READY','GATE_ERROR_CHANGED')
-            else:raise HarnessFailure('PRODUCTION_ENGINE_FENCE_BYPASSED')
+    def fixture_boundary(self):
+        import core
+        registration=self.profile['registration']
+        host_record=self.profile['host_registration']
+        host_path=CFG/'host.json'
+        raw=host_path.read_bytes()
         marker=Path('/etc/vps-deploy/fixture-ci')
-        marker.chmod(0o644)
+        marker_mode=stat.S_IMODE(marker.stat().st_mode)
+
+        def rejected(expected, candidate=registration):
+            try:core.host(CFG,candidate,host_record)
+            except core.Failure as error:require(error.code==expected,'FIXTURE_BOUNDARY_ERROR_CHANGED')
+            else:raise HarnessFailure('INVALID_FIXTURE_ADMITTED')
+
         try:
-            try:gate(self.profile)
-            except Failure as error:require(error.code=='PENPOT_RELEASE_ENGINE_NOT_READY','GATE_ERROR_CHANGED')
-            else:raise HarnessFailure('UNTRUSTED_FIXTURE_MARKER_ACCEPTED')
-        finally:marker.chmod(0o600)
-        return {'strictBoolean':True,'fixtureLocalOnly':True,'root0600MarkerRequired':True,'productionFenced':True}
+            require(core.host(CFG,registration,host_record)['fixture_ci'] is True,'VALID_FIXTURE_REJECTED')
+            for fixture in (False,1):
+                value=json.loads(raw)
+                value['fixture_ci']=fixture
+                host_path.write_bytes(json.dumps(value).encode())
+                rejected('UNKNOWN_OR_MISSING_FIELD')
+            host_path.write_bytes(raw)
+            rejected('APP_BINDING_MISMATCH',dict(registration,host='oracle-main'))
+            marker.chmod(0o644)
+            rejected('FIXTURE_NOT_AUTHORIZED')
+        finally:
+            host_path.write_bytes(raw)
+            marker.chmod(marker_mode)
+        return {'strictBoolean':True,'registrationBinding':True,'root0600MarkerRequired':True}
 
     def load_profile(self):
         from core import app_registration,host_registration,host
@@ -957,7 +968,7 @@ class Harness:
         try:
             self.case('native-disposable-guards',self.guard)
             self.case('fixture-setup-tls-origin-copy-fresh-timer',self.setup)
-            self.case('fixture-admission-production-fence',self.gate_boundary)
+            self.case('fixture-admission-boundaries',self.fixture_boundary)
             self.case('seven-unreferenced-snapshot-retention',self.retention)
             self.case('forced-command-security',self.security)
             self.case('happy-deployment',self.happy)

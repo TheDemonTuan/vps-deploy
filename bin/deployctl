@@ -43,22 +43,12 @@ def get_receipt(state_dir, app, req_id):
     return result(req_id, 'queued', 'queued')
 
 
-def ready_engine(profile):
-    # Native disposable fixtures alone may exercise the still-fenced engine.
-    from core import fixture_authorized
-    penpot = profile['app'] == 'penpot' or profile['registration']['manifest'].get('strategy') == 'penpot'
-    require(not penpot or (profile.get('fixture_ci') is True and
-                          profile['registration']['host'] == 'fixture-local' and
-                          fixture_authorized()), 'PENPOT_RELEASE_ENGINE_NOT_READY')
-
-
 def submit(req, cfg, state_dir, locks):
     app = req['app']
     directory = receipt_dir(state_dir, req['request_id'])
     with lock(locks / (app + '@submit.lock'), 10):
         profile = load_profile(cfg, app)
         req = request(__import__('core').json_bytes(req), profile)
-        ready_engine(profile)
         release = verify_request(req, cfg, profile)
         trusted_path(state_dir, directory=True)
         trusted_path(state_dir / 'requests', directory=True)
@@ -163,7 +153,6 @@ def state_status(state_dir, req_id, cfg, profile):
 
 
 def run(req_id, cfg, state_dir, locks, profile):
-    ready_engine(profile)
     directory = receipt_dir(state_dir, req_id)
     trusted_path(directory / 'request.json')
     req = request((directory / 'request.json').read_bytes(), profile)
@@ -228,7 +217,6 @@ def run(req_id, cfg, state_dir, locks, profile):
 
 def adopt_locked(cfg, state_dir, locks, profile):
     """Adopt under the caller's app operation lock; acquire the route lock here."""
-    ready_engine(profile)
     require(not (state_dir / 'state.json').exists(), 'ALREADY_ADOPTED')
     with lock(locks / 'traefik.lock', 60):
         target, raw, _ = route.preflight(route.dynamic(profile), profile)
@@ -281,8 +269,6 @@ def adopt_locked(cfg, state_dir, locks, profile):
 
 
 def adopt(cfg, state_dir, locks, profile):
-    # Refuse fenced profiles before creating a lock; the shared entry also gates.
-    ready_engine(profile)
     with lock(locks / (profile['app'] + '@operation.lock')):
         return adopt_locked(cfg, state_dir, locks, profile)
 
@@ -339,14 +325,12 @@ def main():
         response = state_status(state_dir, None, cfg, profile)
     elif args.action == 'backup':
         if profile['registration']['manifest']['strategy'] == 'penpot':
-            ready_engine(profile)
             from penpot import operator_backup
             response = operator_backup(profile, cfg, state_dir, locks)
             print(json.dumps(response, sort_keys=True))
             return 0
         raise Failure('STRATEGY_MISMATCH')
     else:
-        ready_engine(profile)
         require(profile['registration']['manifest']['strategy'] == 'blue-green', 'STRATEGY_MISMATCH')
         with lock(locks / (args.app + '@operation.lock')):
             require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')

@@ -396,7 +396,7 @@ trước smoke/lifecycle, trong artifact
 `images.tar.zst`. Smoke hoặc lifecycle fail không làm mất bundle đã upload.
 Bundle không phải release: publication vẫn cần smoke, lifecycle và sanitized
 proof thành công trong chính run/attempt build; diagnostic xanh không thay thế
-chuỗi release đó hoặc mở production fence.
+chuỗi release production đó.
 
 Để kiểm tra platform fixes mà không build lại, mở Actions của
 `TheDemonTuan/vps-deploy`, chọn **Diagnose unverified native Penpot build**, chạy
@@ -442,10 +442,13 @@ trả exit code khác 0, harness giữ tối đa 64 KiB qua cùng bộ redaction
 log, vẫn fail bằng `NATIVE_COMMAND_FAILED_SSHD`; không retry hay bỏ SSH gate.
 
 
-P0 vẫn chặn production bằng `PENPOT_RELEASE_ENGINE_NOT_READY`: chỉ profile có
-`fixture_ci: true`, registry host `fixture-local` và marker root-owned regular
-0600 hợp lệ được đi qua. Không có environment override trên production. Cleanup
-chỉ xóa resource do harness tạo; không prune hoặc đụng shared infrastructure.
+Temporary production preparation fence đã được bỏ sau native ARM64 run
+[38338864464](https://github.com/TheDemonTuan/vps-deploy/actions/runs/38338864464)
+tại platform `9bde24c399104a2eb9c3f1850ac79561a7fba4aa`: tất cả 22 cases pass,
+gồm 10 crash checkpoints, backup/offline restore và log safety. Fixture vẫn yêu cầu
+`fixture_ci: true`, registry host `fixture-local` và marker root-owned regular 0600;
+production giữ đầy đủ root/registration/ownership/immutable release/request locks.
+Cleanup chỉ xóa resource do harness tạo; không prune hoặc đụng shared infrastructure.
 Container/cache volume BuildKit từ `docker/setup-buildx-action` được phép tồn tại;
 guard chỉ chặn production/fixture names và ownership labels. Harness giữ baseline
 identity của mọi resource foreign có sẵn, assert sau từng lifecycle và cleanup,

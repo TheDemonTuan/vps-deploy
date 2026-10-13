@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Root-only source-free Penpot bootstrap, gated by engine runtime activation.
+"""Root-only source-free Penpot bootstrap using verified immutable releases.
 
 Failures retain owned volumes/secrets. A durable bootstrap record allows retries
 only for the same source/platform/digest set; it is not an app restore command.
@@ -7,7 +7,6 @@ only for the same source/platform/digest set; it is not an app restore command.
 import argparse
 import os
 from pathlib import Path
-import runpy
 import sys
 import tempfile
 import uuid
@@ -191,10 +190,6 @@ def quarantine(plan, profile):
 
 def apply(args):
     plan = check(args)
-    # This same fence protects controller dispatch. Remove only after native
-    # source/stack/migration evidence, never because mock unit tests passed.
-    controller = runpy.run_path(str(ROOT / 'bin/deployctl'))
-    controller['ready_engine'](plan['profile'])
     cfg, state, locks = plan['cfg'], plan['state'], plan['locks']
     for path in (installer.RELEASES.parent, installer.RELEASES, installer.CONFIG, installer.STATE, locks):
         path.mkdir(mode=0o700, parents=True, exist_ok=True)

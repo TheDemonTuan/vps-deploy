@@ -41,8 +41,6 @@ def main():
     if args.check:
         response = penpot_restore.check(args.backup, state_dir, cfg, profile)
     else:
-        # Activation remains forbidden until the complete release engine is verified.
-        engine.ready_engine(profile)
         response = penpot_restore.apply(args.backup, state_dir, cfg, ROOT, profile, locks)
     print(json.dumps(response, sort_keys=True))
     return 0
