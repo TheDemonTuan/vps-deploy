@@ -86,6 +86,33 @@ class PenpotBootstrap(unittest.TestCase):
             with self.assertRaisesRegex(core.Failure, 'PENPOT_IMAGE_REVISION'):
                 module.check(args)
 
+    def test_resume_accepts_frontend_egress_but_rejects_foreign_consumers(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as home, ExitStack() as stack:
+            args = self.checked_fixture(module, home, stack)
+            plan = module.check(args)
+            plan['state'].mkdir(parents=True)
+            stack.enter_context(mock.patch.object(module.penpot, 'bounded_file', side_effect=lambda path: Path(path).read_bytes()))
+            checkpoint = plan['state'] / 'bootstrap.json'
+            checkpoint.write_text(json.dumps(plan['record']))
+            before = checkpoint.read_bytes()
+            network = {'Driver': 'bridge', 'Internal': False, 'Options': {},
+                       'Labels': {'vps-deploy.app': 'penpot'}, 'Containers': {
+                           name: {'Name': name} for name in
+                           ('penpot-frontend', 'penpot-backend', 'penpot-exporter')}}
+            image = module.inspect.return_value
+            module.inspect.side_effect = lambda kind, name: network if kind == 'network' else image
+            module.docker.side_effect = lambda *args: 'penpot-egress' if args[:2] == ('network', 'ls') else ''
+            self.assertEqual(module.check(args)['record'], plan['record'])
+            for forbidden in ('penpot-mcp', 'penpot-postgres', 'foreign-app'):
+                with self.subTest(consumer=forbidden):
+                    network['Containers']['foreign'] = {'Name': forbidden}
+                    with self.assertRaisesRegex(core.Failure, 'PENPOT_NETWORK_OWNERSHIP'):
+                        module.check(args)
+                    del network['Containers']['foreign']
+            self.assertEqual(checkpoint.read_bytes(), before)
+
+
     def test_dirty_source_or_existing_host_route_fail_before_bootstrap(self):
         module = self.module()
         with tempfile.TemporaryDirectory() as home, ExitStack() as stack:

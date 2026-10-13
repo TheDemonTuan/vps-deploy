@@ -82,6 +82,13 @@ Host/SNI and CA verification against `172.31.250.4:8080`. It checks the shared e
 IPs and TLS entrypoint first and needs two matching readiness responses before
 enrollment. DNS need not exist yet. Deploy, reconcile and backup retain their public
 HTTPS checks; they never fall back to the origin probe.
+The locally originated probe sends `CF-Connecting-IP` equal to the pinned host
+inventory address. CrowdSec trusts this header only from the existing tunnel
+source; the probe still executes the normal tunnel allowlist, CrowdSec and TLS
+checks. Without client metadata, the production bouncer rejects readiness with
+403 even when all six services are healthy. No shared middleware is disabled.
+Bootstrap resume admits exactly frontend/backend/exporter on the egress network;
+MCP, datastores and foreign consumers remain forbidden.
 
 Apply copies reviewed platform bytes into `/opt/vps-deploy/releases/<platform-sha>`
 using the installer's immutable release-copy API. Reuse requires identical bytes.
