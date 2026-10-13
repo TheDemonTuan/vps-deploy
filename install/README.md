@@ -20,6 +20,10 @@ the new target release remains absent until apply. Production trust checks are
 unchanged, and fixture cleanup removes its owned baseline release.
 Fixture SSH client and host private keys are explicitly root-owned regular files
 with mode 0600 at creation; OpenSSH rejects a 0644 private key before startup.
+Deployment accounts use an explicitly created root-owned home containing only
+the managed `.ssh/authorized_keys` on fresh enrollment. `useradd` does not copy
+host `/etc/skel` startup files: forced-command transport needs no interactive
+login skeleton. Existing homes remain subject to the same ownership/path checks.
 Retention starts with an empty snapshot baseline on fresh enrollment: the backup
 root is created by the first backup, not by installer activation. Existing
 snapshots are still verified and included in reference-preservation assertions.
