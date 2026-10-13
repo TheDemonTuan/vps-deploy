@@ -113,20 +113,6 @@ class PenpotBootstrap(unittest.TestCase):
         self.assertEqual(result.stderr.strip(), b'ROOT_REQUIRED')
         self.assertEqual(result.stdout, b'')
 
-    def test_activation_fence_precedes_every_mutating_action(self):
-        module = self.module()
-        with mock.patch.object(module, 'check', return_value={'profile': profile()}), \
-             mock.patch.object(module.installer, 'release_copy') as copy, \
-             mock.patch.object(module, 'docker') as docker, \
-             mock.patch.object(module, 'atomic') as atomic, \
-             mock.patch.object(module.penpot_secrets, 'runtime') as secrets:
-            with self.assertRaisesRegex(core.Failure, 'PENPOT_RELEASE_ENGINE_NOT_READY'):
-                module.apply(SimpleNamespace())
-        copy.assert_not_called()
-        docker.assert_not_called()
-        atomic.assert_not_called()
-        secrets.assert_not_called()
-
     def test_guarded_apply_stages_secrets_and_keeps_maintenance_after_ack_failure(self):
         from contextlib import nullcontext
         import yaml
@@ -144,7 +130,6 @@ class PenpotBootstrap(unittest.TestCase):
             plan['record']['platformRef'] = args.release
             for patch in (
                 mock.patch.object(module, 'check', return_value=plan),
-                mock.patch.object(module.runpy, 'run_path', return_value={'ready_engine': lambda p: None}),
                 mock.patch.object(module.installer, 'release_copy'),
                 mock.patch.object(module.installer, 'tree', return_value={}),
                 mock.patch.object(module, 'lock', side_effect=lambda *a, **kw: nullcontext()),

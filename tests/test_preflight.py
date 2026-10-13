@@ -342,13 +342,11 @@ except Failure as exc:
         self.controller['adopt'](self.cfg, self.state, self.directories['locks'], self.profile)
         self.assertEqual(load(self.state / 'state.json'), self.adopted)
 
-    def test_activation_preserves_preparation_route_and_identity_failures(self):
-        for failure in ('PENPOT_RELEASE_ENGINE_NOT_READY', 'INVALID_RUNTIME_ENV', 'ROUTE_MISMATCH', 'PENPOT_IMAGE_REVISION'):
+    def test_activation_preserves_runtime_route_and_identity_failures(self):
+        for failure in ('INVALID_RUNTIME_ENV', 'ROUTE_MISMATCH', 'PENPOT_IMAGE_REVISION'):
             with self.subTest(failure=failure), contextlib.ExitStack() as stack:
                 self.preflight.reset_mock()
-                if failure == 'PENPOT_RELEASE_ENGINE_NOT_READY':
-                    stack.enter_context(mock.patch.dict(self.profile, fixture_ci=False))
-                elif failure == 'INVALID_RUNTIME_ENV':
+                if failure == 'INVALID_RUNTIME_ENV':
                     stack.enter_context(mock.patch('penpot.runtime_values', side_effect=Failure(failure)))
                 elif failure == 'ROUTE_MISMATCH':
                     stack.enter_context(mock.patch('route.route_state', return_value=('blue', 'b' * 32)))
@@ -357,7 +355,7 @@ except Failure as exc:
                 with self.assertRaisesRegex(Failure, failure):
                     self.activate()
                 self.assertFalse((self.state / 'state.json').exists())
-                if failure in ('PENPOT_RELEASE_ENGINE_NOT_READY', 'INVALID_RUNTIME_ENV'):
+                if failure == 'INVALID_RUNTIME_ENV':
                     self.preflight.assert_not_called()
                 self.assertEqual(self.contend('penpot@operation.lock'), 'acquired')
                 self.assertEqual(self.contend('traefik.lock'), 'acquired')

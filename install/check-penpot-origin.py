@@ -36,7 +36,6 @@ def check(platform):
     locks = trusted(Path('/run/lock/vps-deploy'), directory=True)
     with lock(locks / 'penpot@operation.lock', 60), lock(locks / 'traefik.lock', 60):
         profile = controller['load_profile'](cfg, 'penpot')
-        controller['ready_engine'](profile)
         state = load(trusted(state_dir / 'state.json'))
         import penpot
         penpot.matching(state, profile)

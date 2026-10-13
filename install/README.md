@@ -2,7 +2,7 @@
 
 Do not run this procedure until the platform PR's AMD64/ARM64 checks and disposable migration rehearsal pass. The release, app commit, public key, VPS inventory, and caller workflow changes need operator review. This runbook does not authorize a production operation; ACB, Messenger, and the shared Traefik middleware are outside this upgrade. If Oracle host key, network, route, directory, or owner differs from `hosts/oracle-main.yml`, stop; review inventory and publish a corrected platform release rather than overriding policy at runtime.
 
-## Penpot preparation
+## Penpot production enrollment
 
 The old OpenDesign registry, controllers, workflows and recreate engine no longer
 ship in new platform releases. Prior versions remain in Git history. This source
@@ -12,9 +12,11 @@ containers or volumes on the VPS.
 Penpot has its own four-image release engine, six-service Compose, offline restore
 and daily backup units. `bootstrap-penpot.py --check` validates source/image identity,
 volume ownership and edge TLS without creating directories, keys or volumes.
-Production activation still fails with `PENPOT_RELEASE_ENGINE_NOT_READY`; only an
-authorized `fixture-local` disposable CI profile may pass the preparation fence.
-Native recovery evidence, not source-only tests, is required to remove that fence.
+Native ARM64 diagnostic [38338864464](https://github.com/TheDemonTuan/vps-deploy/actions/runs/38338864464)
+at platform `9bde24c399104a2eb9c3f1850ac79561a7fba4aa` passed all 22 lifecycle
+cases, including ten crash checkpoints, backup/offline restore and log safety.
+The temporary blanket production fence is removed; root/registration/ownership,
+immutable release, request locks and strict fixture admission remain mandatory.
 The native fixture seeds the previous enrolled release before installer `--check`;
 the new target release remains absent until apply. Production trust checks are
 unchanged, and fixture cleanup removes its owned baseline release.
@@ -55,7 +57,7 @@ This identifies the blocked input category without exposing descriptor paths.
 First Penpot enrollment adopts in-process from the immutable installed controller
 while activation still holds the selected app operation lock. Adoption never
 reopens that lock in a child process: a second open conflicts with the installer
-even on the same host. The shared adoption entry keeps the preparation fence,
+even on the same host. The shared adoption entry keeps the
 route lock/preflight/acknowledgement, manifest and live-image identity checks before
 writing state. Standalone `deployctl adopt` still acquires the app operation lock;
 concurrent operations remain excluded through adoption and installer completion.
@@ -125,7 +127,7 @@ using the protected `platform-admin` environment and a one-use GitHub-hosted
 `ubuntu-24.04-arm` runner. It does not install or restore anything on production.
 Keep automatic deployments and the backup timer disabled until native lifecycle,
 public Web/export/MCP acceptance, log safety, backup verification and this separate-VM
-restore all pass. Preparation-fence removal still requires native diagnostic proof.
+restore all pass. Native diagnostic proof does not replace the production release gate.
 
 Only synthetic acceptance data may be sent to this runner. A backup includes
 private runtime credentials, database contents and assets: if real user data is

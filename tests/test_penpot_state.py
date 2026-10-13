@@ -99,11 +99,6 @@ class PenpotState(unittest.TestCase):
         with self.assertRaisesRegex(core.Failure, 'RECOVERY_REQUIRED'):
             penpot.matching(self.state, self.profile)
 
-    def test_incomplete_engine_is_rejected_before_creating_a_request_receipt(self):
-        with mock.patch.object(DEPLOYCTL, 'lock'), mock.patch.object(DEPLOYCTL, 'load_profile', return_value=self.profile), mock.patch.object(DEPLOYCTL, 'verify_request') as verify, self.assertRaisesRegex(core.Failure, 'PENPOT_RELEASE_ENGINE_NOT_READY'):
-            DEPLOYCTL.submit(deploy_request(), Path('/unused'), Path('/unused'), Path('/unused'))
-        verify.assert_not_called()
-
     def test_adoption_requires_all_four_images_share_one_source(self):
         def lookup(live, repository):
             role = live['Config']['Labels']['com.docker.compose.service'].removeprefix('penpot-')
@@ -136,7 +131,7 @@ class PenpotState(unittest.TestCase):
                 receipt.mkdir(parents=True)
                 core.save(receipt / 'request.json', req)
                 core.save(home / 'state.json', self.state)
-                for name, kwargs in [('ready_engine', {}), ('load_profile', {'return_value': self.profile}),
+                for name, kwargs in [('load_profile', {'return_value': self.profile}),
                                      ('verify_request', {'return_value': ROOT}),
                                      ('trusted_path', {'side_effect': lambda path, **kw: path}),
                                      ('lock', {'side_effect': lambda *args: nullcontext()}),
