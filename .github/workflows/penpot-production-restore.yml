@@ -14,6 +14,19 @@ on:
         description: Lowercase SHA256 of the acceptance file database fingerprint
         required: true
         type: string
+      source-run-id:
+        description: Optional fork-deploy main run with published release and successful source/four-image scans
+        required: false
+        type: string
+      target-release-zip:
+        description: Optional base64 exact release artifact ZIP bytes (at most 16384 characters), paired with source-run-id
+        required: false
+        type: string
+      origin-platform-ref:
+        description: Immutable platform installed on production and recorded in the backup (not this helper checkout)
+        required: true
+        default: 67f7825efb90ff0631c1f5c625e694a19bb469ae
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -30,7 +43,9 @@ jobs:
       FILE_ID: ${{ inputs.file-id }}
       FILE_SHA256: ${{ inputs.file-sha256 }}
       PLATFORM_REF: ${{ github.sha }}
-      ORIGIN_PLATFORM_REF: ${{ github.sha }}
+      ORIGIN_PLATFORM_INPUT: ${{ inputs.origin-platform-ref }}
+      SOURCE_RUN_ID: ${{ inputs.source-run-id }}
+      TARGET_RELEASE_PRESENT: ${{ inputs.target-release-zip != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,6 +70,9 @@ jobs:
               assert platform.machine() == 'aarch64'
               assert SHA.fullmatch(os.environ['PLATFORM_REF'])
               assert os.environ['PLATFORM_REF'] == os.environ['GITHUB_SHA']
+              assert SHA.fullmatch(os.environ['ORIGIN_PLATFORM_INPUT'])
+              assert not os.environ['SOURCE_RUN_ID'] or re.fullmatch(r'[1-9][0-9]*', os.environ['SOURCE_RUN_ID'])
+              assert bool(os.environ['SOURCE_RUN_ID']) == (os.environ['TARGET_RELEASE_PRESENT'] == 'true')
               assert REQUEST_ID.fullmatch(os.environ['BACKUP_ID'])
               assert HASH.fullmatch(os.environ['FILE_SHA256'])
               assert re.fullmatch(r'[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', os.environ['FILE_ID'])
@@ -64,9 +82,151 @@ jobs:
               print(json.dumps({'status': 'failed', 'error_code': 'PENPOT_REHEARSAL_IDENTITY'}))
               sys.exit(1)
           PY
+      - name: Admit the checksum-bound same-run cross-release target
+        if: ${{ inputs.source-run-id != '' }}
+        env:
+          TARGET_RELEASE_ZIP: ${{ inputs.target-release-zip }}
+        run: |
+          umask 077
+          python3 - <<'PY'
+          import base64, datetime, hashlib, json, os, stat, sys, urllib.request, zipfile
+          from pathlib import Path
+          sys.dont_write_bytecode = True
+          sys.path.insert(0, 'lib')
+          from core import Failure, HASH, SHA, pairs, parse_json, require
+          from penpot_publish import release_record
+
+          class GitHub:
+              def open(self, suffix):
+                  request = urllib.request.Request('https://api.github.com/repos/TheDemonTuan/penpot' + suffix,
+                      headers={'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+                               'User-Agent': 'vps-deploy-penpot-rehearsal'})
+                  return urllib.request.urlopen(request, timeout=60)
+
+              def get(self, suffix):
+                  with self.open(suffix) as response:
+                      return parse_json(response.read(65537))
+
+          def timestamp(value):
+              require(type(value) is str, 'PENPOT_TARGET_TIMESTAMP')
+              result = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+              require(result.tzinfo is not None, 'PENPOT_TARGET_TIMESTAMP')
+              return result
+
+          try:
+              # Public provenance metadata needs no cross-repository Actions credential.
+              api = GitHub()
+              encoded = os.environ['TARGET_RELEASE_ZIP']
+              require(0 < len(encoded) <= 16384, 'PENPOT_TARGET_INPUT')
+              raw = base64.b64decode(encoded, validate=True)
+              run_id = int(os.environ['SOURCE_RUN_ID'])
+              origin_platform = os.environ['ORIGIN_PLATFORM_INPUT']
+              run_path = '/actions/runs/' + str(run_id)
+              run = api.get(run_path)
+              source = run.get('head_sha')
+              repository, head = run.get('repository') or {}, run.get('head_repository') or {}
+              require(run.get('id') == run_id and run.get('path') == '.github/workflows/fork-deploy.yml'
+                      and run.get('event') in ('push', 'workflow_dispatch') and run.get('head_branch') == 'main'
+                      and type(source) is str and SHA.fullmatch(source)
+                      and repository.get('full_name') == 'TheDemonTuan/penpot'
+                      and head.get('full_name') == 'TheDemonTuan/penpot'
+                      and type(repository.get('id')) is int and repository['id'] == head.get('id'),
+                      'PENPOT_TARGET_RUN')
+              attempt = run.get('run_attempt')
+              require(type(attempt) is int and attempt > 0, 'PENPOT_TARGET_ATTEMPT')
+              references = run.get('referenced_workflows')
+              require(type(references) is list, 'PENPOT_TARGET_BUILDER')
+              for workflow in ('build-penpot.yml', 'security-trivy.yml'):
+                  prefix = 'TheDemonTuan/vps-deploy/.github/workflows/' + workflow + '@'
+                  matches = [item for item in references if type(item) is dict
+                             and type(item.get('path')) is str and item['path'].startswith(prefix)]
+                  require(matches and all(item['path'] == prefix + origin_platform
+                          and item.get('sha') == origin_platform for item in matches), 'PENPOT_TARGET_BUILDER')
+
+              def listing(suffix, key):
+                  result = []
+                  for page in range(1, 21):
+                      separator = '&' if '?' in suffix else '?'
+                      with api.open(suffix + separator + 'per_page=100&page=' + str(page)) as response:
+                          raw = response.read(2 * 1024 * 1024 + 1)
+                      require(len(raw) <= 2 * 1024 * 1024, 'PENPOT_TARGET_API_SIZE')
+                      value = json.loads(raw, object_pairs_hook=pairs)
+                      entries, total = value.get(key), value.get('total_count')
+                      require(type(entries) is list and type(total) is int and 0 <= total <= 2000,
+                              'PENPOT_TARGET_API_LIST')
+                      result.extend(entries)
+                      if len(result) >= total:
+                          require(len(result) == total, 'PENPOT_TARGET_API_LIST')
+                          return result
+                      require(entries, 'PENPOT_TARGET_API_LIST')
+                  raise Failure('PENPOT_TARGET_API_LIST')
+
+              jobs = listing(run_path + '/attempts/' + str(attempt) + '/jobs', 'jobs')
+              required = ('build / build', 'build / publish', 'source-scan / scan',
+                          'scan-frontend / scan', 'scan-backend / scan', 'scan-exporter / scan', 'scan-mcp / scan')
+              checked = {}
+              for name in required:
+                  matches = [job for job in jobs if job.get('name') == name]
+                  require(len(matches) == 1, 'PENPOT_TARGET_JOBS')
+                  job = matches[0]
+                  require(job.get('run_id') == run_id and job.get('run_attempt') == attempt
+                          and job.get('head_sha') == source and job.get('status') == 'completed'
+                          and job.get('conclusion') == 'success', 'PENPOT_TARGET_JOBS')
+                  checked[name] = job
+              # Do not require deploy or the whole run to finish: production approval stays separate.
+              artifacts = listing(run_path + '/artifacts', 'artifacts')
+              name = 'penpot-release-' + source
+              matches = [item for item in artifacts if item.get('name') == name]
+              require(len(matches) == 1 and type(matches[0].get('id')) is int and matches[0]['id'] > 0,
+                      'PENPOT_TARGET_ARTIFACT')
+              artifact_id = matches[0]['id']
+              artifact = api.get('/actions/artifacts/' + str(artifact_id))
+              bound = artifact.get('workflow_run') or {}
+              require(artifact.get('id') == artifact_id and artifact.get('name') == name
+                      and artifact.get('expired') is False and bound.get('id') == run_id
+                      and bound.get('head_sha') == source and bound.get('head_branch') == 'main'
+                      and bound.get('repository_id') == repository['id']
+                      and bound.get('head_repository_id') == repository['id'], 'PENPOT_TARGET_ARTIFACT')
+              require(timestamp(artifact.get('expires_at')) > datetime.datetime.now(datetime.timezone.utc),
+                      'PENPOT_TARGET_EXPIRED')
+              publication = checked['build / publish']
+              require(timestamp(publication.get('started_at')) <= timestamp(artifact.get('created_at'))
+                      <= timestamp(publication.get('completed_at')), 'PENPOT_TARGET_ATTEMPT')
+              digest = artifact.get('digest')
+              require(type(digest) is str and digest.startswith('sha256:') and HASH.fullmatch(digest[7:])
+                      and type(artifact.get('size_in_bytes')) is int
+                      and 0 < artifact['size_in_bytes'] <= 12288, 'PENPOT_TARGET_DIGEST')
+              private = Path(os.environ['RUNNER_TEMP']) / 'penpot-production-restore'
+              archive = private / 'target-release.zip'
+              require(0 < len(raw) == artifact['size_in_bytes']
+                      and 'sha256:' + hashlib.sha256(raw).hexdigest() == digest,
+                      'PENPOT_TARGET_DIGEST')
+              with archive.open('xb') as output:
+                  output.write(raw)
+              with zipfile.ZipFile(archive) as bundle:
+                  entries = bundle.infolist()
+                  require(len(entries) == 1, 'PENPOT_TARGET_FILES')
+                  entry = entries[0]
+                  mode = entry.external_attr >> 16
+                  require(entry.filename == name + '.json' and not entry.is_dir()
+                          and not stat.S_ISLNK(mode) and (not stat.S_IFMT(mode) or stat.S_ISREG(mode))
+                          and 0 < entry.file_size <= 65536, 'PENPOT_TARGET_FILES')
+                  record = parse_json(bundle.read(entry))
+              require(type(record) is dict, 'PENPOT_TARGET_RELEASE')
+              release_record(record, source, origin_platform, record.get('images'))
+              latest = api.get(run_path)
+              require(latest.get('run_attempt') == attempt and latest.get('head_sha') == source,
+                      'PENPOT_TARGET_ATTEMPT')
+              with (private / 'target-release.json').open('x') as output:
+                  json.dump(record, output, sort_keys=True, separators=(',', ':'))
+          except Exception:
+              print(json.dumps({'status': 'failed', 'error_code': 'PENPOT_TARGET_ADMISSION'}))
+              sys.exit(1)
+          PY
       - name: Verify installed origin and privately stream exactly one backup
         env:
           VPS_PLATFORM_ADMIN_SSH_KEY: ${{ secrets.VPS_PLATFORM_ADMIN_SSH_KEY }}
+          ORIGIN_PLATFORM_REF: ${{ inputs.origin-platform-ref }}
         run: |
           python3 scripts/download-penpot-backup.py --backup-id "$BACKUP_ID" \
             --archive "$RUNNER_TEMP/penpot-production-restore/backup.tar" \
@@ -75,15 +235,20 @@ jobs:
         id: rehearsal
         run: |
           umask 077
+          target_args=()
+          if [[ -n "$SOURCE_RUN_ID" ]]; then
+            target_args=(--target-release "$RUNNER_TEMP/penpot-production-restore/target-release.json")
+          fi
           exec > "$RUNNER_TEMP/penpot-production-restore/report.json"
           sudo env -i PATH=/usr/bin:/bin LANG=C HOME=/root \
             CI=true GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted PENPOT_DISPOSABLE_VM=1 \
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_REF="$GITHUB_REF" \
             GITHUB_SHA="$GITHUB_SHA" PLATFORM_REF="$PLATFORM_REF" \
+            ORIGIN_PLATFORM_REF="$ORIGIN_PLATFORM_INPUT" \
             python3 scripts/rehearse-penpot-backup.py \
               --archive "$RUNNER_TEMP/penpot-production-restore/backup.tar" \
               --origin-receipt "$RUNNER_TEMP/penpot-production-restore/origin.json" \
-              --file-id "$FILE_ID" --file-sha256 "$FILE_SHA256"
+              --file-id "$FILE_ID" --file-sha256 "$FILE_SHA256" "${target_args[@]}"
       - name: Publish only the sanitized rehearsal result
         if: ${{ always() && steps.rehearsal.outcome != 'skipped' && steps.rehearsal.outcome != '' }}
         run: |
@@ -95,11 +260,19 @@ jobs:
               assert report.stat().st_size <= 4096
               value = json.loads(report.read_text())
               if value.get('status') == 'passed':
-                  assert set(value) == {'status', 'snapshotVerified', 'databaseMatches', 'assetsMatch', 'readiness', 'sourceSha', 'platformRef', 'dataTimestamp'}
+                  keys = {'status', 'snapshotVerified', 'databaseMatches', 'assetsMatch', 'readiness', 'sourceSha', 'platformRef', 'dataTimestamp'}
+                  assert set(value) == keys | ({'upgrade'} if os.environ['SOURCE_RUN_ID'] else set())
                   assert all(value[key] is True for key in ('snapshotVerified', 'databaseMatches', 'assetsMatch', 'readiness'))
                   assert re.fullmatch(r'[0-9a-f]{40}', value['sourceSha'])
-                  assert value['platformRef'] == os.environ['GITHUB_SHA']
+                  assert value['platformRef'] == os.environ['ORIGIN_PLATFORM_INPUT']
                   assert re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)', value['dataTimestamp'])
+                  if os.environ['SOURCE_RUN_ID']:
+                      upgrade = value['upgrade']
+                      assert type(upgrade) is dict and set(upgrade) == {'sourceSha', 'platformRef', 'migrationApplied', 'databaseMatches', 'assetsMatch', 'readiness', 'rollbackVerified'}
+                      target = json.loads((report.parent / 'target-release.json').read_text())
+                      assert upgrade['sourceSha'] == target['sourceSha'] and re.fullmatch(r'[0-9a-f]{40}', upgrade['sourceSha'])
+                      assert upgrade['platformRef'] == os.environ['ORIGIN_PLATFORM_INPUT']
+                      assert all(upgrade[key] is True for key in ('migrationApplied', 'databaseMatches', 'assetsMatch', 'readiness', 'rollbackVerified'))
               else:
                   assert set(value) == {'status', 'error_code'} and value['status'] == 'failed'
                   assert re.fullmatch(r'[A-Z][A-Z0-9_]{0,95}', value['error_code'])
@@ -117,7 +290,7 @@ jobs:
           import os
           from pathlib import Path
           private = Path(os.environ['RUNNER_TEMP']) / 'penpot-production-restore'
-          for name in ('backup.tar', 'origin.json', 'report.json'):
+          for name in ('backup.tar', 'origin.json', 'report.json', 'target-release.zip', 'target-release.json'):
               (private / name).unlink(missing_ok=True)
           if private.exists():
               private.rmdir()

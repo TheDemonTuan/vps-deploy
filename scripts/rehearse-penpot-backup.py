@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Restore one origin-bound production snapshot on a disposable hosted ARM64 VM.
+"""Restore one origin-platform-bound snapshot on a disposable hosted ARM64 VM.
 
-The download/admin credential boundary is deliberately outside this root helper.
-Only synthetic acceptance data may be transferred to this VM. No snapshot, raw
-query, runtime environment, or Docker inspection is printed or uploaded. The
-preparation fence on the production installer is not involved in this rehearsal.
+With --target-release, prove startup migration 0154 and then restore the original
+snapshot with its old immutable images. ORIGIN_PLATFORM_REF identifies the live
+installation and snapshot independently from this helper's PLATFORM_REF checkout.
+Only approved synthetic data may enter this VM. Credentials, dumps, raw queries,
+runtime environments and Docker inspections are never printed or uploaded. No
+production route or production installer is involved in either operating mode.
 """
 import argparse
 import hashlib
@@ -148,18 +150,34 @@ def stage_engine(platform):
         raise
 
 
-def origin_identity(receipt_path, metadata, platform, profile):
+def origin_identity(receipt_path, metadata, origin_platform, profile, *, historical=False):
+    core.require(type(origin_platform) is str and core.SHA.fullmatch(origin_platform),
+                 'PENPOT_REHEARSAL_IDENTITY')
     with open(receipt_path, 'rb') as stream:
         raw = stream.read(65537)
     try:
-        origin = penpot_origin.receipt(core.parse_json(raw), platform)
+        origin = penpot_origin.receipt(core.parse_json(raw), origin_platform)
     except (penpot_origin.Failure, core.Failure, TypeError, ValueError):
         raise core.Failure('PENPOT_REHEARSAL_IDENTITY') from None
     core.image_map(origin['images'], profile['image_repositories'])
-    core.require(metadata.get('sourceSha') == origin['sourceSha'] and
-                 metadata.get('platformRef') == platform and metadata.get('images') == origin['images'],
-                 'PENPOT_REHEARSAL_IDENTITY')
+    # A cross-release rehearsal may use a verified historical synthetic snapshot.
+    # Its own image labels and complete snapshot hashes are checked before restore.
+    core.require(metadata.get('platformRef') == origin_platform and
+                 (historical or metadata.get('sourceSha') == origin['sourceSha'] and
+                  metadata.get('images') == origin['images']), 'PENPOT_REHEARSAL_IDENTITY')
     return penpot.validate_entry(penpot_restore.snapshot_entry(metadata), profile)
+
+
+def target_identity(path, origin, profile):
+    value = core.parse_json(penpot.bounded_file(Path(path)))
+    core.require(type(value) is dict and set(value) == {
+        'schemaVersion', 'sourceSha', 'platformRef', 'platform', 'images',
+    } and type(value['schemaVersion']) is int and value['schemaVersion'] == 1 and
+        value['platform'] == 'linux/arm64' and value['platformRef'] == origin['platform_ref'] and
+        value['sourceSha'] != origin['source_sha'], 'PENPOT_REHEARSAL_TARGET')
+    return penpot.validate_entry({'slot': 'single', 'source_sha': value['sourceSha'],
+                                 'platform_ref': value['platformRef'], 'images': value['images'],
+                                 'manifest_sha256': origin['manifest_sha256']}, profile)
 
 
 def compose(release, cfg, profile, entry, *arguments):
@@ -213,6 +231,114 @@ def asset_catalog(path):
 
 def assets_match(expected, restored):
     core.require(asset_catalog(expected) == asset_catalog(restored), 'PENPOT_REHEARSAL_ASSETS')
+
+
+def database_json(sql):
+    process = subprocess.run(['/usr/bin/docker', 'exec', '-i', 'penpot-postgres', 'psql', '-X', '-At',
+                              '-U', 'penpot', '-d', 'penpot', '--set=ON_ERROR_STOP=1'], input=sql.encode(),
+                             capture_output=True, env=ENV, timeout=120)
+    core.require(process.returncode == 0, 'PENPOT_REHEARSAL_MIGRATION')
+    try:
+        core.require(len(process.stdout.splitlines()) == 1, 'PENPOT_REHEARSAL_MIGRATION')
+        return json.loads(process.stdout)
+    except (ValueError, UnicodeError):
+        raise core.Failure('PENPOT_REHEARSAL_MIGRATION') from None
+
+
+MIGRATION = '0154-del-legacy-file-object-thumbnail-table'
+
+
+def migration_state():
+    return database_json("""SELECT jsonb_build_object(
+      'legacyTable', to_regclass('public.file_object_thumbnail') IS NOT NULL,
+      'registry', COALESCE((SELECT jsonb_agg(to_jsonb(m) ORDER BY module, step)
+                           FROM public.migrations m), '[]'::jsonb))::text;
+""")
+
+
+def legacy_preconditions(state):
+    core.require(type(state) is dict and set(state) == {'legacyTable', 'registry'} and
+                 state['legacyTable'] is True and type(state['registry']) is list and
+                 not any(row.get('module') == 'main' and row.get('step') == MIGRATION
+                         for row in state['registry']), 'PENPOT_REHEARSAL_MIGRATION')
+    # Normal incoming dependencies are what PostgreSQL's non-CASCADE DROP protects.
+    # Reject user triggers, policies and inheritance even if DROP could erase them.
+    checks = database_json("""SELECT jsonb_build_object(
+      'empty', NOT EXISTS (SELECT 1 FROM public.file_object_thumbnail),
+      'ordinary', (SELECT relkind = 'r' AND NOT relrowsecurity FROM pg_class
+                   WHERE oid = 'public.file_object_thumbnail'::regclass),
+      'dependencies', NOT EXISTS (SELECT 1 FROM pg_depend
+          WHERE refclassid = 'pg_class'::regclass
+            AND refobjid = 'public.file_object_thumbnail'::regclass AND deptype = 'n'),
+      'triggers', NOT EXISTS (SELECT 1 FROM pg_trigger
+          WHERE tgrelid = 'public.file_object_thumbnail'::regclass AND NOT tgisinternal),
+      'policies', NOT EXISTS (SELECT 1 FROM pg_policy
+          WHERE polrelid = 'public.file_object_thumbnail'::regclass),
+      'inheritance', NOT EXISTS (SELECT 1 FROM pg_inherits
+          WHERE inhrelid = 'public.file_object_thumbnail'::regclass
+             OR inhparent = 'public.file_object_thumbnail'::regclass))::text;
+""")
+    core.require(type(checks) is dict and set(checks) == {
+        'empty', 'ordinary', 'dependencies', 'triggers', 'policies', 'inheritance',
+    } and all(value is True for value in checks.values()), 'PENPOT_REHEARSAL_MIGRATION')
+
+
+def migration_applied(before, after):
+    core.require(type(after) is dict and set(after) == {'legacyTable', 'registry'} and
+                 after['legacyTable'] is False and type(after['registry']) is list,
+                 'PENPOT_REHEARSAL_MIGRATION')
+    added = [row for row in after['registry'] if row not in before['registry']]
+    core.require(len(added) == 1 and added[0].get('module') == 'main' and
+                 added[0].get('step') == MIGRATION and
+                 len(after['registry']) == len(before['registry']) + 1 and
+                 all(row in after['registry'] for row in before['registry']),
+                 'PENPOT_REHEARSAL_MIGRATION')
+
+
+def verify_data(backup, cfg, file_id, fingerprint, entry, name):
+    database_matches(file_id, fingerprint)
+    restored = cfg / name
+    penpot.stream_file(restored, ['/usr/bin/docker', 'run', '--rm', '--network', 'none',
+                                 '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
+                                 '--mount', 'type=volume,src=penpot_assets,dst=/opt/data/assets,readonly',
+                                 '--entrypoint', '/bin/tar', entry['images']['backend'],
+                                 '--numeric-owner', '-cf', '-', '-C', '/opt/data/assets', '.'])
+    assets_match(backup / 'assets.tar', restored)
+
+
+def ready(profile, entry):
+    penpot.stack_health(profile, entry)
+    response = core.command('/usr/bin/docker', 'exec', 'penpot-frontend', 'curl', '-fsS',
+                            '--max-time', '10', '-w', '%{http_code}', 'http://127.0.0.1:8080/readyz', env=ENV)
+    core.require(response == 'OK200', 'PENPOT_STACK_UNHEALTHY')
+
+
+def upgrade_and_restore(release, profile, cfg, backup, origin, target, resources, file_id, fingerprint):
+    penpot.stop_applications(release, profile, cfg, origin)
+    before = migration_state()
+    legacy_preconditions(before)
+    penpot.prepare_images(target, profile)
+    # Production applies migrations through backend startup; use that exact API.
+    penpot.start_applications(release, profile, cfg, target)
+    resources.capture_compose()
+    ready(profile, target)
+    penpot.stop_applications(release, profile, cfg, target)
+    migration_applied(before, migration_state())
+    # The old backend supplies only offline tar, preserving helper ownership.
+    verify_data(backup, cfg, file_id, fingerprint, origin, 'upgraded-assets.tar')
+    penpot.restore_data(profile, cfg, backup, origin)
+    penpot.writers_stopped(profile)
+    core.require(migration_state() == before, 'PENPOT_REHEARSAL_ROLLBACK')
+    penpot.start_applications(release, profile, cfg, origin)
+    resources.capture_compose()
+    ready(profile, origin)
+    penpot.stop_applications(release, profile, cfg, origin)
+    core.require(migration_state() == before, 'PENPOT_REHEARSAL_ROLLBACK')
+    legacy_preconditions(before)
+    verify_data(backup, cfg, file_id, fingerprint, origin, 'rollback-assets.tar')
+    return {'sourceSha': target['source_sha'], 'platformRef': target['platform_ref'],
+            'migrationApplied': True, 'databaseMatches': True, 'assetsMatch': True,
+            'readiness': True, 'rollbackVerified': True}
 
 
 class Resources:
@@ -304,6 +430,8 @@ def rehearse(args):
     core.require(args.file_id == file_id and re.fullmatch(r'[0-9a-f]{64}', args.file_sha256),
                  'PENPOT_REHEARSAL_DATABASE')
     platform = host_policy()
+    origin_platform = os.environ.get('ORIGIN_PLATFORM_REF', '')
+    target_path = getattr(args, 'target_release', None)
     core.trusted_path(BASE.parent, directory=True)
     resources = Resources()
     BASE.mkdir(mode=0o700)
@@ -317,9 +445,11 @@ def rehearse(args):
         host = core.host_registration(release, 'oracle-main')
         core.require(registration['host'] == 'oracle-main', 'PENPOT_REHEARSAL_IDENTITY')
         profile = dict(host['apps']['penpot'], app='penpot', registration=registration,
-                       image_repositories=registration['manifest']['images'], platform_ref=platform)
+                       image_repositories=registration['manifest']['images'], platform_ref=origin_platform)
         metadata = core.parse_json(penpot.bounded_file(backup / 'manifest.json'))
-        entry = origin_identity(args.origin_receipt, metadata, platform, profile)
+        entry = origin_identity(args.origin_receipt, metadata, origin_platform, profile,
+                                historical=target_path is not None)
+        target = target_identity(target_path, entry, profile) if target_path is not None else None
         resources.backend = entry['images']['backend']
         cfg = BASE / 'config'
         cfg.mkdir(mode=0o700)
@@ -345,23 +475,16 @@ def rehearse(args):
         core.require(verified == metadata, 'PENPOT_REHEARSAL_IDENTITY')
         penpot.restore_data(profile, cfg, backup, entry)
         penpot.writers_stopped(profile, entry['images'])
-        database_matches(file_id, args.file_sha256)
-        restored = cfg / 'restored-assets.tar'
-        penpot.stream_file(restored, ['/usr/bin/docker', 'run', '--rm', '--network', 'none',
-                                     '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
-                                     '--mount', 'type=volume,src=penpot_assets,dst=/opt/data/assets,readonly',
-                                     '--entrypoint', '/bin/tar', entry['images']['backend'],
-                                     '--numeric-owner', '-cf', '-', '-C', '/opt/data/assets', '.'])
-        assets_match(backup / 'assets.tar', restored)
+        verify_data(backup, cfg, file_id, args.file_sha256, entry, 'restored-assets.tar')
         penpot.writers_stopped(profile, entry['images'])
         penpot.start_applications(release, profile, cfg, entry)
-        penpot.stack_health(profile, entry)
-        readiness = core.command('/usr/bin/docker', 'exec', 'penpot-frontend', 'curl', '-fsS',
-                                 '--max-time', '10', '-w', '%{http_code}', 'http://127.0.0.1:8080/readyz', env=ENV)
-        core.require(readiness == 'OK200', 'PENPOT_STACK_UNHEALTHY')
+        ready(profile, entry)
         report = {'status': 'passed', 'snapshotVerified': True, 'databaseMatches': True,
                   'assetsMatch': True, 'readiness': True, 'sourceSha': metadata['sourceSha'],
-                  'platformRef': platform, 'dataTimestamp': metadata['createdAt']}
+                  'platformRef': origin_platform, 'dataTimestamp': metadata['createdAt']}
+        if target is not None:
+            report['upgrade'] = upgrade_and_restore(release, profile, cfg, backup, entry, target,
+                                                    resources, file_id, args.file_sha256)
     except Exception as caught:
         error = caught
     finally:
@@ -394,6 +517,7 @@ def main():
         parser = Parser(description=__doc__)
         for name in ('archive', 'origin-receipt', 'file-id', 'file-sha256'):
             parser.add_argument('--' + name, required=True)
+        parser.add_argument('--target-release')
         report = rehearse(parser.parse_args())
     except Exception as error:
         code = error.code if isinstance(error, core.Failure) else 'PENPOT_REHEARSAL_FAILED'
