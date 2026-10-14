@@ -128,6 +128,9 @@ See the [Cloudflare cache API procedure](https://developers.cloudflare.com/cache
 HTTP 401/403 reports the relevant permission; other HTTP failures report bounded
 numeric API error codes, never response messages or credentials. Access removal
 is the last write, followed by public HTTPS readiness.
+The HTTPS readiness request identifies itself as `penpot-readiness/1.0`, rather
+than Python's generic scanner-like user agent. It still requires status 200 and
+exact body `OK`, rejects redirects, and does not change any firewall rule.
 
 Survey and apply preflight enumerate every GET inventory page before evaluating
 ownership, including Access conflicts found on later pages. Pagination requires
