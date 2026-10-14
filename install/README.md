@@ -113,11 +113,21 @@ stays disabled/inactive until public readiness, a complete production backup and
 a private ARM64 restore rehearsal pass; only then enable the daily timer.
 
 Cloudflare `penpot-ingress.yml` offers manual survey/apply on platform `main`. Apply
-uses the protected `platform-admin` identity to prove the exact installed platform,
-healthy coherent Penpot state and verified origin TLS before any API write. It
-changes only the design hostname and preserves sibling routes and policies. Review
-native CI and bootstrap evidence before running it; Access removal is the last
-write, followed by public HTTPS readiness.
+requires `origin-platform-ref`, the full immutable platform SHA already enrolled
+on the VPS, separately from the reviewed controller workflow revision. Obtain it
+from the installed origin receipt and review its native CI/bootstrap evidence.
+The protected `platform-admin` identity proves that exact installed platform,
+healthy coherent Penpot state and verified origin TLS before any API write; a
+missing/mutable SHA or mismatched receipt fails closed. Controller fixes do not
+require reinstalling Penpot or rebuilding its images. Dispatch with
+`gh workflow run penpot-ingress.yml --repo TheDemonTuan/vps-deploy --ref main -f operation=apply -f origin-platform-ref=<installed-platform-sha>`.
+Apply changes only the design hostname and preserves sibling routes and policies.
+The first cache ruleset is created with `POST /zones/{zone_id}/rulesets`, kind
+`zone`, phase `http_request_cache_settings`; an existing ruleset is updated by ID.
+See the [Cloudflare cache API procedure](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/).
+HTTP 401/403 reports the relevant permission; other HTTP failures report bounded
+numeric API error codes, never response messages or credentials. Access removal
+is the last write, followed by public HTTPS readiness.
 
 Survey and apply preflight enumerate every GET inventory page before evaluating
 ownership, including Access conflicts found on later pages. Pagination requires

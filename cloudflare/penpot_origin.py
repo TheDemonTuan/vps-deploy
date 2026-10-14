@@ -38,9 +38,10 @@ def receipt(value, platform):
 
 
 def verifier():
-    platform = os.environ.get('GITHUB_SHA', '')
+    platform = os.environ.get('ORIGIN_PLATFORM_REF', '')
     if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('GITHUB_REPOSITORY') != 'TheDemonTuan/vps-deploy' or \
-            os.environ.get('GITHUB_REF') != 'refs/heads/main' or not SHA.fullmatch(platform):
+            os.environ.get('GITHUB_REF') != 'refs/heads/main' or not SHA.fullmatch(os.environ.get('GITHUB_SHA', '')) or \
+            not SHA.fullmatch(platform):
         raise Failure('PENPOT_INGRESS_CALLER_POLICY')
     value = os.environ.pop('VPS_PLATFORM_ADMIN_SSH_KEY', '')
     if not value.strip():

@@ -61,7 +61,11 @@ class CloudflareFixture:
             record = dict(body, id='dns-id')
             self.dns = [record]
             return copy.deepcopy(record)
-        if '/rulesets/' in path:
+        if '/rulesets' in path:
+            creating = path.endswith('/rulesets') and method == 'POST'
+            updating = self.cache is not None and path.endswith('/rulesets/' + self.cache['id']) and method == 'PUT'
+            if not (creating or updating):
+                raise AssertionError('Unsupported cache ruleset operation')
             self.cache = dict(body, id='c' * 32, version='2')
             return copy.deepcopy(self.cache)
         if '/access/apps/' in path:
@@ -99,6 +103,18 @@ class PenpotApplyTests(unittest.TestCase):
         before = len(api.writes)
         module.apply(api, api.account, lambda: None)
         self.assertEqual(len(api.writes), before)
+
+    def test_first_cache_ruleset_can_be_created_and_is_idempotent(self):
+        module = self.module()
+        api = CloudflareFixture()
+        api.cache = None
+        module.apply(api, api.account, lambda: None)
+        self.assertEqual(api.cache['phase'], 'http_request_cache_settings')
+        self.assertEqual(api.cache['kind'], 'zone')
+        self.assertEqual(api.cache['rules'], [module.CACHE])
+        before = copy.deepcopy(api.writes)
+        module.apply(api, api.account, lambda: None)
+        self.assertEqual(api.writes, before)
 
     def test_unverified_origin_and_conflicts_perform_zero_writes(self):
         module = self.module()

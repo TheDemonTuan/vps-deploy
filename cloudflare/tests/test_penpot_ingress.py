@@ -427,6 +427,19 @@ class PenpotIngressSurvey(unittest.TestCase):
         self.assertIn('Cloudflare Tunnel: Edit', str(caught.exception))
         self.assertNotIn('secret-canary', str(caught.exception))
 
+    def test_validation_error_preserves_numeric_codes_without_permission_claim_or_values(self):
+        module = self.module()
+        raw = json.dumps({'errors': [{'code': 20127, 'message': 'secret-canary'},
+                                     {'code': 'secret-canary'}, {'code': True}]}).encode()
+        error = module.urllib.error.HTTPError('https://api.cloudflare.com', 400, 'private', {}, io.BytesIO(raw))
+        with self.client(module, [error]) as (client, opened):
+            with self.assertRaises(module.Failure) as caught:
+                client.request('POST', '/zones/' + 'b' * 32 + '/rulesets', {})
+        self.assertIn('error_codes=[20127]', str(caught.exception))
+        self.assertNotIn('required permission', str(caught.exception))
+        self.assertNotIn('secret-canary', str(caught.exception))
+        self.assertEqual(opened.call_count, 1)
+
     def test_wildcards_match_parent_domains_but_not_other_hosts(self):
         module = self.module()
         for pattern in ('*', '*.site', '*.tuannguyenviet.site'):

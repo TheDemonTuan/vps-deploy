@@ -165,8 +165,19 @@ class Client:
                     raise Failure('CLOUDFLARE_RESPONSE_TOO_LARGE')
                 data = json.loads(raw)
         except urllib.error.HTTPError as error:
+            codes = []
+            try:
+                raw = error.read(MAX_RESPONSE_BYTES + 1)
+                data = json.loads(raw) if len(raw) <= MAX_RESPONSE_BYTES else None
+                errors = data.get('errors') if type(data) is dict else None
+                if type(errors) is list:
+                    codes = [item['code'] for item in errors[:16] if type(item) is dict and
+                             type(item.get('code')) is int and 0 <= item['code'] <= 999999999]
+            except (OSError, ValueError):
+                pass
+            detail = '; required permission: ' + permission(path, method) if error.code in (401, 403) else ''
             raise Failure('Cloudflare ' + method + ' ' + path.split('?')[0] + ' HTTP ' + str(error.code) +
-                          '; required permission: ' + permission(path, method)) from None
+                          '; error_codes=' + json.dumps(codes) + detail) from None
         except (urllib.error.URLError, ValueError):
             raise Failure('CLOUDFLARE_READ_FAILED') from None
         if type(data) is not dict or data.get('success') is not True or 'result' not in data:
