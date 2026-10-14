@@ -1,0 +1,31 @@
+name: local/penpot-scope
+pre_eval:
+  # Design RPC carries Transit documents, user text, SVG and embedded code.
+  # MCP execute_code likewise carries intentional code. Inspect headers/URI,
+  # but not these request bodies, in either AppSec phase. Other hosts/paths stay unchanged.
+  - filter: |-
+      req.Host == "design.tuannguyenviet.site" && req.Method == "POST" && (
+        req.URL.Path startsWith "/api/main/methods/" ||
+        req.URL.Path == "/mcp/stream"
+      )
+    apply:
+      - DisableBodyInspection()
+
+  # CRS 920420 rejects Penpot's legitimate Transit media type before body parsing.
+  # Only remove this out-of-band header rule for Transit RPC requests.
+  - filter: |-
+      IsOutBand && req.Host == "design.tuannguyenviet.site" &&
+      req.Method == "POST" && req.URL.Path startsWith "/api/main/methods/" &&
+      (req.Header.Get("Content-Type") == "application/transit+json" ||
+       req.Header.Get("Content-Type") startsWith "application/transit+json;")
+    apply:
+      - RemoveOutBandRuleByID(920420)
+
+  # Browser WebSocket handshakes omit Referer; Penpot uses session-id for notifications.
+  # Do not exempt ordinary HTTP requests or any other query/header rule.
+  - filter: |-
+      IsOutBand && req.Host == "design.tuannguyenviet.site" &&
+      req.Method == "GET" && req.URL.Path == "/ws/notifications" &&
+      req.Header.Get("Upgrade") == "websocket"
+    apply:
+      - RemoveOutBandRuleByID(943120)
