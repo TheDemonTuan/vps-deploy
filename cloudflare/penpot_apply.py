@@ -142,9 +142,11 @@ def public_ready(timeout=90):
     """Require HTTPS 200/OK, never an Access redirect or Cloudflare error page."""
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirect())
+    request = urllib.request.Request('https://' + HOST + '/readyz',
+                                     headers={'User-Agent': 'penpot-readiness/1.0'})
     while True:
         try:
-            with opener.open('https://' + HOST + '/readyz', timeout=10) as response:
+            with opener.open(request, timeout=10) as response:
                 if response.status == 200 and response.read(257) == b'OK':
                     return
         except (urllib.error.URLError, OSError):
