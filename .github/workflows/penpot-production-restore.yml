@@ -280,6 +280,7 @@ jobs:
               value = {'status': 'failed', 'error_code': 'PENPOT_REHEARSAL_FAILED'}
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
               stream.write('## Separate-VM Penpot restore rehearsal\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n')
+          print(json.dumps(value, sort_keys=True))
           if value['status'] != 'passed':
               raise SystemExit(1)
           PY

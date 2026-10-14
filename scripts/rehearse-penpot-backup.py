@@ -169,7 +169,19 @@ def origin_identity(receipt_path, metadata, origin_platform, profile, *, histori
 
 
 def target_identity(path, origin, profile):
-    value = core.parse_json(penpot.bounded_file(Path(path)))
+    # Transported inputs live below runner-owned directories, not engine paths.
+    # Open once without following links, then bound and verify that descriptor.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            core.require(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= 65536,
+                         'PENPOT_REHEARSAL_TARGET')
+            raw = stream.read(65537)
+            core.require(len(raw) == info.st_size, 'PENPOT_REHEARSAL_TARGET')
+    except (OSError, ValueError):
+        raise core.Failure('PENPOT_REHEARSAL_TARGET') from None
+    value = core.parse_json(raw)
     core.require(type(value) is dict and set(value) == {
         'schemaVersion', 'sourceSha', 'platformRef', 'platform', 'images',
     } and type(value['schemaVersion']) is int and value['schemaVersion'] == 1 and

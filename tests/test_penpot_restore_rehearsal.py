@@ -188,7 +188,6 @@ class RehearsalIdentityAndData(unittest.TestCase):
             with self.subTest(platform=platform), self.assertRaises(rehearsal.core.Failure):
                 rehearsal.origin_identity(self.receipt, self.metadata, platform, self.profile)
 
-    @patch.object(rehearsal.penpot, 'trusted_path', new=lambda path, **kwargs: Path(path))
     def test_target_artifact_strict_schema_and_source_only_platform_binding(self):
         origin = self.identity()
         target = {'schemaVersion': 1, 'sourceSha': 'f' * 40, 'platformRef': SHA,
@@ -196,6 +195,7 @@ class RehearsalIdentityAndData(unittest.TestCase):
         path = self.root / 'target-release.json'
         path.write_text(json.dumps(target))
         os.chmod(path, 0o600)
+        os.chmod(self.root, 0o777)  # A transported input is not an immutable engine path.
         entry = rehearsal.target_identity(path, origin, self.profile)
         self.assertEqual(entry['source_sha'], 'f' * 40)
         self.assertEqual(entry['manifest_sha256'], origin['manifest_sha256'])
@@ -207,6 +207,39 @@ class RehearsalIdentityAndData(unittest.TestCase):
                 path.write_text(json.dumps(dict(target, **{key: changed})))
                 with self.assertRaises(rehearsal.core.Failure):
                     rehearsal.target_identity(path, origin, self.profile)
+
+    def test_target_transport_rejects_links_special_empty_and_oversized_files(self):
+        origin = self.identity()
+        path = self.root / 'target-release.json'
+        real = self.root / 'real.json'
+        real.write_text('{}')
+        path.symlink_to(real)
+        with self.assertRaises(rehearsal.core.Failure) as caught:
+            rehearsal.target_identity(path, origin, self.profile)
+        self.assertEqual(caught.exception.code, 'PENPOT_REHEARSAL_TARGET')
+        path.unlink()
+        os.mkfifo(path)
+        with self.assertRaises(rehearsal.core.Failure) as caught:
+            rehearsal.target_identity(path, origin, self.profile)
+        self.assertEqual(caught.exception.code, 'PENPOT_REHEARSAL_TARGET')
+        path.unlink()
+        path.mkdir()
+        with self.assertRaises(rehearsal.core.Failure):
+            rehearsal.target_identity(path, origin, self.profile)
+        path.rmdir()
+        for payload in (b'', b' ' * 65537):
+            path.write_bytes(payload)
+            with self.subTest(size=len(payload)), self.assertRaises(rehearsal.core.Failure) as caught:
+                rehearsal.target_identity(path, origin, self.profile)
+            self.assertEqual(caught.exception.code, 'PENPOT_REHEARSAL_TARGET')
+
+    def test_target_transport_rejects_malformed_and_duplicate_json(self):
+        origin = self.identity()
+        path = self.root / 'target-release.json'
+        for payload in (b'not json', b'{"schemaVersion":1,"schemaVersion":1}'):
+            path.write_bytes(payload)
+            with self.subTest(payload=payload), self.assertRaises(rehearsal.core.Failure):
+                rehearsal.target_identity(path, origin, self.profile)
 
     def test_snapshot_source_platform_and_images_must_match_origin(self):
         for field, changed in (('sourceSha', 'f' * 40), ('platformRef', 'f' * 40),
