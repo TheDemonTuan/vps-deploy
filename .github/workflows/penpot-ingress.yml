@@ -7,6 +7,10 @@ on:
         type: choice
         options: [survey, apply]
         default: survey
+      origin-platform-ref:
+        description: Full immutable platform SHA enrolled on the origin; required for apply
+        type: string
+        required: false
 permissions:
   contents: read
 concurrency:
@@ -61,6 +65,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           VPS_PLATFORM_ADMIN_SSH_KEY: ${{ secrets.VPS_PLATFORM_ADMIN_SSH_KEY }}
+          ORIGIN_PLATFORM_REF: ${{ inputs.origin-platform-ref }}
         run: python3 cloudflare/penpot_ingress.py --operation apply > "$RUNNER_TEMP/penpot-ingress-apply.json"
       - name: Publish scoped apply receipt
         run: |

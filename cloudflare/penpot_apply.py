@@ -114,7 +114,7 @@ def prepare(api, account):
         rules = inventory_list(cache.get('rules'))
         body = {key: copy.deepcopy(cache[key]) for key in ('name', 'description', 'kind', 'phase') if key in cache}
     else:
-        cache_path = '/zones/' + zone + '/rulesets/phases/http_request_cache_settings/entrypoint'
+        cache_path = '/zones/' + zone + '/rulesets'
         cache = None
         rules = []
         body = {'name': 'Penpot cache settings', 'kind': 'zone', 'phase': 'http_request_cache_settings'}
@@ -191,7 +191,7 @@ def apply(api, account, check_origin):
             unchanged(api, plan['sets_path'], plan['sets'])
         else:
             unchanged(api, plan['cache_path'], plan['cache'])
-        after = api.request('PUT', plan['cache_path'], plan['cache_body'])
+        after = api.request('POST' if plan['cache'] is None else 'PUT', plan['cache_path'], plan['cache_body'])
         actual = [{key: value for key, value in rule.items() if key not in {'version', 'last_updated'}}
                   for rule in inventory_list(after.get('rules'))]
         # Cloudflare assigns an ID/ref to a newly appended rule.

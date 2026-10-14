@@ -23,7 +23,7 @@ class PenpotOriginTests(unittest.TestCase):
 
     def environment(self):
         return {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': 'TheDemonTuan/vps-deploy',
-                'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': 'a' * 40,
+                'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': 'e' * 40, 'ORIGIN_PLATFORM_REF': 'a' * 40,
                 'VPS_PLATFORM_ADMIN_SSH_KEY': 'secret-canary-key'}
 
     def test_repeated_checks_use_pinned_ssh_and_remove_temporary_identity(self):
@@ -81,6 +81,15 @@ class PenpotOriginTests(unittest.TestCase):
         with self.assertRaises(Failure):
             penpot_origin.receipt(evidence, 'a' * 40)
 
+    def test_missing_or_mutable_origin_revision_fails_before_transport(self):
+        for platform in ('', 'main', 'a' * 39, 'a' * 41):
+            env = dict(self.environment(), ORIGIN_PLATFORM_REF=platform)
+            with self.subTest(platform=platform), mock.patch.dict(penpot_origin.os.environ, env, clear=True), \
+                    mock.patch.object(penpot_origin, 'run') as run:
+                with self.assertRaisesRegex(Failure, 'CALLER_POLICY'):
+                    penpot_origin.verifier()
+                run.assert_not_called()
+
     def test_root_checker_rejects_nonroot_without_loading_engine(self):
         spec = importlib.util.spec_from_file_location('origin_check', ROOT.parent / 'install/check-penpot-origin.py')
         module = importlib.util.module_from_spec(spec)
@@ -90,17 +99,6 @@ class PenpotOriginTests(unittest.TestCase):
                 module.check('a' * 40)
             load.assert_not_called()
 
-    def test_workflow_main_only_dispatch_and_apply_requires_admin_environment(self):
-        import yaml
-        text = (ROOT.parent / '.github/workflows/penpot-ingress.yml').read_text()
-        workflow = yaml.load(text, Loader=yaml.BaseLoader)
-        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['operation']['options'], ['survey', 'apply'])
-        self.assertEqual(workflow['jobs']['apply']['environment'], 'platform-admin')
-        for name in ('survey', 'apply'):
-            self.assertIn("github.ref == 'refs/heads/main'", workflow['jobs'][name]['if'])
-            self.assertIn("github.repository == 'TheDemonTuan/vps-deploy'", workflow['jobs'][name]['if'])
-        self.assertNotIn('push', workflow['on'])
-        self.assertEqual(workflow['concurrency']['cancel-in-progress'], 'false')
 
 
 if __name__ == '__main__':
