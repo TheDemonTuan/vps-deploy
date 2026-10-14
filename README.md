@@ -530,6 +530,23 @@ origin receipt, target ZIP/JSON và report riêng tư bị xóa ở bước clea
 thất bại. Artifact hết hạn, scan thiếu/thất bại, platform mismatch hoặc provenance
 không hợp lệ đều fail closed, không fallback sang image tags hay build khác.
 
+Bằng chứng nâng cấp production 2026-10-14: source `1a0f56841bdae2abbe38cb466460e23de4ebcc3e`
+đã deploy thành công qua [run 38547478252](https://github.com/TheDemonTuan/penpot/actions/runs/38547478252),
+giữ platform pin `67f7825efb90ff0631c1f5c625e694a19bb469ae`.
+[Backend ARM64](https://github.com/TheDemonTuan/penpot/actions/runs/38547477726)
+pass 862 tests/5205 assertions/0 failures. Source, cả bốn image scan và native
+smoke/lifecycle đều pass. [Rehearsal 38574589736](https://github.com/TheDemonTuan/vps-deploy/actions/runs/38574589736)
+chứng minh migration 0154, fingerprint/assets/readiness và restore source cũ.
+Kiểm tra trực tiếp sau deploy xác nhận registry có 0154, bảng legacy đã bỏ,
+hai file hiện có và năm assets giữ fingerprint/hash trước khi thử writes;
+PostgreSQL/Valkey IDs và sibling route hashes không đổi, operation intent đã clear.
+Public browser mở file cũ; MCP đọc/tạo rectangle 64×64 đỏ, PNG export đúng hình,
+reload giữ shape. Shape thử đã xóa và reload xác nhận không còn layer đó.
+Public `/readyz` trả `200/OK`, sáu services healthy, backup timer vẫn enabled.
+Writes thử làm thay đổi metadata/revision của file thử; không coi fingerprint
+toàn row sau phép thử là bằng chứng byte-identical với trước acceptance.
+Giữ required-reviewer gate production; không bỏ gate sau khi deploy.
+
 ### Lưu ý an toàn cơ sở dữ liệu Blue/Green
 
 Hai slot blue/green dùng chung volume dữ liệu (như SQLite hoặc DB container). Deployment engine hỗ trợ rollback route và container ngay lập tức, nhưng **không rollback dữ liệu đã thay đổi**.
