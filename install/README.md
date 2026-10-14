@@ -90,6 +90,22 @@ checks. Without client metadata, the production bouncer rejects readiness with
 Bootstrap resume admits exactly frontend/backend/exporter on the egress network;
 MCP, datastores and foreign consumers remain forbidden.
 
+The reviewed CrowdSec policy `security/crowdsec/penpot-scope.yaml` is installed as
+`/etc/crowdsec/appsec-configs/local-penpot-scope.yaml` and registered as
+`local/penpot-scope` in `/etc/crowdsec/acquis.d/appsec.yaml`. Validate with
+`crowdsec -t` before `systemctl reload crowdsec`; preserve the previous acquisition
+file for rollback. Do not modify vendor rules or the shared Traefik bouncer.
+It skips body inspection only for POST design RPC and `/mcp/stream`, whose payloads
+contain intentional user text/SVG/code. On Transit RPC only, it removes out-of-band
+CRS 920420 (unsupported media type); on notification WebSocket handshakes only,
+it removes 943120 (session-id without Referer). This also skips the AppSec body-size
+check on those POST endpoints; application authentication and request validation
+remain required. IP decisions, URI/header inspection and all other rules stay on.
+Live engine smoke verified Transit/code bodies and notification handshakes do not
+match those false positives, while XSS bodies on other hosts/paths, unrelated
+session-id paths and traversal/command payloads in RPC query strings still match.
+No global allowlist, decision deletion or domain-wide WAF bypass is needed.
+
 Apply copies reviewed platform bytes into `/opt/vps-deploy/releases/<platform-sha>`
 using the installer's immutable release-copy API. Reuse requires identical bytes.
 Enrollment restores the backup timer's prior enabled/active state. A fresh timer
