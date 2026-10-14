@@ -164,6 +164,50 @@ class RehearsalIdentityAndData(unittest.TestCase):
         self.assertEqual(self.identity(), {'slot': 'single', 'source_sha': SOURCE, 'platform_ref': SHA,
                                           'images': IMAGES, 'manifest_sha256': 'd' * 64})
 
+    def test_origin_platform_is_independent_of_helper_checkout(self):
+        self.profile['platform_ref'] = 'f' * 40
+        with patch.dict(os.environ, {'PLATFORM_REF': 'f' * 40, 'GITHUB_SHA': 'f' * 40}):
+            self.assertEqual(self.identity()['platform_ref'], SHA)
+
+    def test_historical_snapshot_requires_explicit_cross_release_mode(self):
+        self.origin['sourceSha'] = 'f' * 40
+        self.origin['images'] = {role: ref[:-1] + 'f' for role, ref in IMAGES.items()}
+        self.receipt.write_text(json.dumps(self.origin))
+        with self.assertRaises(rehearsal.core.Failure):
+            rehearsal.origin_identity(self.receipt, self.metadata, SHA, self.profile)
+        entry = rehearsal.origin_identity(self.receipt, self.metadata, SHA, self.profile, historical=True)
+        self.assertEqual(entry['source_sha'], SOURCE)
+        self.assertEqual(entry['images'], IMAGES)
+        self.metadata['platformRef'] = 'f' * 40
+        with self.assertRaises(rehearsal.core.Failure):
+            rehearsal.origin_identity(self.receipt, self.metadata, SHA, self.profile, historical=True)
+
+    def test_origin_platform_must_be_an_explicit_immutable_sha(self):
+        self.receipt.write_text(json.dumps(self.origin))
+        for platform in ('', 'main', SHA.upper(), None):
+            with self.subTest(platform=platform), self.assertRaises(rehearsal.core.Failure):
+                rehearsal.origin_identity(self.receipt, self.metadata, platform, self.profile)
+
+    @patch.object(rehearsal.penpot, 'trusted_path', new=lambda path, **kwargs: Path(path))
+    def test_target_artifact_strict_schema_and_source_only_platform_binding(self):
+        origin = self.identity()
+        target = {'schemaVersion': 1, 'sourceSha': 'f' * 40, 'platformRef': SHA,
+                  'platform': 'linux/arm64', 'images': {role: ref[:-1] + 'f' for role, ref in IMAGES.items()}}
+        path = self.root / 'target-release.json'
+        path.write_text(json.dumps(target))
+        os.chmod(path, 0o600)
+        entry = rehearsal.target_identity(path, origin, self.profile)
+        self.assertEqual(entry['source_sha'], 'f' * 40)
+        self.assertEqual(entry['manifest_sha256'], origin['manifest_sha256'])
+        for key, changed in (('schemaVersion', True), ('sourceSha', SOURCE), ('sourceSha', 'main'),
+                             ('platformRef', 'f' * 40), ('platform', 'linux/amd64'),
+                             ('images', dict(IMAGES, backend='foreign@sha256:' + 'a' * 64)),
+                             ('unexpected', 'private')):
+            with self.subTest(key=key, changed=changed):
+                path.write_text(json.dumps(dict(target, **{key: changed})))
+                with self.assertRaises(rehearsal.core.Failure):
+                    rehearsal.target_identity(path, origin, self.profile)
+
     def test_snapshot_source_platform_and_images_must_match_origin(self):
         for field, changed in (('sourceSha', 'f' * 40), ('platformRef', 'f' * 40),
                                ('images', dict(IMAGES, backend=IMAGES['backend'][:-1] + 'f'))):
@@ -234,6 +278,63 @@ class RehearsalIdentityAndData(unittest.TestCase):
                 with self.assertRaises(rehearsal.core.Failure) as caught:
                     rehearsal.database_matches(FILE_ID, '0' * 64)
                 self.assertEqual(caught.exception.code, 'PENPOT_REHEARSAL_DATABASE')
+
+
+class UpgradeBoundaries(unittest.TestCase):
+    # These exercise fail-closed boundaries, not substitutes for the hosted run.
+    def setUp(self):
+        self.before = {'legacyTable': True, 'registry': [
+            {'module': 'main', 'step': '0153-del-orphan-profile-rels-after-team-leave',
+             'created_at': '2026-10-01T00:00:00'}]}
+        self.migration = {'module': 'main', 'step': rehearsal.MIGRATION,
+                          'created_at': '2026-10-14T00:00:00'}
+        self.after = {'legacyTable': False, 'registry': self.before['registry'] + [self.migration]}
+        self.checks = dict.fromkeys(('empty', 'ordinary', 'dependencies', 'triggers',
+                                    'policies', 'inheritance'), True)
+
+    def test_legacy_rows_dependencies_and_catalog_drift_fail_closed(self):
+        for key in self.checks:
+            with self.subTest(key=key), patch.object(rehearsal, 'database_json',
+                    return_value=dict(self.checks, **{key: False})), self.assertRaises(rehearsal.core.Failure):
+                rehearsal.legacy_preconditions(self.before)
+        for state in ({'legacyTable': False, 'registry': []},
+                      {'legacyTable': True, 'registry': [self.migration]}):
+            with self.subTest(state=state), patch.object(rehearsal, 'database_json') as query:
+                with self.assertRaises(rehearsal.core.Failure):
+                    rehearsal.legacy_preconditions(state)
+                query.assert_not_called()
+
+    def test_migration_requires_exact_new_registry_step_and_preserves_old_rows(self):
+        rehearsal.migration_applied(self.before, self.after)
+        bad = ({'legacyTable': True, 'registry': self.after['registry']},
+               {'legacyTable': False, 'registry': self.before['registry']},
+               {'legacyTable': False, 'registry': [self.migration]},
+               {'legacyTable': False, 'registry': self.before['registry'] +
+                    [dict(self.migration, module='other')]},
+               {'legacyTable': False, 'registry': self.after['registry'] +
+                    [{'module': 'main', 'step': 'unexpected'}]})
+        for state in bad:
+            with self.subTest(state=state), self.assertRaises(rehearsal.core.Failure):
+                rehearsal.migration_applied(self.before, state)
+
+    def test_sql_errors_never_return_or_print_private_output(self):
+        process = subprocess.CompletedProcess([], 1, b'private row', b'private database error')
+        with patch.object(rehearsal.subprocess, 'run', return_value=process), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            with self.assertRaises(rehearsal.core.Failure) as caught:
+                rehearsal.database_json('SELECT private;')
+        self.assertEqual(caught.exception.code, 'PENPOT_REHEARSAL_MIGRATION')
+        self.assertEqual(output.getvalue(), '')
+
+    def test_failed_legacy_precondition_never_prepares_or_starts_target(self):
+        with patch.object(rehearsal.penpot, 'stop_applications'), \
+                patch.object(rehearsal, 'migration_state', return_value={'legacyTable': False, 'registry': []}), \
+                patch.object(rehearsal.penpot, 'prepare_images') as prepare, \
+                patch.object(rehearsal.penpot, 'start_applications') as start:
+            with self.assertRaises(rehearsal.core.Failure):
+                rehearsal.upgrade_and_restore(None, None, None, None, {}, {}, None, FILE_ID, '0' * 64)
+        prepare.assert_not_called()
+        start.assert_not_called()
 
 
 class HostAndOutputPolicy(unittest.TestCase):

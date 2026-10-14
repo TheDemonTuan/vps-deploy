@@ -470,6 +470,66 @@ không được chấp nhận. Clients không có connection hoặc chỉ pendin
 receipt không chứa connector IDs, origin IP hay API response thô. Survey không
 thay DNS/ingress/policies và không thay thế origin verification trước apply.
 
+### Penpot: diễn tập nâng cấp và khôi phục bản cũ trên VM riêng
+
+Dispatch `penpot-production-restore.yml` trên **main của platform** sau khi đã tạo
+backup production chứa riêng dữ liệu acceptance tổng hợp và ghi lại UUID cùng
+SHA256 fingerprint của file. Không dùng branch platform chưa push/merge làm nguồn
+workflow và không đổi platform pin của source hay bản đang cài để chạy rehearsal:
+
+```bash
+umask 077
+private_zip="$(mktemp)"
+# Dùng gh đã đăng nhập để tải đúng artifact ID của fork run; không gửi credential vào input.
+gh api repos/TheDemonTuan/penpot/actions/artifacts/<TARGET_RELEASE_ARTIFACT_ID>/zip > "$private_zip"
+gh workflow run penpot-production-restore.yml --repo TheDemonTuan/vps-deploy --ref main \
+  -f backup-id=<SYNTHETIC_BACKUP_REQUEST_ID> \
+  -f file-id=<ACCEPTANCE_FILE_UUID> -f file-sha256=<64_HEX_FILE_FINGERPRINT> \
+  -f origin-platform-ref=67f7825efb90ff0631c1f5c625e694a19bb469ae \
+  -f source-run-id=<TARGET_FORK_RUN_ID> \
+  -f "target-release-zip=$(base64 -w0 "$private_zip")"
+rm -f "$private_zip"
+```
+
+`origin-platform-ref` là SHA bất biến của platform **đang cài và trong snapshot**,
+khác với `github.sha`/`PLATFORM_REF` của helper checkout mới. Input hiện mặc định
+pin trên; chỉ thay khi platform thực sự đã cài thay đổi. Bỏ cả `source-run-id` và
+`target-release-zip` để chỉ kiểm tra restore snapshot cũ; hai input này phải đi cùng
+nhau. `target-release-zip` chỉ nhận base64 của nguyên ZIP artifact GitHub, tối đa
+16384 ký tự (12288 bytes ZIP), không nhận signed URL, token, credential hoặc JSON
+tự tạo. Operator tải ZIP riêng tư qua `gh` đã đăng nhập bằng **artifact ID bất
+biến**, không dùng API download cross-repository với platform `GITHUB_TOKEN`.
+Workflow đọc public metadata không cần token để kiểm tra đúng artifact
+`penpot-release-<head_sha>` từ run `fork-deploy.yml` của `TheDemonTuan/penpot`,
+event push hoặc dispatch trên main. Build, publication, source scan và cả bốn
+image scans phải thành công trong cùng attempt; **không yêu cầu deploy hoặc toàn
+run hoàn tất**, nên có thể diễn tập khi deploy đang chờ approval production.
+Artifact phải duy nhất, chưa hết hạn, gắn đúng run/repository/source và attempt
+publication; bytes input phải khớp chính xác GitHub ZIP digest **và size** của
+artifact ID đó. ZIP chỉ được chứa một release JSON đúng schema, đủ bốn image
+digests ARM64. Builder/security workflow
+pins và `target.platformRef` phải bằng `origin-platform-ref`: đây chỉ là rehearsal
+**source-only**, không phải diễn tập nâng cấp platform.
+
+Workflow giữ gate `platform-admin`, central-repo main và VM GitHub-hosted ARM64
+dùng một lần. SSH admin key chỉ có trong bước tải backup riêng tư; bước admission
+target không có token hay secret mới. Không đưa credential vào dispatch inputs;
+ZIP release chỉ chứa metadata public và image digests. Root helper nhận môi trường
+sạch không chứa admin key, token hoặc base64 input. Helper kiểm tra restore source cũ,
+chạy nâng cấp target
+thật với migration, so fingerprint database/assets và readiness, rồi restore
+snapshot cùng source cũ và xác minh rollback. Không thực hiện deploy production,
+thay ingress hay tự approve environment; rehearsal xanh không thay thế approval
+hoặc bằng chứng release/lifecycle của source run.
+
+Chỉ report allowlist tối đa 4096 bytes được ghi vào step summary. Thành công
+cross-release thêm `upgrade` với `sourceSha`, `platformRef`, `migrationApplied`,
+`databaseMatches`, `assetsMatch`, `readiness`, `rollbackVerified`; mọi boolean phải
+là `true`. Không upload DB dump, archive, raw logs hoặc credentials; backup,
+origin receipt, target ZIP/JSON và report riêng tư bị xóa ở bước cleanup kể cả khi
+thất bại. Artifact hết hạn, scan thiếu/thất bại, platform mismatch hoặc provenance
+không hợp lệ đều fail closed, không fallback sang image tags hay build khác.
+
 ### Lưu ý an toàn cơ sở dữ liệu Blue/Green
 
 Hai slot blue/green dùng chung volume dữ liệu (như SQLite hoặc DB container). Deployment engine hỗ trợ rollback route và container ngay lập tức, nhưng **không rollback dữ liệu đã thay đổi**.
