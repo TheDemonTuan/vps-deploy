@@ -1,0 +1,23 @@
+name: One-time Penpot Cloudflare teardown
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: penpot-ingress-production
+  cancel-in-progress: false
+jobs:
+  teardown:
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Delete exact Penpot host resources and verify shared state
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 cloudflare/penpot_teardown.py
