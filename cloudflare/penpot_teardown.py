@@ -73,8 +73,14 @@ def run(receipt):
     rule_changes = []
     rule_snapshots = []
     for ruleset in inventory_list(api.get(base + '/rulesets?per_page=50')):
+        if ruleset.get('kind') == 'managed':
+            continue
         path = base + '/rulesets/' + ruleset['id']
-        detail = api.get(path)
+        try:
+            detail = api.get(path)
+        except Failure as error:
+            receipt['blockers'].append('ruleset_phase=' + ruleset.get('phase', 'unknown') + ':' + str(error))
+            continue
         rules = inventory_list(detail.get('rules', []))
         selected_rules = []
         for rule in rules:
