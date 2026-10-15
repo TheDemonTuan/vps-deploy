@@ -37,10 +37,18 @@ jobs:
           for item in cache_before:
               detail = api.get(base + '/rulesets/' + item['id'])
               if detail.get('name') == 'Penpot cache settings' and detail.get('kind') == 'zone' and not detail.get('rules'):
-                  api.request('DELETE', base + '/rulesets/' + item['id'])
+                  try:
+                      api.request('DELETE', base + '/rulesets/' + item['id'])
+                  except Failure as error:
+                      if str(error) != 'CLOUDFLARE_READ_FAILED':
+                          raise
+                      remaining = api.get(base + '/rulesets?per_page=50')
+                      assert not any(current['id'] == item['id'] for current in remaining)
                   receipt['deleted_empty_cache_rulesets'].append(item['id'])
           cache_after = [item for item in api.get(base + '/rulesets?per_page=50') if item.get('phase') == 'http_request_cache_settings']
           assert [item['id'] for item in cache_after] == [item['id'] for item in cache_before if item['id'] not in receipt['deleted_empty_cache_rulesets']]
+          receipt['cache_rulesets_remaining'] = [item['id'] for item in cache_after]
+          receipt['original_penpot_cache_ruleset_absent'] = not any(item['id'] == 'de980db0bc53442e94cd4c5f146858cf' for item in cache_after)
           tunnel_list = account + '/cfd_tunnel?is_deleted=false&per_page=100'
           tunnels_before = inventory_list(api.get(tunnel_list))
           records = inventory_list(api.get(base + '/dns_records?per_page=100'))
