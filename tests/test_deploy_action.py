@@ -26,7 +26,7 @@ class DeployActionBoundary(unittest.TestCase):
         for folder, name in (("registry", "9router.yml"), ("hosts", "oracle-main.yml")):
             dest = platform / folder
             dest.mkdir()
-            shutil.copyfile(ROOT / folder / name, dest / name)
+            shutil.copyfile(ROOT / 'tests/fixtures/activation' / folder / name, dest / name)
         sys.path.insert(0, str(ROOT / "lib"))
         self.addCleanup(sys.path.remove, str(ROOT / "lib"))
         from core import app_registration

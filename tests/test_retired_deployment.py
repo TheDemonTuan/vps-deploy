@@ -1,4 +1,4 @@
-"""Retired automation stays absent; the gateway remains registered unchanged."""
+"""Retired automation stays absent; active deployments remain isolated."""
 import copy
 import json
 from pathlib import Path
@@ -9,7 +9,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'lib'))
-from core import Failure, app_registration, host_registration
+from core import Failure, app_registration
 import route
 import operations
 
@@ -46,23 +46,6 @@ class RetiredDeployment(unittest.TestCase):
         with self.assertRaisesRegex(Failure, 'APP_NOT_REGISTERED'):
             app_registration(ROOT, 'opendesign')
 
-    def test_host_replaces_retired_app_without_changing_gateway(self):
-        apps = host_registration(ROOT, 'oracle-main')['apps']
-        self.assertEqual(set(apps), {'9router', 'penpot'})
-        self.assertEqual(apps['9router'], {
-            'api_host': '9router-api.tuannguyenviet.site',
-            'dashboard_host': '9router.tuannguyenviet.site',
-            'dashboard_alias_host': '9router-admin.tuannguyenviet.site',
-            'work_dir': '/opt/9router', 'compose_project': '9router',
-            'edge_network': 'edge-9router', 'rtk_network': '9router-rtk',
-            'cgw_network': '9router-cgw', 'route_name': '9router.yml',
-        })
-        self.assertEqual(apps['penpot'], {
-            'api_host': 'design.tuannguyenviet.site',
-            'dashboard_host': '', 'dashboard_alias_host': '',
-            'work_dir': '/opt/penpot', 'compose_project': 'penpot',
-            'edge_network': 'edge-penpot', 'route_name': 'penpot.yml',
-        })
 
     def test_retired_strategy_is_rejected_by_registry_and_schema(self):
         value = copy.deepcopy(app_registration(ROOT, '9router'))

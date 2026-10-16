@@ -29,8 +29,9 @@ class GatewayEnrollment(unittest.TestCase):
         self.config = Path(self.tmp.name)
         self.runtime = self.config / 'runtime.env'
         self.runtime.write_text('INITIAL_PASSWORD=fixture-only\n')
-        self.registration = app_registration(ROOT, '9router')
-        self.binding = host_registration(ROOT, 'oracle-main')['apps']['9router']
+        activation = ROOT / 'tests/fixtures/activation'
+        self.registration = app_registration(activation, '9router')
+        self.binding = host_registration(activation, 'oracle-main')['apps']['9router']
         self.base = {
             'services': {name: {'container_name': name, 'environment': {'INITIAL_PASSWORD': 'fixture-only'},
                                'networks': ['edge'], 'volumes': [{'type': 'volume', 'target': '/app/data', 'source': '9router-data'}]}
@@ -94,6 +95,24 @@ class GatewayEnrollment(unittest.TestCase):
                                 {'platform_ref': 'a' * 40, 'cgw_network': '9router-cgw'}, cgw_transition=True)
             with self.assertRaisesRegex(Failure, 'CGW_TRANSITION_POLICY'):
                 preflight.check(ROOT, '9router', self.registration, self.binding, self.runtime, None, cgw_transition=True)
+
+    def test_verified_suspension_keeps_gateway_parity_without_runtime_dependency(self):
+        self.live['NetworkSettings']['Networks']['9router-cgw'] = {}
+        self.live['Config']['Env'].append('CHATGPT_WEB_RUNTIME_URL=http://cgw-runtime:17841')
+        self.live['Mounts'].append({'Type': 'bind', 'Destination': '/run/secrets/cgw-data-token',
+                                    'Source': str(self.config / 'cgw-data-token'), 'RW': False})
+        registration = app_registration(ROOT, '9router')
+        binding = host_registration(ROOT, 'oracle-main')['apps']['9router']
+        previous = {'platform_ref': 'a' * 40, 'cgw_network': '9router-cgw'}
+        with mock.patch('preflight.subprocess.run', side_effect=self.compose), \
+             mock.patch('cgw.diagnostics', side_effect=AssertionError('Suspension must not probe CGW')), \
+             mock.patch('preflight.runtime_parity', side_effect=AssertionError('Suspension must not require CGW')):
+            preflight.check(ROOT, '9router', registration, binding, self.runtime, previous, cgw_suspension=True)
+            self.live['Mounts'][-1]['RW'] = True
+            with self.assertRaisesRegex(Failure, 'COMPOSE_PARITY:secrets'):
+                preflight.check(ROOT, '9router', registration, binding, self.runtime, previous, cgw_suspension=True)
+            with self.assertRaisesRegex(Failure, 'CGW_TRANSITION_POLICY'):
+                preflight.check(ROOT, '9router', registration, binding, self.runtime, None, cgw_suspension=True)
 
 
 class RuntimeAdoption(unittest.TestCase):

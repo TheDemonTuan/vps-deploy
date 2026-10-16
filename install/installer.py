@@ -444,6 +444,7 @@ def main():
     previous = json.loads(profile_path.read_bytes()) if optional_trusted(profile_path) else None
     binding = host_record['apps'][args.app]
     cgw_transition = False
+    cgw_suspension = False
     if previous:
         require(type(previous) is dict and type(previous.get('platform_ref')) is str and SHA.fullmatch(previous['platform_ref']), 'HOST_POLICY')
         installed = RELEASES / previous['platform_ref']
@@ -453,6 +454,7 @@ def main():
             old_host = host_registration(installed, old_registration['host'])
             host(cfg, old_registration, old_host)
             cgw_transition = 'cgw' in registration['manifest'] and 'cgw' not in old_registration['manifest']
+            cgw_suspension = 'cgw' not in registration['manifest'] and 'cgw' in old_registration['manifest']
         else:
             require(args.app == '9router' and (installed / 'bin/deployctl').is_file(), 'APP_NOT_REGISTERED')
             for name in ('api_host', 'dashboard_host', 'dashboard_alias_host', 'work_dir', 'compose_project', 'edge_network', 'rtk_network', 'route_name', 'dynamic_dir'):
@@ -471,7 +473,7 @@ def main():
     require(stat.S_IMODE(source_env.stat().st_mode) == 0o600, 'UNSAFE_RUNTIME_ENV')
     penpot_proof = {'source_sha': args.app_ref, 'platform_ref': args.release} if registration['manifest']['strategy'] == 'penpot' else {}
     composed = preflight(root, args.app, registration, binding, source_env, previous,
-                         cgw_transition=cgw_transition, **penpot_proof)
+                         cgw_transition=cgw_transition, cgw_suspension=cgw_suspension, **penpot_proof)
     selected_volumes = {mount['source'] for service in composed['services'].values() for mount in service.get('volumes', []) if mount.get('type') == 'volume'}
     from core import container
     for enrolled in CONFIG.iterdir() if CONFIG.exists() else ():

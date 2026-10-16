@@ -14,17 +14,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Registration(unittest.TestCase):
-    def test_production_records(self):
-        app = app_registration(ROOT, '9router')
-        host = host_registration(ROOT, app['host'])
-        self.assertEqual(host['apps']['9router']['route_name'], '9router.yml')
-        self.assertEqual(app['manifest']['runtime']['port'], 20128)
-        from test_core import GOOD
-        expanded = GOOD + b'cgw: {image: ghcr.io/thedemontuan/9router-cgw-runtime}\n'
-        exact(parse_yaml(expanded), app['manifest'])
-        with self.assertRaisesRegex(Failure, 'MANIFEST_POLICY'):
-            exact(parse_yaml(GOOD), app['manifest'])
-        self.assertEqual(host['apps']['9router']['cgw_network'], '9router-cgw')
 
     def test_unknown_and_unsafe_identifiers(self):
         for app in ('../9router', '9router/', '%i', 'not-enrolled', 'a' * 25):

@@ -6,9 +6,9 @@ caller:
   ref: refs/heads/master
   refs: [refs/heads/master, refs/heads/main]
   config: .deploy/app.yml
-  build_workflows: [deploy.yml, chatgpt-web-runtime.yml]
-  deploy_workflows: [deploy.yml, rtk-sidecar.yml, deploy-ops.yml, chatgpt-web-runtime.yml]
-  security_workflows: [deploy.yml, rtk-sidecar.yml, chatgpt-web-runtime.yml]
+  build_workflows: [deploy.yml]
+  deploy_workflows: [deploy.yml, rtk-sidecar.yml, deploy-ops.yml]
+  security_workflows: [deploy.yml, rtk-sidecar.yml]
 manifest:
   version: 1
   app: 9router
@@ -19,7 +19,6 @@ manifest:
   health: {path: /api/health, timeout_seconds: 60}
   route: {timeout_seconds: 30}
   rtk: {image: ghcr.io/thedemontuan/rtk-sidecar}
-  cgw: {image: ghcr.io/thedemontuan/9router-cgw-runtime}
 runtime:
   allowed_env: [INITIAL_PASSWORD, PUBLIC_URL, CLOUDFLARE_ACCESS_TEAM_NAME, CLOUDFLARE_ACCESS_AUD, RTK_URL, CHATGPT_WEB_RUNTIME_URL, CHATGPT_WEB_RUNTIME_TOKEN_FILE, CHATGPT_WEB_RUNTIME_ADMIN_TOKEN_FILE, CHATGPT_WEB_CLIENT_KEYS_FILE]
   required_env: [INITIAL_PASSWORD]
