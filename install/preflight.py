@@ -7,9 +7,9 @@ from core import Failure, container, container_digest, require
 
 
 def check(root, app, registration, binding, runtime, previous, *, cgw_transition=False,
-          source_sha=None, platform_ref=None):
+          cgw_suspension=False, source_sha=None, platform_ref=None):
     if registration['manifest'].get('strategy') == 'penpot':
-        require(app == 'penpot' and not cgw_transition, 'PENPOT_COMPOSE_ARGUMENT')
+        require(app == 'penpot' and not cgw_transition and not cgw_suspension, 'PENPOT_COMPOSE_ARGUMENT')
         from penpot_preflight import check as penpot_check
         return penpot_check(root, registration, binding, runtime, source_sha, platform_ref)
     names = registration['runtime']
@@ -41,7 +41,11 @@ def check(root, app, registration, binding, runtime, previous, *, cgw_transition
     # Only installer-verified prior enrollment may compare a pre-CGW live gateway
     # against the base compose. Provisioned runtime policy remains mandatory.
     require(not cgw_transition or cgw and previous and not previous.get('cgw_network'), 'CGW_TRANSITION_POLICY')
-    overlay = cgw and not cgw_transition
+    require(not cgw_suspension or not cgw and not cgw_transition and previous and
+            previous.get('cgw_network') == '9router-cgw', 'CGW_TRANSITION_POLICY')
+    # Compare the still-running gateway against its verified old overlay; the
+    # next app deployment removes it without touching CGW's account volumes.
+    overlay = cgw and not cgw_transition or cgw_suspension
     config = runtime.parent
     allowed_binds = {str(config / name) for name in ('cgw-data-token', 'cgw-admin-token', 'cgw-client-keys.json')} if overlay else set()
     env = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'APP_ID': app,
@@ -56,11 +60,12 @@ def check(root, app, registration, binding, runtime, previous, *, cgw_transition
         env['RTK_NETWORK'] = binding['rtk_network']
     argv = ['/usr/bin/docker', 'compose', '--env-file', str(runtime), '-p', binding['compose_project'],
             '-f', str(root / 'apps' / app / 'docker-compose.prod.yml')]
-    if cgw:
+    if cgw or cgw_suspension:
         env['CGW_CONFIG_DIR'] = str(config)
-        env['CGW_NETWORK'] = binding['cgw_network']
+        env['CGW_NETWORK'] = binding['cgw_network'] if cgw else previous['cgw_network']
         if overlay:
             argv += ['-f', str(root / 'apps' / app / 'docker-compose.chatgpt-web.yml')]
+    if cgw:
         from cgw import network, diagnostics
         network(dict(cgw_network=binding['cgw_network']))
         proof = diagnostics(dict(cgw_network=binding['cgw_network']))

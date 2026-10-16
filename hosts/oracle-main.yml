@@ -17,7 +17,6 @@ apps:
     compose_project: 9router
     edge_network: edge-9router
     rtk_network: 9router-rtk
-    cgw_network: 9router-cgw
     route_name: 9router.yml
   penpot:
     api_host: design.tuannguyenviet.site
