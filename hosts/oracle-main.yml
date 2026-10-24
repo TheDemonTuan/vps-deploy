@@ -33,4 +33,4 @@ apps:
     work_dir: /opt/tuan-portfolio
     compose_project: tuan-portfolio
     edge_network: edge-tuan-portfolio
-    route_name: portfolio.yml
+    route_name: tuan-portfolio.yml
