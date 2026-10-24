@@ -1,0 +1,42 @@
+x-runtime: &runtime
+  image: ${IMAGE_REF:?IMAGE_REF must be an immutable image digest}
+  restart: unless-stopped
+  user: "101:101"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    - /var/cache/nginx:rw,noexec,nosuid,size=16m,uid=101,gid=101
+  networks: [edge]
+  expose: ["8080"]
+  stop_grace_period: 60s
+  healthcheck:
+    test: [CMD, wget, -qO-, "http://127.0.0.1:8080/healthz"]
+    interval: 5s
+    timeout: 3s
+    retries: 6
+    start_period: 5s
+  mem_limit: 128m
+  cpus: 0.50
+  pids_limit: 64
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+services:
+  tuan-portfolio-blue:
+    <<: *runtime
+    container_name: tuan-portfolio-blue
+    environment:
+      DEPLOY_SLOT: blue
+  tuan-portfolio-green:
+    <<: *runtime
+    container_name: tuan-portfolio-green
+    environment:
+      DEPLOY_SLOT: green
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-edge-tuan-portfolio}

@@ -1,0 +1,25 @@
+version: 1
+app: tuan-portfolio
+host: oracle-main
+caller:
+  repository: TheDemonTuan/tuan-portfolio
+  ref: refs/heads/main
+  config: .deploy/app.yml
+  build_workflows: [deploy.yml]
+  deploy_workflows: [deploy.yml]
+  security_workflows: []
+manifest:
+  version: 1
+  app: tuan-portfolio
+  strategy: blue-green
+  image: ghcr.io/thedemontuan/tuan-portfolio
+  platform: linux/arm64
+  runtime: {port: 8080}
+  health: {path: /healthz, timeout_seconds: 60}
+  route: {timeout_seconds: 30}
+runtime:
+  allowed_env: []
+  required_env: []
+route:
+  generation_header: X-Portfolio-Route-Generation
+  required_middlewares: [deny-internal, tunnel-only, security-headers]
