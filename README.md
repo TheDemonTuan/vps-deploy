@@ -353,6 +353,33 @@ Thực hiện một lần bởi Quản trị viên (Operator) có quyền root:
 
 
 
+### Portfolio: Nginx blue-green enrollment
+
+`tuan-portfolio` registers `TheDemonTuan/tuan-portfolio` on `main`, with the
+immutable image repository `ghcr.io/thedemontuan/tuan-portfolio`, port `8080`
+and JSON `/healthz`. Its application-owned supervisor observes Nginx connections;
+unknown activity must fail health rather than invent an idle count. The platform
+retains its standard identity, route-generation and drain checks without exceptions.
+
+The canonical ingress network and route are `edge-tuan-portfolio` and
+`tuan-portfolio.yml`. The previous `edge-portfolio` / `portfolio.yml` deployment is
+not an enrolled slot. Before first installation, the root operator must stage the
+reviewed app image as `tuan-portfolio-blue` using this release's Compose profile,
+prove direct slot health, persist Traefik's attachment to the dedicated internal
+network without restarting shared ingress, and atomically migrate only the portfolio
+route. Preserve a private copy of the old route/container until public health and
+the generation header acknowledge the new slot. Do not change shared middleware,
+Cloudflare credentials, or other application routes.
+
+Use `install/install.sh --check --app tuan-portfolio --host oracle-main` with the
+reviewed release SHA, immutable app source/ref and dedicated public key, then the
+same command without `--check`. First blue-green enrollment requires an explicit
+`deployctl adopt --app tuan-portfolio` from that installed release before strict
+status and the per-app drain timer are enabled. The production GitHub environment
+receives only the forced-command account's `DEPLOY_SSH_KEY`, not the operator key.
+After a platform deployment passes, remove the old portfolio container, unused
+network attachment, and obsolete caller `VPS_*` secrets; never remove shared ingress.
+
 ### 4. Thành phần Stateful ChatGPT Web Runtime (`cgw`)
 
 **Production 9router đang tạm ngừng CGW (2026-10-16).** Registration không enroll `cgw`, host binding không có `cgw_network`, và caller runtime không còn trong build/security/deploy allowlists. Web app không cần Chrome/runtime để build, healthy hoặc deploy. Source/runtime implementation và account/browser volumes được giữ lại; không tự enroll hay khởi chạy lại.

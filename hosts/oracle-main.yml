@@ -26,3 +26,11 @@ apps:
     compose_project: penpot
     edge_network: edge-penpot
     route_name: penpot.yml
+  tuan-portfolio:
+    api_host: tuannguyenviet.site
+    dashboard_host: ""
+    dashboard_alias_host: ""
+    work_dir: /opt/tuan-portfolio
+    compose_project: tuan-portfolio
+    edge_network: edge-tuan-portfolio
+    route_name: tuan-portfolio.yml
