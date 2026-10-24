@@ -7,7 +7,6 @@ caller:
   config: .deploy/app.yml
   build_workflows: [deploy.yml]
   deploy_workflows: [deploy.yml]
-  security_workflows: []
 manifest:
   version: 1
   app: tuan-portfolio
