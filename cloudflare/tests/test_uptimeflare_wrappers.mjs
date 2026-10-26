@@ -56,9 +56,13 @@ test('failed browser navigation logs only allowlisted edge evidence and stays fa
     for (const malicious of [false, true]) {
       const headers = malicious ? { 'cf-ray': 'private-cookie', 'cf-mitigated': 'private-token' } : { 'cf-ray': 'a505f19aab82fe01-SIN', 'cf-mitigated': 'challenge' };
       await writeFile(join(directory, 'node_modules/playwright/index.js'), `
-        export const chromium = { async launch() { return {
-          async close() {}, async newContext() { return { async newPage() { return {
-            async route() {}, async goto() { return {
+        export const chromium = { async launch(options) {
+          if (!options.chromiumSandbox || options.executablePath !== '/usr/bin/chromium-browser' || options.args.includes('--no-sandbox')) throw new Error('Unsafe browser configuration');
+          return {
+          async close() {}, async newContext(options) {
+            if (options.serviceWorkers !== 'block') throw new Error('Unsafe service worker configuration');
+            return { async routeWebSocket() {}, async route() {}, async newPage() { return {
+            async goto() { return {
               status() { return 403; }, url() { return 'https://status.tuannguyenviet.site/'; },
               headers() { return ${JSON.stringify(headers)}; },
               async text() { return 'error code: 1010; private-response-body; secret=do-not-log'; }
@@ -66,12 +70,19 @@ test('failed browser navigation logs only allowlisted edge evidence and stays fa
           }; } }; }
         }; } };
       `);
-      const result = spawnSync(process.execPath, [join(directory, 'entry.mjs')], { encoding: 'utf8' });
+      const result = spawnSync(process.execPath, [join(directory, 'entry.mjs')], { encoding: 'utf8', input: JSON.stringify({ web_sha: '', monitor_sha: '' }) });
       assert.equal(result.status, 1);
       assert.equal(result.stdout, '');
       assert.match(result.stderr, /failed at navigation \(HTTP_403\)/);
       assert.match(result.stderr, malicious ? /edge ray=unavailable mitigation=none error=1010/ : /edge ray=a505f19aab82fe01-SIN mitigation=challenge error=1010/);
       assert.doesNotMatch(result.stderr, /private-|do-not-log/);
+    }
+    for (const request of [{ web_sha: '', monitor_sha: '', url: 'https://private-host/' }, { web_sha: ';private-command', monitor_sha: '' }, { web_sha: 1, monitor_sha: '' }, {}, 'x'.repeat(2049)]) {
+      const result = spawnSync(process.execPath, [join(directory, 'entry.mjs')], { encoding: 'utf8', input: JSON.stringify(request) });
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /failed at request/);
+      assert.doesNotMatch(result.stderr, /private-|https:/);
     }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

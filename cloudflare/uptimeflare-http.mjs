@@ -1,24 +1,34 @@
 import { chromium } from 'playwright';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const origin = 'https://status.tuannguyenviet.site';
 const limit = 8 * 1024 * 1024;
-const [webSha = '', monitorSha = ''] = process.argv.slice(2);
-if ([webSha, monitorSha].some(value => value && !/^[0-9a-f]{40}$/.test(value))) {
-  throw new Error('Invalid public release identity');
-}
 let browser;
-let stage = 'launch';
+let stage = 'request';
 let failureCode = 'unclassified';
 let edgeEvidence = '';
 try {
-  browser = await chromium.launch({ headless: true });
+  let input = '';
+  for await (const chunk of process.stdin) {
+    input += chunk.toString('utf8');
+    if (Buffer.byteLength(input) > 2048) throw new Error('Probe request exceeds size limit');
+  }
+  const request = JSON.parse(input);
+  if (!request || Array.isArray(request) || Object.keys(request).sort().join(',') !== 'monitor_sha,web_sha') throw new Error('Invalid probe request');
+  const { web_sha: webSha, monitor_sha: monitorSha } = request;
+  if ([webSha, monitorSha].some(value => typeof value !== 'string' || (value !== '' && !/^[0-9a-f]{40}$/.test(value)))) throw new Error('Invalid public release identity');
+  stage = 'launch';
+  browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/chromium-browser', chromiumSandbox: true, args: ['--disable-dev-shm-usage'] });
   stage = 'navigation';
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.route('**/*', route => {
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  await context.routeWebSocket('**/*', socket => socket.close());
+  await context.route('**/*', route => {
     const url = new URL(route.request().url());
-    return url.origin === origin ? route.continue() : route.abort();
+    return url.origin === origin && route.request().method() === 'GET' ? route.continue() : route.abort();
   });
+  const page = await context.newPage();
   const home = await page.goto(origin + '/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   if (!home || home.status() !== 200 || home.url() !== origin + '/') {
     failureCode = home ? 'HTTP_' + home.status() : 'NO_RESPONSE';
@@ -37,7 +47,7 @@ try {
   const html = await home.body();
   if (html.byteLength > limit) throw new Error('Public HTML exceeds size limit');
   const result = {
-    '/': { status: home.status(), headers: home.headers(), body: html.toString('base64') },
+    '/': { status: home.status(), headers: Object.fromEntries(Object.entries(home.headers()).filter(([name]) => ['content-type', 'cache-control'].includes(name))), body: html.toString('base64') },
   };
   stage = 'enumerate-resources';
   const resources = await page.evaluate(() => Array.from(document.querySelectorAll('script[src],link[rel="stylesheet"][href]'), node => node.getAttribute(node.tagName === 'SCRIPT' ? 'src' : 'href')).filter(path => path.startsWith('/_next/static/')));
@@ -59,10 +69,14 @@ try {
       for (let start = 0; start < bytes.length; start += 32768) {
         binary += String.fromCharCode(...bytes.subarray(start, start + 32768));
       }
-      return { status: response.status, headers: Object.fromEntries(response.headers), body: btoa(binary) };
+      return { status: response.status, headers: Object.fromEntries(['content-type', 'cache-control'].filter(name => response.headers.has(name)).map(name => [name, response.headers.get(name)])), body: btoa(binary) };
     }, { path, limit });
   }
-  process.stdout.write(JSON.stringify(result));
+  stage = 'serialize';
+  const scriptSha256 = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex');
+  const evidence = JSON.stringify({ script_sha256: scriptSha256, responses: result });
+  if (Buffer.byteLength(evidence) > 16 * 1024 * 1024) throw new Error('Probe evidence exceeds size limit');
+  process.stdout.write(evidence);
 } catch (error) {
   const network = /net::([A-Z_]+)/.exec(String(error))?.[1] || failureCode;
   process.stderr.write(`Actual Chromium public readiness failed at ${stage} (${network})${edgeEvidence}; no response bodies or credentials logged.\n`);
