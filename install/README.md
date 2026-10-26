@@ -98,6 +98,9 @@ The installer owns only:
 - the password-disabled system account/group `probe-uptimeflare` (shadow password
   `*`, allowing public-key authentication), with no supplementary groups,
   root-owned `/home/probe-uptimeflare` and its restricted SSH key;
+  `.ssh` is root-owned mode 0755 and its public `authorized_keys` is root-owned
+  mode 0644 so sshd can open it as the login UID; neither is writable by that UID.
+  No private key is installed on the VPS.
 - `/opt/vps-deploy-probe/releases/<SHA>` containing the probe, pinned Node binary,
   `playwright`, `playwright-core`, and digest manifest;
 - `/usr/local/libexec/vps-deploy-uptimeflare-probe-entry`, the fixed root wrapper
@@ -133,7 +136,9 @@ serialized transient systemd unit as the unprivileged probe account with a
 `PrivateTmp`, private devices, strict system/home protection, read-only probe
 runtime, no new privileges and empty capability sets. App/private paths
 `/etc/vps-deploy`, `/var/lib/vps-deploy`, `/opt/platform`, `/opt/9router`,
-`/opt/penpot`, `/opt/tuan-portfolio` and `/run/docker.sock` are inaccessible.
+`/opt/penpot` and `/opt/tuan-portfolio` are inaccessible. The Docker socket remains
+root:docker mode 0660 and the probe belongs only to its own group, so it has no
+Docker access; masking that SELinux-labelled socket is not required or permitted.
 Chromium's temporary profile lives in that unit's private
 temporary directory and is removed with it; no persistent browser profile is
 created. The unit is collected after completion. Wrapper stderr is preserved for

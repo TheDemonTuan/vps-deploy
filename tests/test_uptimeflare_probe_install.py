@@ -171,6 +171,8 @@ class UptimeflareProbeInstall(unittest.TestCase):
             module, args = self.fixture(home, stack)
             with mock.patch.object(module.subprocess, 'run') as run:
                 plan = module.check(args)
+                self.assertEqual(plan['directories'][module.HOME / '.ssh'], 0o755)
+                self.assertEqual(plan['resources'][module.HOME / '.ssh/authorized_keys'][1], 0o644)
                 previous_mask = os.umask(0o077)
                 try:
                     module.apply(plan)
@@ -275,7 +277,7 @@ class UptimeflareProbeInstall(unittest.TestCase):
                       b'MemoryMax=768M', b'CPUQuota=100%', b'TasksMax=256', b'/usr/bin/env -i',
                       b'PrivateDevices=yes', b'ReadOnlyPaths=', b'InaccessiblePaths=-/etc/vps-deploy',
                       b'-/var/lib/vps-deploy', b'-/opt/platform', b'-/opt/9router', b'-/opt/penpot',
-                      b'-/opt/tuan-portfolio', b'-/run/docker.sock', b'HOME=/tmp'):
+                      b'-/opt/tuan-portfolio', b'HOME=/tmp'):
             self.assertIn(token, wrapper)
         self.assertIn(b'NOPASSWD: /usr/local/libexec/vps-deploy-uptimeflare-probe ""\n', sudoers)
         self.assertNotIn(b'--no-sandbox', wrapper)

@@ -207,7 +207,7 @@ exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C /usr/bin/flock -n /run/vps-deploy
  --property=RuntimeMaxSec=90 --property=MemoryMax=768M --property=CPUQuota=100% --property=TasksMax=256 \\
  --property=PrivateTmp=yes --property=ProtectSystem=strict --property=ProtectHome=yes \\
  --property=PrivateDevices=yes --property=ReadOnlyPaths=RUNTIME \\
- '--property=InaccessiblePaths=-/etc/vps-deploy -/var/lib/vps-deploy -/opt/platform -/opt/9router -/opt/penpot -/opt/tuan-portfolio -/run/docker.sock' \\
+ '--property=InaccessiblePaths=-/etc/vps-deploy -/var/lib/vps-deploy -/opt/platform -/opt/9router -/opt/penpot -/opt/tuan-portfolio' \\
  --property=NoNewPrivileges=yes --property=CapabilityBoundingSet= --property=AmbientCapabilities= \\
  --property=UMask=0077 --property=WorkingDirectory=/tmp \\
  /usr/bin/env -i PATH=/usr/bin:/bin LANG=C HOME=/tmp UPTIMEFLARE_BROWSER_EXECUTABLE=/usr/bin/chromium-browser \\
@@ -272,8 +272,9 @@ def check(args):
     key = public_key(Path(args.public_key))
     resources = {ENTRY: (entry, 0o755), WRAPPER: (wrapper, 0o755), SUDOERS: (sudoers, 0o440),
                  HOME / '.ssh/authorized_keys':
-                     (b'restrict,command="' + str(ENTRY).encode() + b'" ' + key + b'\n', 0o600)}
-    directories = {BASE: 0o755, BASE / 'releases': 0o755, HOME: 0o755, HOME / '.ssh': 0o700,
+                     (b'restrict,command="' + str(ENTRY).encode() + b'" ' + key + b'\n', 0o644)}
+    # sshd opens public authorized_keys as the login UID; root retains write ownership.
+    directories = {BASE: 0o755, BASE / 'releases': 0o755, HOME: 0o755, HOME / '.ssh': 0o755,
                    ENTRY.parent: 0o755}
     for path, mode in directories.items():
         existing(path, directory=True, mode=mode)
