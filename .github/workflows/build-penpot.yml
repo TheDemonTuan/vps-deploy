@@ -96,7 +96,7 @@ jobs:
           PY
       - name: Retain built unverified images even when later proof fails
         id: archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: penpot-built-unverified-${{ inputs.source-sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/penpot-native-bundle/
@@ -126,7 +126,7 @@ jobs:
         run: python3 platform/scripts/write-penpot-proof.py --directory "$RUNNER_TEMP/penpot-proof"
       - name: Upload native proof, including failed lifecycle reports
         if: ${{ always() && steps.proof.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: penpot-proof-${{ inputs.source-sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -194,7 +194,7 @@ jobs:
             --output "$RUNNER_TEMP/penpot-release-$SOURCE_SHA.json"
       - name: Upload this run's coherent release evidence
         id: release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: penpot-release-${{ inputs.source-sha }}
           path: ${{ runner.temp }}/penpot-release-${{ inputs.source-sha }}.json
