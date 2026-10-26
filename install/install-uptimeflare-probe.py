@@ -333,7 +333,7 @@ def apply(plan):
                 shutil.rmtree(temporary)
     if not plan['installed_account']:
         subprocess.run(['/usr/sbin/useradd', '--system', '--user-group', '--no-create-home',
-                        '--no-log-init', '--key', 'CREATE_MAIL_SPOOL=no',
+                        '--no-log-init',
                         '--home-dir', str(HOME), '--shell', '/bin/sh', '--password', '*',
                         '--comment', 'vps-deploy uptimeflare probe', ACCOUNT],
                        check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

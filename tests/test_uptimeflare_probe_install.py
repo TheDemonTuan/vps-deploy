@@ -179,7 +179,7 @@ class UptimeflareProbeInstall(unittest.TestCase):
                 self.assertEqual(run.call_count, 2)  # useradd and visudo, never npm/network.
                 useradd = run.call_args_list[0].args[0]
                 self.assertIn('--no-log-init', useradd)
-                self.assertIn('CREATE_MAIL_SPOOL=no', useradd)
+                self.assertNotIn('--key', useradd)
                 self.assertEqual(useradd[useradd.index('--password') + 1], '*')
                 module.account_state.return_value = True
                 second = module.check(args)
