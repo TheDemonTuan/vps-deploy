@@ -1,14 +1,18 @@
 import copy
+import hashlib
 from email.message import Message
 from itertools import count
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 import uuid
 
+sys.path.insert(0, str(Path(__file__).parents[1]))
 spec = importlib.util.spec_from_file_location("uptimeflare", Path(__file__).parents[1] / "uptimeflare.py")
 adapter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(adapter)
@@ -234,16 +238,54 @@ class ReadinessTests(unittest.TestCase):
             if path == "/api/data":
                 return self.response("application/json", b'{"monitors":{"one":{"up":false}},"updatedAt":123}')
             return self.response("application/javascript", b'console.log("loaded")')
-        with patch.object(adapter, "public_get", side_effect=get):
+        with patch.object(adapter, "browser_transport", return_value=get):
             self.assertTrue(adapter.smoke(SHA, SHA)["previous_sha_verified"])
-        with patch.object(adapter, "public_get", return_value=self.response("text/html", b"Cloudflare challenge")):
+        with patch.object(adapter, "browser_transport", return_value=lambda path: self.response("text/html", b"Cloudflare challenge")):
             with self.assertRaises(adapter.DeployError):
                 adapter.smoke(SHA, SHA)
 
     def test_worker_runtime_marker_must_match(self):
-        with patch.object(adapter, "public_get", side_effect=[self.response("text/plain", (SHA + "\n").encode()), self.response("text/plain", (OLD_SHA + "\n").encode())]):
+        responses = iter([self.response("text/plain", (SHA + "\n").encode()), self.response("text/plain", (OLD_SHA + "\n").encode())])
+        with patch.object(adapter, "browser_transport", return_value=lambda path: next(responses)):
             with self.assertRaises(adapter.DeployError):
                 adapter.smoke(SHA, SHA)
+
+    def test_browser_failure_preserves_only_validated_edge_evidence(self):
+        stderr = b'Actual Chromium public readiness failed at navigation (HTTP_403); edge ray=a505f19aab82fe01-SIN mitigation=challenge error=1010; private-response-body'
+        result = SimpleNamespace(returncode=1, stderr=stderr)
+        with patch.object(adapter, 'invoke_probe', return_value=result) as probe:
+            with self.assertRaisesRegex(adapter.DeployError, 'edge ray=a505f19aab82fe01-SIN mitigation=challenge error=1010') as caught:
+                adapter.browser_transport(None, None)
+            probe.assert_called_once_with(b'{"web_sha": "", "monitor_sha": ""}')
+        self.assertNotIn('private-response-body', str(caught.exception))
+
+    def test_browser_failure_rejects_untrusted_edge_fields(self):
+        stderr = b'failed at navigation (HTTP_403); edge ray=private-token mitigation=challenge error=1010; private-response-body'
+        with patch.object(adapter, 'invoke_probe', return_value=SimpleNamespace(returncode=1, stderr=stderr)):
+            with self.assertRaises(adapter.DeployError) as caught:
+                adapter.browser_transport(None, None)
+        self.assertNotIn('private-', str(caught.exception))
+        self.assertNotIn('edge ray=', str(caught.exception))
+
+    def test_malformed_probe_evidence_stays_failed_without_body_leak(self):
+        for stdout in (b'private-response-body', b'[]'):
+            with self.subTest(stdout=stdout), patch.object(adapter, 'invoke_probe', return_value=SimpleNamespace(returncode=0, stdout=stdout)):
+                with self.assertRaises(adapter.DeployError) as caught:
+                    adapter.browser_transport(None, None)
+                self.assertNotIn('private-', str(caught.exception))
+
+    def test_resource_evidence_rejects_unexpected_headers(self):
+        stdout = json.dumps({'script_sha256': hashlib.sha256((adapter.HERE / 'uptimeflare-http.mjs').read_bytes()).hexdigest(), 'responses': {'/': {'status': 200, 'headers': {'set-cookie': 'private-cookie'}, 'body': ''}}}).encode()
+        with patch.object(adapter, 'invoke_probe', return_value=SimpleNamespace(returncode=0, stdout=stdout)):
+            with self.assertRaises(adapter.DeployError) as caught:
+                adapter.browser_transport(None, None)('/')
+        self.assertNotIn('private-cookie', str(caught.exception))
+
+    def test_stale_probe_runtime_is_not_accepted(self):
+        stdout = json.dumps({'script_sha256': 'a' * 64, 'responses': {}}).encode()
+        with patch.object(adapter, 'invoke_probe', return_value=SimpleNamespace(returncode=0, stdout=stdout)):
+            with self.assertRaisesRegex(adapter.DeployError, 'runtime revision mismatch'):
+                adapter.browser_transport(None, None)
 
     def test_cloudflare_json_error_is_not_a_success(self):
         class Response:

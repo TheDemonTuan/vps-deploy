@@ -113,9 +113,6 @@ jobs:
           cache-dependency-path: cloudflare/package-lock.json
       - name: Install pinned platform tooling without source code or credentials
         run: npm ci --prefix cloudflare --ignore-scripts
-      - name: Install actual public-browser verifier without deployment credentials
-        if: matrix.app == 'uptimeflare' && matrix.mode != 'survey'
-        run: node cloudflare/node_modules/playwright/cli.js install --with-deps chromium
       - name: Invoke only the platform-owned deployment adapter
         env:
           SELECTION: ${{ toJSON(matrix) }}
@@ -127,6 +124,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           UPTIMEFLARE_D1_ID: ${{ vars.UPTIMEFLARE_D1_ID }}
+          UPTIMEFLARE_PROBE_SSH_KEY: ${{ matrix.app == 'uptimeflare' && secrets.UPTIMEFLARE_PROBE_SSH_KEY || '' }}
         run: |
           python3 - <<'PY'
           import os, subprocess

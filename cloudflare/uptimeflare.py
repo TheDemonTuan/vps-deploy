@@ -19,13 +19,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from uptimeflare_probe import invoke as invoke_probe, ProbeError
 
 HERE = Path(__file__).resolve().parent
 MONITOR = "uptimeflare_worker"
 WEB = "uptimeflare-web"
 WORKERS = (MONITOR, WEB)
 D1_ID = "431a0d2e-6413-4e80-9d27-1ee933f14f05"
-ORIGIN = "https://status.tuannguyenviet.site"
 SECRETS = ("CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET", "BESZEL_ACCESS_CLIENT_ID", "BESZEL_ACCESS_CLIENT_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 MODULE_SUFFIXES = {".js", ".mjs", ".cjs", ".wasm", ".bin", ".txt", ".html", ".json"}
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -257,44 +257,49 @@ class Entries(HTMLParser):
             self.assets.add((values['href'], 'css'))
 
 
-def public_get(path):
-    opener = urllib.request.build_opener(NoRedirect())
-    try:
-        request = urllib.request.Request(ORIGIN + path, headers={"Cache-Control": "no-cache", "Accept-Encoding": "identity"})
-        with opener.open(request, timeout=20) as response:
-            body = response.read(8 * 1024 * 1024 + 1)
-            if len(body) > 8 * 1024 * 1024:
-                raise DeployError("Public readiness response exceeds size limit")
-            return response.status, response.headers, body
-    except urllib.error.HTTPError as exc:
-        raise DeployError(f"Public readiness {path.split('?')[0]} failed: HTTP {exc.code}") from None
-    except OSError:
-        raise DeployError("Public readiness request failed") from None
-
-
 def browser_transport(web_sha, monitor_sha):
-    public_env = {name: value for name, value in os.environ.items()
-                  if not name.startswith(('CLOUDFLARE_', 'UPTIMEFLARE_')) and name not in (*SECRETS, 'GH_TOKEN', 'GITHUB_TOKEN')}
-    result = subprocess.run(['node', str(HERE / 'uptimeflare-http.mjs'), web_sha or '', monitor_sha or ''],
-                            env=public_env, capture_output=True, timeout=90, check=False)
+    try:
+        request = json.dumps({'web_sha': web_sha or '', 'monitor_sha': monitor_sha or ''}).encode()
+        result = invoke_probe(request)
+    except ProbeError as exc:
+        raise DeployError(str(exc)) from None
     if result.returncode:
-        failure = re.search(rb'failed at (launch|navigation|read-html|enumerate-resources|validate-resource|fetch-resources) \((HTTP_[0-9]{3}|[A-Z_]+|unclassified)\)', result.stderr)
+        failure = re.search(rb'failed at (request|launch|navigation|read-html|enumerate-resources|validate-resource|fetch-resources|serialize) \((HTTP_[0-9]{3}|[A-Z_]+|unclassified)\)', result.stderr)
         reason = ' at ' + failure[1].decode() + ' (' + failure[2].decode() + ')' if failure else ''
+        edge = re.search(rb'; edge ray=([a-f0-9]{16}(?:-[A-Z]{3})?|unavailable) mitigation=(challenge|none) error=(1[0-9]{3}|unavailable)(?=;)', result.stderr)
+        if edge:
+            reason += '; edge ray=' + edge[1].decode() + ' mitigation=' + edge[2].decode() + ' error=' + edge[3].decode()
         raise DeployError('Actual Chromium public readiness failed' + reason + '; no HTTP fallback accepted')
-    responses = json.loads(result.stdout)
+    try:
+        evidence = json.loads(result.stdout)
+        if not isinstance(evidence, dict) or not isinstance(evidence.get('responses'), dict):
+            raise ValueError()
+        if evidence.get('script_sha256') != hashlib.sha256((HERE / 'uptimeflare-http.mjs').read_bytes()).hexdigest():
+            raise DeployError('Dedicated public probe runtime revision mismatch')
+        responses = evidence['responses']
+    except (ValueError, TypeError):
+        raise DeployError('Dedicated public probe returned malformed evidence') from None
     def get(path):
         if path not in responses:
             raise DeployError('Public browser did not observe a required readiness resource')
-        response = responses[path]
-        headers = Message()
-        for name, value in response['headers'].items():
-            headers[name] = value
-        return response['status'], headers, base64.b64decode(response['body'], validate=True)
+        try:
+            response = responses[path]
+            headers = Message()
+            for name, value in response['headers'].items():
+                if name.lower() not in {'content-type', 'cache-control'} or not isinstance(value, str) or '\n' in value or '\r' in value:
+                    raise ValueError()
+                headers[name] = value
+            body = base64.b64decode(response['body'], validate=True)
+            if type(response['status']) is not int or len(body) > 8 * 1024 * 1024:
+                raise ValueError()
+            return response['status'], headers, body
+        except (KeyError, ValueError, TypeError, AttributeError):
+            raise DeployError('Dedicated public probe returned malformed resource evidence') from None
     return get
 
 
 def smoke(web_sha=None, monitor_sha=None):
-    get = browser_transport(web_sha, monitor_sha) if os.environ.get('UPTIMEFLARE_PUBLIC_TRANSPORT') == 'chromium' else public_get
+    get = browser_transport(web_sha, monitor_sha)
     for path, sha in (("/__release", web_sha), ("/__monitor_release", monitor_sha)):
         if sha is None:
             continue
@@ -325,7 +330,7 @@ def smoke(web_sha=None, monitor_sha=None):
             raise ValueError()
     except (ValueError, AttributeError, TypeError):
         raise DeployError("Public status API returned an invalid monitoring snapshot") from None
-    return {"http": "passed", "web_sha": web_sha, "monitor_sha": monitor_sha,
+    return {"http": "passed", "transport": "vps_public_chromium", "web_sha": web_sha, "monitor_sha": monitor_sha,
             "previous_sha_verified": web_sha is not None and monitor_sha is not None}
 
 
