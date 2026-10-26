@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 import uuid
 
@@ -244,6 +245,23 @@ class ReadinessTests(unittest.TestCase):
         with patch.object(adapter, "public_get", side_effect=[self.response("text/plain", (SHA + "\n").encode()), self.response("text/plain", (OLD_SHA + "\n").encode())]):
             with self.assertRaises(adapter.DeployError):
                 adapter.smoke(SHA, SHA)
+
+    def test_browser_failure_preserves_only_validated_edge_evidence(self):
+        stderr = b'Actual Chromium public readiness failed at navigation (HTTP_403); edge ray=a505f19aab82fe01-SIN mitigation=challenge error=1010; private-response-body'
+        result = SimpleNamespace(returncode=1, stderr=stderr)
+        with patch.object(adapter.subprocess, 'run', return_value=result), patch.object(adapter, 'public_get') as fallback:
+            with self.assertRaisesRegex(adapter.DeployError, 'edge ray=a505f19aab82fe01-SIN mitigation=challenge error=1010') as caught:
+                adapter.browser_transport(None, None)
+            fallback.assert_not_called()
+        self.assertNotIn('private-response-body', str(caught.exception))
+
+    def test_browser_failure_rejects_untrusted_edge_fields(self):
+        stderr = b'failed at navigation (HTTP_403); edge ray=private-token mitigation=challenge error=1010; private-response-body'
+        with patch.object(adapter.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stderr=stderr)):
+            with self.assertRaises(adapter.DeployError) as caught:
+                adapter.browser_transport(None, None)
+        self.assertNotIn('private-', str(caught.exception))
+        self.assertNotIn('edge ray=', str(caught.exception))
 
     def test_cloudflare_json_error_is_not_a_success(self):
         class Response:

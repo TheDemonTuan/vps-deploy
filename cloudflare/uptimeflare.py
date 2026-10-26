@@ -280,6 +280,9 @@ def browser_transport(web_sha, monitor_sha):
     if result.returncode:
         failure = re.search(rb'failed at (launch|navigation|read-html|enumerate-resources|validate-resource|fetch-resources) \((HTTP_[0-9]{3}|[A-Z_]+|unclassified)\)', result.stderr)
         reason = ' at ' + failure[1].decode() + ' (' + failure[2].decode() + ')' if failure else ''
+        edge = re.search(rb'; edge ray=([a-f0-9]{16}(?:-[A-Z]{3})?|unavailable) mitigation=(challenge|none) error=(1[0-9]{3}|unavailable)(?=;)', result.stderr)
+        if edge:
+            reason += '; edge ray=' + edge[1].decode() + ' mitigation=' + edge[2].decode() + ' error=' + edge[3].decode()
         raise DeployError('Actual Chromium public readiness failed' + reason + '; no HTTP fallback accepted')
     responses = json.loads(result.stdout)
     def get(path):

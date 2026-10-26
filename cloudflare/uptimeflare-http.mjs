@@ -9,6 +9,7 @@ if ([webSha, monitorSha].some(value => value && !/^[0-9a-f]{40}$/.test(value))) 
 let browser;
 let stage = 'launch';
 let failureCode = 'unclassified';
+let edgeEvidence = '';
 try {
   browser = await chromium.launch({ headless: true });
   stage = 'navigation';
@@ -21,6 +22,15 @@ try {
   const home = await page.goto(origin + '/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   if (!home || home.status() !== 200 || home.url() !== origin + '/') {
     failureCode = home ? 'HTTP_' + home.status() : 'NO_RESPONSE';
+    if (home) {
+      const headers = home.headers();
+      const ray = /^[a-f0-9]{16}(?:-[A-Z]{3})?$/.test(headers['cf-ray'] || '') ? headers['cf-ray'] : 'unavailable';
+      const mitigation = headers['cf-mitigated'] === 'challenge' ? 'challenge' : 'none';
+      // Match an explicit provider error label, never arbitrary digits in application HTML.
+      const body = await home.text();
+      const code = body.length <= limit ? /(?:error code:\s*|Error\s+)(1\d{3})\b/i.exec(body)?.[1] : undefined;
+      edgeEvidence = `; edge ray=${ray} mitigation=${mitigation} error=${code || 'unavailable'}`;
+    }
     throw new Error('Public browser navigation did not return the fixed status page');
   }
   stage = 'read-html';
@@ -55,7 +65,7 @@ try {
   process.stdout.write(JSON.stringify(result));
 } catch (error) {
   const network = /net::([A-Z_]+)/.exec(String(error))?.[1] || failureCode;
-  process.stderr.write(`Actual Chromium public readiness failed at ${stage} (${network}); no response bodies or credentials logged.\n`);
+  process.stderr.write(`Actual Chromium public readiness failed at ${stage} (${network})${edgeEvidence}; no response bodies or credentials logged.\n`);
   process.exitCode = 1;
 } finally {
   if (browser) await browser.close();
