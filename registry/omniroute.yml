@@ -1,0 +1,26 @@
+version: 1
+app: omniroute
+host: oracle-main
+caller:
+  repository: TheDemonTuan/OmniRoute
+  ref: refs/heads/production
+  refs: [refs/heads/production]
+  config: .deploy/app.yml
+  build_workflows: [deploy.yml]
+  deploy_workflows: [deploy.yml, deploy-ops.yml]
+  security_workflows: [deploy.yml]
+manifest:
+  version: 1
+  app: omniroute
+  strategy: blue-green
+  image: ghcr.io/thedemontuan/omniroute-vps
+  platform: linux/arm64
+  runtime: {port: 20128}
+  health: {path: /api/health, timeout_seconds: 60}
+  route: {timeout_seconds: 30}
+runtime:
+  allowed_env: [INITIAL_PASSWORD, JWT_SECRET, API_KEY_SECRET, PUBLIC_URL]
+  required_env: [INITIAL_PASSWORD, JWT_SECRET, API_KEY_SECRET, PUBLIC_URL]
+route:
+  generation_header: X-OmniRoute-Route-Generation
+  required_middlewares: [deny-internal, tunnel-only, public-api-rate-limit, security-headers]
