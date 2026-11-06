@@ -3,8 +3,8 @@ app: omniroute
 host: oracle-main
 caller:
   repository: TheDemonTuan/OmniRoute
-  ref: refs/heads/main
-  refs: [refs/heads/main]
+  ref: refs/heads/production
+  refs: [refs/heads/production]
   config: .deploy/app.yml
   build_workflows: [deploy.yml]
   deploy_workflows: [deploy.yml, deploy-ops.yml]

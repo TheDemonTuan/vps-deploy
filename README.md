@@ -670,13 +670,13 @@ ACB HTML integrity comparison permits only whitespace between tags after tightly
 
 ## OmniRoute production
 
-`registry/omniroute.yml` enrolls `TheDemonTuan/OmniRoute`, branch `main`, using the
+`registry/omniroute.yml` enrolls `TheDemonTuan/OmniRoute`, branch `production`, using the
 existing ARM64 build/security/deploy contracts. Images are deployed by digest,
 not by `latest`. The source repository owns `.deploy/app.yml` and image smoke.
 
 - API: `omniroute-api.tuannguyenviet.site`; dashboard: `omniroute.tuannguyenviet.site`.
 - Dedicated resources: `omniroute-{blue,green}`, `edge-omniroute`, `omniroute-data`,
-  `/opt/omniroute`, `/etc/vps-deploy/omniroute`, and `deploy-omniroute` SSH identity.
+  `/opt/omniroute`, `/etc/vps-deploy/apps/omniroute`, and `deploy-omniroute` SSH identity.
 - The API hostname allows inference paths and health only; management paths fall
   through to the existing deny middleware. No host ports or Docker socket mount.
 - Root-owned mode-0600 `runtime.env` requires `INITIAL_PASSWORD`, `JWT_SECRET`,

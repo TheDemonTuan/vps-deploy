@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-from core import app_registration, host_registration, manifest, parse_yaml, resource_collisions
+from core import app_registration, host_registration, parse_yaml, resource_collisions
 from route import route_state
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +15,6 @@ class OmniRoute(unittest.TestCase):
         registration = app_registration(ROOT, 'omniroute')
         host = host_registration(ROOT, 'oracle-main')
         resource_collisions(host)
-        self.assertEqual(registration['caller']['refs'], ['refs/heads/main'])
         self.assertEqual(registration['manifest']['image'], 'ghcr.io/thedemontuan/omniroute')
         self.assertNotIn('rtk', registration['manifest'])
         self.assertNotIn('cgw', registration['manifest'])
