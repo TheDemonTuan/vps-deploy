@@ -673,6 +673,8 @@ ACB HTML integrity comparison permits only whitespace between tags after tightly
 `registry/omniroute.yml` enrolls `TheDemonTuan/OmniRoute`, branch `production`, using the
 existing ARM64 build/security/deploy contracts. Images are deployed by digest,
 not by `latest`. The source repository owns `.deploy/app.yml` and image smoke.
+The image repository is `ghcr.io/thedemontuan/omniroute-vps`; the pre-existing
+private `omniroute` package and its historical versions are not modified.
 
 - API: `omniroute-api.tuannguyenviet.site`; dashboard: `omniroute.tuannguyenviet.site`.
 - Dedicated resources: `omniroute-{blue,green}`, `edge-omniroute`, `omniroute-data`,

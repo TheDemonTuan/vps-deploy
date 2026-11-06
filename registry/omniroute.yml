@@ -13,7 +13,7 @@ manifest:
   version: 1
   app: omniroute
   strategy: blue-green
-  image: ghcr.io/thedemontuan/omniroute
+  image: ghcr.io/thedemontuan/omniroute-vps
   platform: linux/arm64
   runtime: {port: 20128}
   health: {path: /api/health, timeout_seconds: 60}

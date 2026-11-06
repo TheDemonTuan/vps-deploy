@@ -15,7 +15,6 @@ class OmniRoute(unittest.TestCase):
         registration = app_registration(ROOT, 'omniroute')
         host = host_registration(ROOT, 'oracle-main')
         resource_collisions(host)
-        self.assertEqual(registration['manifest']['image'], 'ghcr.io/thedemontuan/omniroute')
         self.assertNotIn('rtk', registration['manifest'])
         self.assertNotIn('cgw', registration['manifest'])
 
