@@ -139,6 +139,18 @@ class Ingress(unittest.TestCase):
                 run(client, 'apply')
             self.assertEqual(client.writes, [])
 
+    def test_reference_alias_is_required_even_when_primary_host_differs(self):
+        client = Client()
+        client.apps[0]['domain'] = '9router.tuannguyenviet.site'
+        client.apps[0]['self_hosted_domains'] = [REFERENCE_ADMIN]
+        run(client, 'apply')
+        self.assertEqual(client.dns[HOSTS[0]][0]['content'], TUNNEL + '.cfargotunnel.com')
+        writes = len(client.writes)
+        client.apps[0]['self_hosted_domains'] = []
+        with self.assertRaisesRegex(Failure, 'ADMIN_ACCESS_REQUIRED'):
+            run(client, 'apply')
+        self.assertEqual(len(client.writes), writes)
+
     def test_tunnel_drift_refuses_shared_write(self):
         client = Client()
         client.drift = True
