@@ -668,3 +668,29 @@ ACB HTML integrity comparison permits only whitespace between tags after tightly
 - ACB Workers Routes access subsequently succeeded: run `37218981819` created both route sets, but cutover failed at public verification. Retry `37220020426` failed because it checked the new artifact SHA against the older bootstrap without publishing it. The original run's route snapshots remain the recovery source; retry snapshots have no changes. Owner-browser acceptance is unavailable because the browser relay extension is not connected. ACB PR #113 remains open: no backend-only metadata migration or frontend-container removal is authorized by unauthenticated runner checks.
 - Recovery run `37220725551` passed full central CI and restored both original route snapshots from `37218981819`; its receipt confirms no Worker-version or VPS-metadata change. SSH then confirmed release `8a192a44d270c4f0c313ee1eae62c02c7a44ead5`, gateway/frontend `green`, and healthy frontend/gateway/worker. Public transaction API retained its JSON contract; bank retained its approved Access 302. Viewer static requests and a real managed-browser navigation encounter the existing CrowdSec challenge, so restored public UI rendering is not attested. No security rule was disabled. Corrected future cutover ordering is covered by state-transition regressions, not claimed as a completed production migration.
 
+## OmniRoute production
+
+`registry/omniroute.yml` enrolls `TheDemonTuan/OmniRoute`, branch `main`, using the
+existing ARM64 build/security/deploy contracts. Images are deployed by digest,
+not by `latest`. The source repository owns `.deploy/app.yml` and image smoke.
+
+- API: `omniroute-api.tuannguyenviet.site`; dashboard: `omniroute.tuannguyenviet.site`.
+- Dedicated resources: `omniroute-{blue,green}`, `edge-omniroute`, `omniroute-data`,
+  `/opt/omniroute`, `/etc/vps-deploy/omniroute`, and `deploy-omniroute` SSH identity.
+- The API hostname allows inference paths and health only; management paths fall
+  through to the existing deny middleware. No host ports or Docker socket mount.
+- Root-owned mode-0600 `runtime.env` requires `INITIAL_PASSWORD`, `JWT_SECRET`,
+  `API_KEY_SECRET`, and `PUBLIC_URL`. Generate new secrets; never reuse 9router's DB.
+- Initial enrollment requires a healthy immutable `omniroute-blue` container,
+  the app-owned route and network, then the existing installer `--check`, apply,
+  and `deployctl adopt`. Install only the app's dedicated forced-command public key.
+- Publish both hostnames through the existing Cloudflare tunnel before adoption:
+  public health and route-generation acknowledgement are mandatory, not bypassed.
+- Both slots share the OmniRoute SQLite volume. Before updating across schema
+  changes, take a consistent SQLite backup and verify backward compatibility;
+  switching an image does not roll back database migrations. Never attach
+  `9router-data` to OmniRoute. Browser/embedded CLI providers are not installed in
+  the lean production image; selecting those requires a separately reviewed image.
+
+Local checks: `python3 -m unittest discover -s tests -p test_omniroute.py -v`.
+

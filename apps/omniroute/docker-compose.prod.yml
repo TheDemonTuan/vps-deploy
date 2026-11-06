@@ -1,0 +1,58 @@
+x-environment: &environment
+  NODE_ENV: production
+  PORT: "20128"
+  HOSTNAME: "0.0.0.0"
+  API_HOST: "127.0.0.1"
+  DATA_DIR: /app/data
+  REQUIRE_API_KEY: "true"
+  INITIAL_PASSWORD: ${INITIAL_PASSWORD:?INITIAL_PASSWORD is required}
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+  API_KEY_SECRET: ${API_KEY_SECRET:?API_KEY_SECRET is required}
+  BASE_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
+  NEXT_PUBLIC_BASE_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
+  SHUTDOWN_TIMEOUT_MS: "60000"
+x-runtime: &runtime
+  image: ${IMAGE_REF:?IMAGE_REF must be an immutable image digest}
+  restart: unless-stopped
+  user: "1000:1000"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  networks: [edge]
+  expose: ["20128"]
+  volumes:
+    - omniroute-data:/app/data
+  stop_grace_period: 75s
+  healthcheck:
+    test: [CMD, wget, -qO-, "http://127.0.0.1:20128/api/health"]
+    interval: 5s
+    timeout: 3s
+    retries: 6
+    start_period: 15s
+  mem_limit: 2048m
+  cpus: 2.0
+  pids_limit: 256
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+services:
+  omniroute-blue:
+    <<: *runtime
+    container_name: omniroute-blue
+    environment:
+      <<: *environment
+      DEPLOY_SLOT: blue
+  omniroute-green:
+    <<: *runtime
+    container_name: omniroute-green
+    environment:
+      <<: *environment
+      DEPLOY_SLOT: green
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-edge-omniroute}
+volumes:
+  omniroute-data:
+    name: omniroute-data
