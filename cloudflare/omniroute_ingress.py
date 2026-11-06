@@ -30,14 +30,19 @@ def verify_security(client, zone, apps):
             if any(fnmatch.fnmatchcase(host, value.split('/', 1)[0]) for value in domains(app)) and (
                     host == HOSTS[0] or app not in own):
                 raise Failure('ACCESS_SCOPE_CONFLICT')
-    references = [app for app in apps if app.get('domain') == REFERENCE_ADMIN]
+    references = [app for app in apps if REFERENCE_ADMIN in domains(app)]
     if len(own) != 1 or len(references) != 1:
-        raise Failure('ADMIN_ACCESS_REQUIRED')
+        counts = {'apps': len(apps), 'owned': len(own), 'reference': len(references),
+                  'owned_name': sum(app.get('name') == ADMIN_NAME for app in apps),
+                  'reference_name': sum(app.get('name') == '9router Admin Dashboard' for app in apps),
+                  'domain_field': sum('domain' in app for app in apps),
+                  'destinations_field': sum('destinations' in app for app in apps)}
+        raise Failure('ADMIN_ACCESS_REQUIRED; inventory_counts=' + json.dumps(counts, sort_keys=True))
     base = '/accounts/' + client.account + '/access/apps/'
     admin = client.get(base + identity(own[0].get('id')))
     reference = client.get(base + identity(references[0].get('id')))
     allows = [policy for policy in inventory_list(reference.get('policies')) if policy.get('decision') == 'allow']
-    if reference.get('type') != 'self_hosted' or reference.get('domain') != REFERENCE_ADMIN or len(allows) != 1:
+    if reference.get('type') != 'self_hosted' or REFERENCE_ADMIN not in domains(reference) or len(allows) != 1:
         raise Failure('REFERENCE_IDENTITY_POLICY')
     includes = inventory_list(allows[0].get('include'))
     if not includes or any(set(rule) != {'email'} or

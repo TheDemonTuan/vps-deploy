@@ -702,6 +702,15 @@ private `omniroute` package and its historical versions are not modified.
   `PUBLIC_API_URL=https://omniroute-api.tuannguyenviet.site` supplies the runtime
   `OMNIROUTE_PUBLIC_BASE_URL` override; generated client endpoints and media URLs
   use the API host without changing dashboard login or OAuth callbacks.
+- Installer parity is mandatory for runtime/route changes. During initial
+  enrollment maintenance, pause only this app's drain timer and serialize its
+  submit/operation locks. Stage the already-accepted image in the other slot,
+  acknowledge its owned route, wait for real idle before recreating the original
+  slot with the reviewed Compose, then restore that slot/generation with the
+  reviewed route and drain the temporary slot. Preserve state bytes and sibling
+  routes; run installer `--check`, apply and `restorecon`, then restore the timer.
+  Do not force parity, edit controller state or use an unscanned image. Ordinary
+  application changes subsequently use the normal source Actions cutover.
 - Initial enrollment requires a healthy immutable `omniroute-blue` container,
   the app-owned route and network, then the existing installer `--check`, apply,
   and `deployctl adopt`. Install only the app's dedicated forced-command public key.
