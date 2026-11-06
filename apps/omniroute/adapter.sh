@@ -26,6 +26,10 @@ http:
       headers:
         customResponseHeaders:
           X-OmniRoute-Route-Generation: "$generation"
+    omniroute-api-key-only:
+      headers:
+        customRequestHeaders:
+          Cookie: ""
   routers:
     omniroute-deny-internal:
       rule: "(Host(\`$dashboard\`) || Host(\`$api\`)) && PathPrefix(\`/internal\`)"
@@ -34,10 +38,11 @@ http:
       middlewares: [deny-internal]
       service: omniroute-service
     omniroute-api-router:
-      rule: "Host(\`$api\`) && !PathRegexp(\`(?i)^/(api/)?v1/management\`) && (PathPrefix(\`/v1/\`) || PathPrefix(\`/api/v1/\`) || PathPrefix(\`/v1beta/\`) || PathPrefix(\`/api/v1beta/\`) || Path(\`/api/health\`))"
+      # shortcut: explicit v1 control-plane prefixes; review them when syncing upstream.
+      rule: "Host(\`$api\`) && !PathRegexp(\`(?i)^/(api/)?v1/(management|registered-keys|agents|accounts|providers|issues|quotas)\`) && (PathPrefix(\`/v1/\`) || PathPrefix(\`/api/v1/\`) || PathPrefix(\`/v1beta/\`) || PathPrefix(\`/api/v1beta/\`) || Path(\`/api/health\`))"
       entryPoints: [web]
       priority: 500
-      middlewares: [omniroute-route-generation, tunnel-only, public-api-rate-limit, security-headers]
+      middlewares: [omniroute-api-key-only, omniroute-route-generation, tunnel-only, public-api-rate-limit, security-headers]
       service: omniroute-service
     omniroute-api-fallback:
       rule: "Host(\`$api\`)"

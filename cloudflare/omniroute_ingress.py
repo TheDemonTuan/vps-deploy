@@ -20,7 +20,19 @@ API_PATH_EXPRESSION = (
     'starts_with(http.request.uri.path, "/api/v1beta/") or '
     'http.request.uri.path eq "/api/health") or '
     'starts_with(lower(http.request.uri.path), "/v1/management") or '
-    'starts_with(lower(http.request.uri.path), "/api/v1/management"))')
+    'starts_with(lower(http.request.uri.path), "/api/v1/management") or '
+    'starts_with(lower(http.request.uri.path), "/v1/registered-keys") or '
+    'starts_with(lower(http.request.uri.path), "/api/v1/registered-keys") or '
+    'starts_with(lower(http.request.uri.path), "/v1/agents") or '
+    'starts_with(lower(http.request.uri.path), "/api/v1/agents") or '
+    'starts_with(lower(http.request.uri.path), "/v1/accounts") or '
+    'starts_with(lower(http.request.uri.path), "/api/v1/accounts") or '
+    'starts_with(lower(http.request.uri.path), "/v1/providers") or '
+    'starts_with(lower(http.request.uri.path), "/api/v1/providers") or '
+    'starts_with(lower(http.request.uri.path), "/v1/issues") or '
+    'starts_with(lower(http.request.uri.path), "/api/v1/issues") or '
+    'starts_with(lower(http.request.uri.path), "/v1/quotas") or '
+    'starts_with(lower(http.request.uri.path), "/api/v1/quotas"))')
 
 
 def verify_security(client, zone, apps):
