@@ -3,6 +3,7 @@ x-environment: &environment
   PORT: "20128"
   HOSTNAME: "0.0.0.0"
   API_HOST: "127.0.0.1"
+  OMNIROUTE_TRUST_PROXY: private
   DATA_DIR: /app/data
   REQUIRE_API_KEY: "true"
   INITIAL_PASSWORD: ${INITIAL_PASSWORD:?INITIAL_PASSWORD is required}
