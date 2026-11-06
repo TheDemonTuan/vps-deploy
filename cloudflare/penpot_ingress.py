@@ -28,6 +28,8 @@ def permission(path, method='GET'):
         return 'Access: Apps and Policies: Read' if method == 'GET' else 'Access: Apps and Policies: Edit'
     if '/cfd_tunnel/' in path:
         return 'Cloudflare Tunnel: Read' if method == 'GET' else 'Cloudflare Tunnel: Edit'
+    if '/rulesets/phases/http_request_firewall_custom/' in path:
+        return 'Zone WAF: Read'
     if '/rulesets' in path:
         return 'Cache Rules: Read' if method == 'GET' else 'Cache Rules: Edit'
     return 'Zone: Read'

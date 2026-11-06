@@ -11,6 +11,7 @@ x-environment: &environment
   API_KEY_SECRET: ${API_KEY_SECRET:?API_KEY_SECRET is required}
   BASE_URL: http://127.0.0.1:20128
   NEXT_PUBLIC_BASE_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
+  OMNIROUTE_PUBLIC_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL is required}
   SHUTDOWN_TIMEOUT_MS: "60000"
 x-runtime: &runtime
   image: ${IMAGE_REF:?IMAGE_REF must be an immutable image digest}

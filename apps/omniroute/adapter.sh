@@ -34,7 +34,7 @@ http:
       middlewares: [deny-internal]
       service: omniroute-service
     omniroute-api-router:
-      rule: "Host(\`$api\`) && (PathPrefix(\`/v1/\`) || PathPrefix(\`/api/v1/\`) || PathPrefix(\`/v1beta/\`) || PathPrefix(\`/api/v1beta/\`) || Path(\`/api/health\`))"
+      rule: "Host(\`$api\`) && !PathRegexp(\`(?i)^/(api/)?v1/management\`) && (PathPrefix(\`/v1/\`) || PathPrefix(\`/api/v1/\`) || PathPrefix(\`/v1beta/\`) || PathPrefix(\`/api/v1beta/\`) || Path(\`/api/health\`))"
       entryPoints: [web]
       priority: 500
       middlewares: [omniroute-route-generation, tunnel-only, public-api-rate-limit, security-headers]

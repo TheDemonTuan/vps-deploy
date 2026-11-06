@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from omniroute_ingress import HOSTS, Failure, TUNNEL, run
+from omniroute_ingress import ADMIN_NAME, API_PATH_EXPRESSION, API_PATH_REF, HOSTS, REFERENCE_ADMIN, Failure, TUNNEL, run
 
 
 class Client:
@@ -15,7 +15,19 @@ class Client:
             'ingress': [{'hostname': '9router-api.tuannguyenviet.site', 'service': 'https://old-origin'},
                         {'service': 'http_status:404'}]}}
         self.dns = {host: [] for host in HOSTS}
-        self.apps = []
+        allow = {'decision': 'allow', 'include': [{'email': {'email': 'owner@example.invalid'}}],
+                 'exclude': [], 'require': []}
+        self.apps = [
+            {'id': 'reference', 'domain': REFERENCE_ADMIN, 'type': 'self_hosted',
+             'allowed_idps': ['email-otp'], 'session_duration': '24h',
+             'policies': [copy.deepcopy(allow), {'decision': 'non_identity', 'include': [{'service_token': {'token_id': 'monitor'}}]}]},
+            {'id': 'omniroute-admin', 'name': ADMIN_NAME, 'domain': HOSTS[1],
+             'self_hosted_domains': [HOSTS[1]], 'type': 'self_hosted',
+             'allowed_idps': ['email-otp'], 'session_duration': '24h',
+             'http_only_cookie_attribute': True, 'policies': [copy.deepcopy(allow)]}]
+        self.waf = {'kind': 'zone', 'phase': 'http_request_firewall_custom', 'rules': [
+            {'ref': API_PATH_REF, 'action': 'block', 'enabled': True, 'expression': API_PATH_EXPRESSION},
+            {'ref': 'existing-ip-bans', 'action': 'block', 'expression': 'ip.src in $banned'}]}
         self.writes = []
         self.drift = False
         self.config_reads = 0
@@ -31,6 +43,10 @@ class Client:
                     'client_id': client, 'is_pending_reconnect': False}]}]
         if '/access/apps?' in path:
             return copy.deepcopy(self.apps)
+        if '/access/apps/' in path:
+            return copy.deepcopy(next(app for app in self.apps if app['id'] == path.rsplit('/', 1)[1]))
+        if '/rulesets/phases/http_request_firewall_custom/' in path:
+            return copy.deepcopy(self.waf)
         if path.endswith('/configurations'):
             self.config_reads += 1
             value = copy.deepcopy(self.config)
@@ -54,6 +70,7 @@ class Ingress(unittest.TestCase):
     def test_add_preserves_siblings_and_is_repeatable(self):
         client = Client()
         original = copy.deepcopy(client.config['config'])
+        security = copy.deepcopy((client.apps, client.waf))
         run(client, 'survey')
         self.assertEqual(client.writes, [])
         run(client, 'apply')
@@ -66,6 +83,7 @@ class Ingress(unittest.TestCase):
         writes = len(client.writes)
         run(client, 'apply')
         self.assertEqual(len(client.writes), writes)
+        self.assertEqual((client.apps, client.waf), security)
 
     def test_dns_or_access_conflict_never_writes(self):
         for conflict in ('dns', 'access', 'wildcard'):
@@ -77,6 +95,47 @@ class Ingress(unittest.TestCase):
             else:
                 client.config['config']['ingress'].insert(0, {'hostname': '*.tuannguyenviet.site', 'service': 'http://foreign'})
             with self.subTest(conflict=conflict), self.assertRaises(Failure):
+                run(client, 'apply')
+            self.assertEqual(client.writes, [])
+
+    def test_access_exposure_or_identity_drift_never_writes(self):
+        for change in ('missing', 'bypass', 'service-auth', 'wrong-email', 'wrong-idp', 'alias', 'cookie', 'reference-everyone', 'api-access'):
+            client = Client()
+            admin = client.apps[1]
+            if change == 'missing':
+                client.apps.pop()
+            elif change == 'bypass':
+                admin['policies'][0]['decision'] = 'bypass'
+            elif change == 'service-auth':
+                admin['policies'].append(copy.deepcopy(client.apps[0]['policies'][1]))
+            elif change == 'wrong-email':
+                admin['policies'][0]['include'] = [{'email': {'email': 'stranger@example.invalid'}}]
+            elif change == 'wrong-idp':
+                admin['allowed_idps'] = ['different-provider']
+            elif change == 'alias':
+                admin['self_hosted_domains'].append('unprotected-alias.example.invalid')
+            elif change == 'cookie':
+                admin['http_only_cookie_attribute'] = False
+            elif change == 'reference-everyone':
+                client.apps[0]['policies'][0]['include'] = [{'everyone': {}}]
+            else:
+                client.apps.append({'domain': HOSTS[0]})
+            with self.subTest(change=change), self.assertRaises(Failure):
+                run(client, 'apply')
+            self.assertEqual(client.writes, [])
+
+    def test_api_waf_cannot_be_removed_weakened_or_skipped(self):
+        for change in ('missing', 'disabled', 'wrong-expression', 'earlier-skip'):
+            client = Client()
+            if change == 'missing':
+                client.waf['rules'].pop(0)
+            elif change == 'disabled':
+                client.waf['rules'][0]['enabled'] = False
+            elif change == 'wrong-expression':
+                client.waf['rules'][0]['expression'] = 'http.host eq "other.example.invalid"'
+            else:
+                client.waf['rules'].insert(0, {'action': 'skip', 'action_parameters': {'ruleset': 'current'}})
+            with self.subTest(change=change), self.assertRaisesRegex(Failure, 'API_PATH_WAF_POLICY_DRIFT'):
                 run(client, 'apply')
             self.assertEqual(client.writes, [])
 

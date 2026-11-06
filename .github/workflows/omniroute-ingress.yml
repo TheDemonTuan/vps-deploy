@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Survey first; apply only after verifying the enrolled origin
+        description: Survey first; verify origin, admin Access and API WAF before apply
         type: choice
         required: true
         options: [survey, apply]
@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
       - name: Verify scoped ingress state transitions without credentials
         run: python3 -m unittest discover -s cloudflare/tests -p test_omniroute_ingress.py -v
-      - name: Enroll only OmniRoute hostnames
+      - name: Verify security and enroll only OmniRoute hostnames
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
