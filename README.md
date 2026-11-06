@@ -683,6 +683,8 @@ private `omniroute` package and its historical versions are not modified.
   through to the existing deny middleware. No host ports or Docker socket mount.
 - Root-owned mode-0600 `runtime.env` requires `INITIAL_PASSWORD`, `JWT_SECRET`,
   `API_KEY_SECRET`, and `PUBLIC_URL`. Generate new secrets; never reuse 9router's DB.
+- `BASE_URL` stays on container loopback for internal sync jobs; only
+  `NEXT_PUBLIC_BASE_URL` uses `PUBLIC_URL` for public dashboard/OAuth callbacks.
 - Initial enrollment requires a healthy immutable `omniroute-blue` container,
   the app-owned route and network, then the existing installer `--check`, apply,
   and `deployctl adopt`. Install only the app's dedicated forced-command public key.
