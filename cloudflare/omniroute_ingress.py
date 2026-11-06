@@ -13,12 +13,14 @@ REFERENCE_ADMIN = '9router-admin.tuannguyenviet.site'
 ADMIN_NAME = 'OmniRoute Admin Dashboard'
 API_PATH_REF = 'omniroute_api_paths'
 API_PATH_EXPRESSION = (
-    '(http.host eq "' + HOSTS[0] + '") and not ('
+    '(http.host eq "' + HOSTS[0] + '") and (not ('
     'starts_with(http.request.uri.path, "/v1/") or '
     'starts_with(http.request.uri.path, "/api/v1/") or '
     'starts_with(http.request.uri.path, "/v1beta/") or '
     'starts_with(http.request.uri.path, "/api/v1beta/") or '
-    'http.request.uri.path eq "/api/health")')
+    'http.request.uri.path eq "/api/health") or '
+    'starts_with(lower(http.request.uri.path), "/v1/management") or '
+    'starts_with(lower(http.request.uri.path), "/api/v1/management"))')
 
 
 def verify_security(client, zone, apps):

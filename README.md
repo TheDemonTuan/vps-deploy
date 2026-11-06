@@ -688,13 +688,20 @@ private `omniroute` package and its historical versions are not modified.
   OmniRoute password authentication remains enabled behind Access.
 - The first zone custom WAF rule, `omniroute_api_paths`, blocks API-host requests
   outside `/v1/`, `/api/v1/`, `/v1beta/`, `/api/v1beta/` and exact `/api/health`.
+  `/v1/management*` and `/api/v1/management*` are also denied, case-insensitively,
+  at both Cloudflare and the origin: OmniRoute has real management handlers
+  inside the otherwise client-facing versioned namespace.
   The API hostname has no Access application: CLI clients use API keys, and the
   deploy controller can verify health without a browser session. Origin path
   denial and API rate limiting remain active behind Cloudflare.
 - Root-owned mode-0600 `runtime.env` requires `INITIAL_PASSWORD`, `JWT_SECRET`,
-  `API_KEY_SECRET`, and `PUBLIC_URL`. Generate new secrets; never reuse 9router's DB.
+  `API_KEY_SECRET`, `PUBLIC_URL` and `PUBLIC_API_URL`. Generate new secrets;
+  never reuse 9router's DB.
 - `BASE_URL` stays on container loopback for internal sync jobs; only
   `NEXT_PUBLIC_BASE_URL` uses `PUBLIC_URL` for public dashboard/OAuth callbacks.
+  `PUBLIC_API_URL=https://omniroute-api.tuannguyenviet.site` supplies the runtime
+  `OMNIROUTE_PUBLIC_BASE_URL` override; generated client endpoints and media URLs
+  use the API host without changing dashboard login or OAuth callbacks.
 - Initial enrollment requires a healthy immutable `omniroute-blue` container,
   the app-owned route and network, then the existing installer `--check`, apply,
   and `deployctl adopt`. Install only the app's dedicated forced-command public key.

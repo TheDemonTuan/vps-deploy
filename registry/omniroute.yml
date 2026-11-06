@@ -19,8 +19,8 @@ manifest:
   health: {path: /api/health, timeout_seconds: 60}
   route: {timeout_seconds: 30}
 runtime:
-  allowed_env: [INITIAL_PASSWORD, JWT_SECRET, API_KEY_SECRET, PUBLIC_URL]
-  required_env: [INITIAL_PASSWORD, JWT_SECRET, API_KEY_SECRET, PUBLIC_URL]
+  allowed_env: [INITIAL_PASSWORD, JWT_SECRET, API_KEY_SECRET, PUBLIC_URL, PUBLIC_API_URL]
+  required_env: [INITIAL_PASSWORD, JWT_SECRET, API_KEY_SECRET, PUBLIC_URL, PUBLIC_API_URL]
 route:
   generation_header: X-OmniRoute-Route-Generation
   required_middlewares: [deny-internal, tunnel-only, public-api-rate-limit, security-headers]
