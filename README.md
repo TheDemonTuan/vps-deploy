@@ -688,9 +688,11 @@ private `omniroute` package and its historical versions are not modified.
   OmniRoute password authentication remains enabled behind Access.
 - The first zone custom WAF rule, `omniroute_api_paths`, blocks API-host requests
   outside `/v1/`, `/api/v1/`, `/v1beta/`, `/api/v1beta/` and exact `/api/health`.
-  `/v1/management*` and `/api/v1/management*` are also denied, case-insensitively,
-  at both Cloudflare and the origin: OmniRoute has real management handlers
-  inside the otherwise client-facing versioned namespace.
+  Versioned `management`, `registered-keys`, `agents`, `accounts`, `providers`,
+  `issues` and `quotas` prefixes are denied case-insensitively under both `/v1/`
+  and `/api/v1/`, at Cloudflare and the origin. The API router strips incoming
+  cookies so a dashboard session cannot bypass API-key authentication.
+  Review these explicit control-plane prefixes whenever syncing upstream.
   The API hostname has no Access application: CLI clients use API keys, and the
   deploy controller can verify health without a browser session. Origin path
   denial and API rate limiting remain active behind Cloudflare.

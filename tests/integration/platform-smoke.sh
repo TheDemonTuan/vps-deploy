@@ -43,7 +43,7 @@ cleanup() {
   systemctl disable --now 'vps-deploy-drain@9router.timer' 'vps-deploy-drain@demo.timer' 2>/dev/null || true
   rm -f /etc/systemd/system/vps-deploy-drain@.service /etc/systemd/system/vps-deploy-drain@.timer
   systemctl daemon-reload 2>/dev/null || true
-  for name in edge-traefik 9router-blue 9router-green 9router-rtk-rtk-1 demo-blue demo-green fixture-registry; do docker rm -f "$name" >/dev/null 2>&1; done
+  for name in edge-traefik 9router-blue 9router-green 9router-rtk-rtk-1 demo-blue demo-green omniroute-blue fixture-registry; do docker rm -f "$name" >/dev/null 2>&1; done
   for name in edge-9router edge-demo 9router-rtk 9router_internal; do docker network rm "$name" >/dev/null 2>&1; done
   docker volume rm 9router-data demo-data >/dev/null 2>&1
   for tagged in localhost:5000/9router:first localhost:5000/9router:second localhost:5000/rtk-sidecar:rtk localhost:5000/rtk-sidecar:rtk-bad localhost:5000/demo:first localhost:5000/demo:second; do docker image rm "$tagged" >/dev/null 2>&1; done
@@ -58,7 +58,7 @@ cleanup() {
 for path in /etc/vps-deploy/fixture-ci "$profile" "$state" "$release" "$new_release" /etc/vps-deploy/apps/demo /var/lib/vps-deploy/apps/demo /opt/vps-deploy/current /usr/local/libexec/vps-deploy-9router /usr/local/libexec/vps-deploy-demo /usr/local/libexec/vps-deploy-drain-9router /usr/local/libexec/vps-deploy-drain-demo /etc/sudoers.d/vps-deploy-9router /etc/sudoers.d/vps-deploy-demo /etc/systemd/system/vps-deploy-drain@.service /etc/systemd/system/vps-deploy-drain@.timer; do
   [[ ! -e $path && ! -L $path ]] || { echo "Refusing occupied fixture path $path" >&2; exit 1; }
 done
-for name in edge-traefik 9router-blue 9router-green 9router-rtk-rtk-1 demo-blue demo-green fixture-registry; do
+for name in edge-traefik 9router-blue 9router-green 9router-rtk-rtk-1 demo-blue demo-green omniroute-blue fixture-registry; do
   ! docker container inspect "$name" >/dev/null 2>&1 || { echo "Container occupied: $name" >&2; exit 1; }
 done
 for name in edge-9router edge-demo 9router-rtk; do
@@ -82,9 +82,9 @@ for area in bin lib apps schema install; do cp -a "$root/$area" "$release/$area"
 chown -R root:root "$release"; chmod -R go-w "$release"
 ln -s "$release" /opt/vps-deploy/current
 install -m 0600 /dev/null /etc/vps-deploy/fixture-ci
-printf '%s\n' "127.0.0.1 $api dashboard.platform-smoke.test legacy.platform-smoke.test sentinel.platform-smoke.test demo.fixture.test # vps-deploy-smoke" >> /etc/hosts
+printf '%s\n' "127.0.0.1 $api dashboard.platform-smoke.test legacy.platform-smoke.test sentinel.platform-smoke.test demo.fixture.test omni-api.platform-smoke.test omni-admin.platform-smoke.test # vps-deploy-smoke" >> /etc/hosts
 hosts_written=1
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=platform-smoke.test' -addext 'subjectAltName=DNS:api.platform-smoke.test,DNS:dashboard.platform-smoke.test,DNS:legacy.platform-smoke.test,DNS:sentinel.platform-smoke.test,DNS:demo.fixture.test' -keyout "$fixture/server.key" -out "$cert" >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=platform-smoke.test' -addext 'subjectAltName=DNS:api.platform-smoke.test,DNS:dashboard.platform-smoke.test,DNS:legacy.platform-smoke.test,DNS:sentinel.platform-smoke.test,DNS:demo.fixture.test,DNS:omni-api.platform-smoke.test,DNS:omni-admin.platform-smoke.test' -keyout "$fixture/server.key" -out "$cert" >/dev/null 2>&1
 install -m 0644 "$cert" "$ca"
 python3 "$root/tests/integration/server.py" tls "$cert" "$fixture/server.key" 18080 "$fixture" & tls_pid=$!
 cat > "$profile/app.yml" <<'YAML'
@@ -280,6 +280,34 @@ bash "$new_release/install/install.sh" --fixture --app 9router --host fixture-lo
 release=$new_release release_sha=$new_sha root=$new_root
 "$release/bin/deployctl" status --app 9router --strict | assert_json '{"healthy":true}'
 printf 'BASELINE_9ROUTER_MIGRATION_OK\n'
+docker run -d --name omniroute-blue --network edge-9router -e DEPLOY_SLOT=blue "$first" >/dev/null
+bash "$release/apps/omniroute/adapter.sh" blue bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb omni-admin.platform-smoke.test '' omni-api.platform-smoke.test > "$fixture/dynamic/omniroute.yml"
+chmod 0644 "$fixture/dynamic/omniroute.yml"
+for _ in {1..40}; do
+  if curl -fsS --cacert "$ca" 'https://omni-api.platform-smoke.test/api/health' | assert_json '{"deployment_slot":"blue"}' 2>/dev/null; then break; fi
+  sleep .5
+done
+curl -fsS --cacert "$ca" 'https://omni-api.platform-smoke.test/api/health' | assert_json '{"deployment_slot":"blue"}'
+for prefix in /v1 /api/v1; do
+  for control in management registered-keys agents accounts providers issues quotas; do
+    for path in "$prefix/$control" "$prefix/${control^^}/probe"; do
+      [[ $(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --cacert "$ca" "https://omni-api.platform-smoke.test$path") == 403 ]]
+      [[ $(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --cacert "$ca" "https://omni-admin.platform-smoke.test$path") == 404 ]]
+    done
+  done
+done
+for path in / /login /api/settings /api/health/ping /v1/management%2fproxies; do
+  [[ $(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --cacert "$ca" "https://omni-api.platform-smoke.test$path") == 403 ]]
+done
+for path in /v1/models /api/v1/chat/completions /v1beta/models /api/v1beta/models; do
+  [[ $(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --cacert "$ca" "https://omni-api.platform-smoke.test$path") == 404 ]]
+done
+curl -fsS --cacert "$ca" "https://$api/api/health" | assert_json '{"deployment_slot":"blue"}'
+sha256sum -c "$fixture/sentinel.sha" >/dev/null
+rm "$fixture/dynamic/omniroute.yml"
+docker rm -f omniroute-blue >/dev/null
+printf 'OMNIROUTE_API_BOUNDARY_OK\n'
+
 demo_profile=/etc/vps-deploy/apps/demo
 demo_state=/var/lib/vps-deploy/apps/demo
 install -d -m 0700 "$fixture/demo" "$demo_profile" "$demo_state" "$demo_state/requests"
