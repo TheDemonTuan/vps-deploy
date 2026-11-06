@@ -681,6 +681,16 @@ private `omniroute` package and its historical versions are not modified.
   `/opt/omniroute`, `/etc/vps-deploy/apps/omniroute`, and `deploy-omniroute` SSH identity.
 - The API hostname allows inference paths and health only; management paths fall
   through to the existing deny middleware. No host ports or Docker socket mount.
+- Cloudflare Access protects the entire dashboard hostname, including login,
+  settings and static assets. Its single identity policy copies the exact email
+  allowlist, IdP and 24-hour session from `9router-admin.tuannguyenviet.site`;
+  9router's monitoring service-token policy is deliberately not copied. Native
+  OmniRoute password authentication remains enabled behind Access.
+- The first zone custom WAF rule, `omniroute_api_paths`, blocks API-host requests
+  outside `/v1/`, `/api/v1/`, `/v1beta/`, `/api/v1beta/` and exact `/api/health`.
+  The API hostname has no Access application: CLI clients use API keys, and the
+  deploy controller can verify health without a browser session. Origin path
+  denial and API rate limiting remain active behind Cloudflare.
 - Root-owned mode-0600 `runtime.env` requires `INITIAL_PASSWORD`, `JWT_SECRET`,
   `API_KEY_SECRET`, and `PUBLIC_URL`. Generate new secrets; never reuse 9router's DB.
 - `BASE_URL` stays on container loopback for internal sync jobs; only
@@ -688,6 +698,11 @@ private `omniroute` package and its historical versions are not modified.
 - Initial enrollment requires a healthy immutable `omniroute-blue` container,
   the app-owned route and network, then the existing installer `--check`, apply,
   and `deployctl adopt`. Install only the app's dedicated forced-command public key.
+- On the SELinux-enforcing Oracle host, run
+  `sudo restorecon -R /opt/vps-deploy/releases/<reviewed-platform-sha>` after each
+  installer apply and before adoption/Actions. A checkout copied from `/root`
+  can retain `admin_home_t`; the host's existing policy assigns executable
+  `bin_t`. Keep SELinux enforcing; do not change release bytes or disable it.
 - Publish both hostnames through the existing Cloudflare tunnel before adoption:
   public health and route-generation acknowledgement are mandatory, not bypassed.
 - Both slots share the OmniRoute SQLite volume. Before updating across schema
@@ -698,11 +713,19 @@ private `omniroute` package and its historical versions are not modified.
 
 Local checks: `python3 -m unittest discover -s tests -p test_omniroute.py -v`.
 
+Configure the scoped Access application and API custom WAF rule in the owner
+Cloudflare console before publishing DNS. `cloudflare/omniroute_ingress.py`
+contains the exact rule expression; keep that rule first so an earlier skip rule
+cannot bypass it. No wildcard or secondary dashboard alias is permitted.
+
 Run `omniroute-ingress.yml` with `operation=survey` before enrollment. Its
 `operation=apply` requires the protected `platform-admin` environment and an
-independently verified healthy origin. It adds only the two exact DNS CNAMEs and
-tunnel rules, verifies TLS using the existing origin CA, refuses DNS/tunnel/Access
-ownership conflicts, and never removes Access policies or changes sibling routes.
+independently verified healthy origin. It verifies the admin identity policy,
+HttpOnly cookie, API's lack of Access, and enabled first-position WAF rule before
+adding only the two exact DNS CNAMEs and tunnel routes. Missing or drifted security
+fails closed without ingress writes; the workflow never edits Access/WAF policy
+or sibling routes. The token needs Access Apps and Policies Read and Zone WAF
+Read in addition to its existing zone/DNS/tunnel permissions.
 Do not apply another shared-tunnel change concurrently: Cloudflare provides no
 conditional configuration PUT; the adapter re-reads immediately before its write.
 The API token stays in this platform repository, not the source repo or VPS.

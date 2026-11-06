@@ -6,8 +6,57 @@ import fnmatch
 import json
 import sys
 from penpot_ingress import Client, Failure, TUNNEL, ZONE, active_connectors, inventory_list
+from penpot_apply import domains, identity
 
 HOSTS = ('omniroute-api.tuannguyenviet.site', 'omniroute.tuannguyenviet.site')
+REFERENCE_ADMIN = '9router-admin.tuannguyenviet.site'
+ADMIN_NAME = 'OmniRoute Admin Dashboard'
+API_PATH_REF = 'omniroute_api_paths'
+API_PATH_EXPRESSION = (
+    '(http.host eq "' + HOSTS[0] + '") and not ('
+    'starts_with(http.request.uri.path, "/v1/") or '
+    'starts_with(http.request.uri.path, "/api/v1/") or '
+    'starts_with(http.request.uri.path, "/v1beta/") or '
+    'starts_with(http.request.uri.path, "/api/v1beta/") or '
+    'http.request.uri.path eq "/api/health")')
+
+
+def verify_security(client, zone, apps):
+    own = [app for app in apps if app.get('name') == ADMIN_NAME and domains(app) == [HOSTS[1]]]
+    for app in apps:
+        for host in HOSTS:
+            if any(fnmatch.fnmatchcase(host, value.split('/', 1)[0]) for value in domains(app)) and (
+                    host == HOSTS[0] or app not in own):
+                raise Failure('ACCESS_SCOPE_CONFLICT')
+    references = [app for app in apps if app.get('domain') == REFERENCE_ADMIN]
+    if len(own) != 1 or len(references) != 1:
+        raise Failure('ADMIN_ACCESS_REQUIRED')
+    base = '/accounts/' + client.account + '/access/apps/'
+    admin = client.get(base + identity(own[0].get('id')))
+    reference = client.get(base + identity(references[0].get('id')))
+    allows = [policy for policy in inventory_list(reference.get('policies')) if policy.get('decision') == 'allow']
+    if reference.get('type') != 'self_hosted' or reference.get('domain') != REFERENCE_ADMIN or len(allows) != 1:
+        raise Failure('REFERENCE_IDENTITY_POLICY')
+    includes = inventory_list(allows[0].get('include'))
+    if not includes or any(set(rule) != {'email'} or
+            type(rule['email'].get('email')) is not str or '@' not in rule['email']['email'] or
+            '*' in rule['email']['email'] for rule in includes):
+        raise Failure('REFERENCE_EMAIL_ALLOWLIST_REQUIRED')
+    policies = inventory_list(admin.get('policies'))
+    if (admin.get('id') != own[0].get('id') or admin.get('type') != 'self_hosted' or
+            admin.get('name') != ADMIN_NAME or domains(admin) != [HOSTS[1]] or
+            admin.get('http_only_cookie_attribute') is not True or not reference.get('allowed_idps') or
+            admin.get('allowed_idps') != reference['allowed_idps'] or
+            admin.get('session_duration') != reference.get('session_duration') or len(policies) != 1 or
+            any(policies[0].get(key, []) != allows[0].get(key, []) for key in ('decision', 'include', 'exclude', 'require'))):
+        raise Failure('ADMIN_ACCESS_POLICY_DRIFT')
+    waf = client.get('/zones/' + zone + '/rulesets/phases/http_request_firewall_custom/entrypoint')
+    rules = inventory_list(waf.get('rules'))
+    selected = [rule for rule in rules if rule.get('ref') == API_PATH_REF]
+    if (waf.get('kind') != 'zone' or waf.get('phase') != 'http_request_firewall_custom' or
+            len(selected) != 1 or rules[0] != selected[0] or selected[0].get('action') != 'block' or
+            selected[0].get('enabled') is not True or selected[0].get('expression') != API_PATH_EXPRESSION):
+        raise Failure('API_PATH_WAF_POLICY_DRIFT')
 
 
 def origin(host):
@@ -35,12 +84,9 @@ def prepare(client):
     if active_connectors(client.get(base + '/cfd_tunnel/' + TUNNEL + '/connections')) < 1:
         raise Failure('ACTIVE_CONNECTOR_REQUIRED')
     apps = inventory_list(client.get(base + '/access/apps?per_page=100'))
+    verify_security(client, zone, apps)
     dns = {}
     for host in HOSTS:
-        for app in apps:
-            domains = [app.get('domain', '')] + app.get('self_hosted_domains', [])
-            if any(fnmatch.fnmatchcase(host, domain.split('/', 1)[0]) for domain in domains):
-                raise Failure('ACCESS_SCOPE_CONFLICT')
         selected = [rule for rule in ingress if rule.get('hostname') == host]
         if len(selected) > 1 or selected and selected[0] != origin(host) or any(
                 '*' in rule.get('hostname', '') and fnmatch.fnmatchcase(host, rule['hostname']) for rule in ingress):
@@ -76,7 +122,8 @@ def run(client, operation):
     return {'operation': operation, 'hosts': list(HOSTS),
             'existing_dns': {host: bool(records) for host, (_, records) in dns.items()},
             'tunnel_change_needed': before['config'] != wanted,
-            'sibling_routes_preserved': True, 'access_policies_modified': False}
+            'sibling_routes_preserved': True, 'access_policies_modified': False,
+            'admin_access_verified': True, 'api_path_waf_verified': True}
 
 
 def main():
