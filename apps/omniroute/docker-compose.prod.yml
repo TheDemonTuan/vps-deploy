@@ -9,7 +9,7 @@ x-environment: &environment
   INITIAL_PASSWORD: ${INITIAL_PASSWORD:?INITIAL_PASSWORD is required}
   JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
   API_KEY_SECRET: ${API_KEY_SECRET:?API_KEY_SECRET is required}
-  BASE_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
+  BASE_URL: http://127.0.0.1:20128
   NEXT_PUBLIC_BASE_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
   SHUTDOWN_TIMEOUT_MS: "60000"
 x-runtime: &runtime
