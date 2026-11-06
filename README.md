@@ -694,3 +694,12 @@ not by `latest`. The source repository owns `.deploy/app.yml` and image smoke.
 
 Local checks: `python3 -m unittest discover -s tests -p test_omniroute.py -v`.
 
+Run `omniroute-ingress.yml` with `operation=survey` before enrollment. Its
+`operation=apply` requires the protected `platform-admin` environment and an
+independently verified healthy origin. It adds only the two exact DNS CNAMEs and
+tunnel rules, verifies TLS using the existing origin CA, refuses DNS/tunnel/Access
+ownership conflicts, and never removes Access policies or changes sibling routes.
+Do not apply another shared-tunnel change concurrently: Cloudflare provides no
+conditional configuration PUT; the adapter re-reads immediately before its write.
+The API token stays in this platform repository, not the source repo or VPS.
+
