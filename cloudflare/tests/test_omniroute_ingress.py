@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from omniroute_ingress import ADMIN_NAME, API_PATH_EXPRESSION, API_PATH_REF, HOSTS, REFERENCE_ADMIN, Failure, TUNNEL, run
+from omniroute_ingress import ADMIN_NAME, API_PATH_EXPRESSION, API_PATH_REF, HOSTS, Failure, TUNNEL, run
 
 
 class Client:
@@ -12,15 +12,14 @@ class Client:
 
     def __init__(self):
         self.config = {'version': 7, 'config': {'originRequest': {'connectTimeout': 30},
-            'ingress': [{'hostname': '9router-api.tuannguyenviet.site', 'service': 'https://old-origin'},
+            'ingress': [{'hostname': 'sibling.tuannguyenviet.site', 'service': 'https://old-origin'},
                         {'service': 'http_status:404'}]}}
         self.dns = {host: [] for host in HOSTS}
         allow = {'decision': 'allow', 'include': [{'email': {'email': 'owner@example.invalid'}}],
                  'exclude': [], 'require': []}
         self.apps = [
-            {'id': 'reference', 'domain': REFERENCE_ADMIN, 'type': 'self_hosted',
-             'allowed_idps': ['email-otp'], 'session_duration': '24h',
-             'policies': [copy.deepcopy(allow), {'decision': 'non_identity', 'include': [{'service_token': {'token_id': 'monitor'}}]}]},
+            {'id': 'sibling', 'domain': 'sibling-admin.tuannguyenviet.site', 'type': 'self_hosted',
+             'policies': [{'decision': 'non_identity', 'include': [{'service_token': {'token_id': 'monitor'}}]}]},
             {'id': 'omniroute-admin', 'name': ADMIN_NAME, 'domain': HOSTS[1],
              'self_hosted_domains': [HOSTS[1]], 'type': 'self_hosted',
              'allowed_idps': ['email-otp'], 'session_duration': '24h',
@@ -99,7 +98,7 @@ class Ingress(unittest.TestCase):
             self.assertEqual(client.writes, [])
 
     def test_access_exposure_or_identity_drift_never_writes(self):
-        for change in ('missing', 'bypass', 'service-auth', 'wrong-email', 'wrong-idp', 'alias', 'cookie', 'reference-everyone', 'api-access'):
+        for change in ('missing', 'bypass', 'service-auth', 'wildcard-email', 'everyone', 'no-idp', 'exclude', 'alias', 'cookie', 'api-access'):
             client = Client()
             admin = client.apps[1]
             if change == 'missing':
@@ -107,17 +106,19 @@ class Ingress(unittest.TestCase):
             elif change == 'bypass':
                 admin['policies'][0]['decision'] = 'bypass'
             elif change == 'service-auth':
-                admin['policies'].append(copy.deepcopy(client.apps[0]['policies'][1]))
-            elif change == 'wrong-email':
-                admin['policies'][0]['include'] = [{'email': {'email': 'stranger@example.invalid'}}]
-            elif change == 'wrong-idp':
-                admin['allowed_idps'] = ['different-provider']
+                admin['policies'].append(copy.deepcopy(client.apps[0]['policies'][0]))
+            elif change == 'wildcard-email':
+                admin['policies'][0]['include'] = [{'email': {'email': '*@example.invalid'}}]
+            elif change == 'everyone':
+                admin['policies'][0]['include'] = [{'everyone': {}}]
+            elif change == 'no-idp':
+                admin['allowed_idps'] = []
+            elif change == 'exclude':
+                admin['policies'][0]['exclude'] = [{'email': {'email': 'owner@example.invalid'}}]
             elif change == 'alias':
                 admin['self_hosted_domains'].append('unprotected-alias.example.invalid')
             elif change == 'cookie':
                 admin['http_only_cookie_attribute'] = False
-            elif change == 'reference-everyone':
-                client.apps[0]['policies'][0]['include'] = [{'everyone': {}}]
             else:
                 client.apps.append({'domain': HOSTS[0]})
             with self.subTest(change=change), self.assertRaises(Failure):
@@ -138,18 +139,6 @@ class Ingress(unittest.TestCase):
             with self.subTest(change=change), self.assertRaisesRegex(Failure, 'API_PATH_WAF_POLICY_DRIFT'):
                 run(client, 'apply')
             self.assertEqual(client.writes, [])
-
-    def test_reference_alias_is_required_even_when_primary_host_differs(self):
-        client = Client()
-        client.apps[0]['domain'] = '9router.tuannguyenviet.site'
-        client.apps[0]['self_hosted_domains'] = [REFERENCE_ADMIN]
-        run(client, 'apply')
-        self.assertEqual(client.dns[HOSTS[0]][0]['content'], TUNNEL + '.cfargotunnel.com')
-        writes = len(client.writes)
-        client.apps[0]['self_hosted_domains'] = []
-        with self.assertRaisesRegex(Failure, 'ADMIN_ACCESS_REQUIRED'):
-            run(client, 'apply')
-        self.assertEqual(len(client.writes), writes)
 
     def test_tunnel_drift_refuses_shared_write(self):
         client = Client()
