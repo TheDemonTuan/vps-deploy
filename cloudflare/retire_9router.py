@@ -24,6 +24,14 @@ def host(value):
     return urlsplit(value if '://' in value else 'https://' + value).hostname or ''
 
 
+def plain_list(api, path):
+    """Workers routes and page rules return their whole inventory without pagination metadata."""
+    data, _ = api._response('GET', path, None)
+    info = data.get('result_info', {})
+    require(not info.get('total_pages') or info['total_pages'] <= 1, 'OPTIONAL_INVENTORY_PAGINATION')
+    return inventory_list(data['result'])
+
+
 def clean(value):
     if isinstance(value, dict):
         return {key: clean(item) for key, item in value.items() if key not in ('version', 'last_updated', 'updated_at')}
@@ -54,7 +62,8 @@ def run(api, operation, receipt):
     before_tunnel = api.get(tunnel_path)
     config = copy.deepcopy(before_tunnel['config'])
     ingress = inventory_list(config['ingress'])
-    require(not any('*' in item.get('hostname', '') for item in ingress if any(h.endswith(item['hostname'].lstrip('*')) for h in HOSTS)), 'WILDCARD_TUNNEL_REQUIRES_REVIEW')
+    wildcards = [item['hostname'] for item in ingress if '*' in item.get('hostname', '')]
+    require(not any(h.endswith(pattern.lstrip('*')) for pattern in wildcards for h in HOSTS), 'WILDCARD_TUNNEL_REQUIRES_REVIEW')
     selected_ingress = [item for item in ingress if item.get('hostname') in HOSTS]
     config['ingress'] = [item for item in ingress if item.get('hostname') not in HOSTS]
     require(config['ingress'] and 'hostname' not in config['ingress'][-1], 'SHARED_CATCHALL_REQUIRED')
@@ -108,7 +117,7 @@ def run(api, operation, receipt):
             host(target.get('constraint', {}).get('value', '')) in HOSTS for target in item['targets'])),
     ):
         try:
-            items = inventory_list(api.get(path))
+            items = plain_list(api, path)
             extras.append((label, path, items, selector))
         except Failure as error:
             receipt['blockers'].append(label + ':' + str(error))
@@ -155,7 +164,7 @@ def run(api, operation, receipt):
     for path, kept in rule_snapshots:
         require(clean(api.get(path).get('rules', [])) == clean(kept), 'UNRELATED_RULES_CHANGED')
     for label, path, items, selector in extras:
-        current = inventory_list(api.get(path))
+        current = plain_list(api, path)
         require(clean(current) == clean([item for item in items if not selector(item)]), 'UNRELATED_EXTRA_RESOURCE_CHANGED')
     require(active_connectors(api.get(account + '/cfd_tunnel/' + TUNNEL + '/connections')) > 0, 'SHARED_CONNECTOR_INACTIVE')
     receipt['verified'] = {'preserved_ingress_hostnames': [item.get('hostname', '<catchall>') for item in config['ingress']]}
@@ -171,7 +180,8 @@ def main():
         run(Client(), operation, receipt)
     except (Failure, KeyError, TypeError, ValueError) as error:
         receipt['status'] = 'failed'
-        receipt['blockers'].append(str(error) if isinstance(error, Failure) else 'TEARDOWN_RESPONSE_POLICY:' + type(error).__name__)
+        detail = ':' + str(error.args[0])[:40] if isinstance(error, KeyError) and error.args else ''
+        receipt['blockers'].append(str(error) if isinstance(error, Failure) else 'TEARDOWN_RESPONSE_POLICY:' + type(error).__name__ + detail)
     print(json.dumps(receipt, sort_keys=True, indent=2))
     sys.exit(1 if receipt['status'] == 'failed' else 0)
 
