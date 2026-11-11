@@ -1,0 +1,30 @@
+name: One-time 9router Cloudflare teardown
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Survey first; apply deletes only the three 9router hostnames' resources
+        type: choice
+        required: true
+        options: [survey, apply]
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-tunnel-oracle-main
+  cancel-in-progress: false
+jobs:
+  teardown:
+    if: github.repository == 'TheDemonTuan/vps-deploy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ inputs.operation == 'apply' && 'platform-admin' || 'production' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Remove 9router host resources and verify shared state
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OPERATION: ${{ inputs.operation }}
+        run: python3 cloudflare/retire_9router.py --operation "$OPERATION"
