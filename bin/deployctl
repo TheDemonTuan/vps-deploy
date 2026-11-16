@@ -101,6 +101,8 @@ def state_status(state_dir, req_id, cfg, profile):
     require((state_dir / 'state.json').exists(), 'NOT_ADOPTED')
     trusted_path(state_dir / 'state.json')
     state = load(state_dir / 'state.json')
+    healthy = False
+    observed = None
     try:
         matching(state, profile)
         observed = route.probe(profile)[1]

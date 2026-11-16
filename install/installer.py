@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import re
-import runpy
 import shutil
 import stat
 import subprocess
@@ -336,7 +335,6 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                             require(target.read_bytes() == content and stat.S_IMODE(target.stat().st_mode) == 0o644, 'SHARED_UNIT_MISMATCH')
                         else:
                             put(target, content, 0o644)
-                    backup_files = {}
                     key_file = Path('/home') / ('deploy-' + app) / '.ssh/authorized_keys'
                     old_units = (SYSTEMD / 'vps-deploy-9router-drain.service', SYSTEMD / 'vps-deploy-9router-drain.timer') if app == '9router' else ()
                     rollback_compat_src = destination / 'apps' / app / 'rollback-compatibility.json'
@@ -354,8 +352,6 @@ def activation(args, root, raw, binding, host_record, previous, source_env, expe
                         content = (destination / 'install/vps-deploy-app').read_text()
                         content = content.replace('@APP@', app).replace('@RELEASE@', args.release).replace('@ACTION@', action)
                         put(target, content.encode(), 0o755)
-                    for target, (content, mode) in backup_files.items():
-                        put(target, content, mode)
                     sudo_text = f'deploy-{app} ALL=(root) NOPASSWD: {wrapper} ""\n'.encode()
                     temporary = sudo.with_suffix('.tmp')
                     put(temporary, sudo_text, 0o440)
