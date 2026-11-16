@@ -26,10 +26,8 @@ x-runtime: &runtime
       max-file: "3"
 x-environment: &environment
   NODE_ENV: production
-  # Keystatic admin (GitHub storage). Optional: the public site runs without them.
-  KEYSTATIC_GITHUB_CLIENT_ID: ${KEYSTATIC_GITHUB_CLIENT_ID:-}
-  KEYSTATIC_GITHUB_CLIENT_SECRET: ${KEYSTATIC_GITHUB_CLIENT_SECRET:-}
-  KEYSTATIC_SECRET: ${KEYSTATIC_SECRET:-}
+  # Server-side rendering reads published content from mc-hub-api through Cloudflare.
+  API_URL: https://minecraft-api.tuannguyenviet.site
 services:
   mc-hub-blue:
     <<: *runtime
@@ -44,7 +42,7 @@ services:
       <<: *environment
       DEPLOY_SLOT: green
 networks:
-  # Not internal: the Keystatic OAuth callback exchanges tokens with github.com.
+  # Not internal: SSR fetches content from the public mc-hub-api hostname.
   edge:
     external: true
     name: ${EDGE_NETWORK:-edge-mc-hub}

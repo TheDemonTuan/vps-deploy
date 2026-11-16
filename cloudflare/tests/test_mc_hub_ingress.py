@@ -4,7 +4,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from mc_hub_ingress import HOST, Failure, TUNNEL, run
+from mc_hub_ingress import HOSTS, Failure, TUNNEL, origin, run
+
+SITE, API = HOSTS
 
 
 class Client:
@@ -14,7 +16,7 @@ class Client:
         self.config = {'version': 7, 'config': {'originRequest': {'connectTimeout': 30},
             'ingress': [{'hostname': 'sibling.tuannguyenviet.site', 'service': 'https://old-origin'},
                         {'service': 'http_status:404'}]}}
-        self.dns = []
+        self.dns = {host: [] for host in HOSTS}
         self.writes = []
         self.drift = False
         self.config_reads = 0
@@ -23,8 +25,7 @@ class Client:
         if path.startswith('/zones?'):
             return [{'id': 'b' * 32, 'name': 'tuannguyenviet.site', 'account': {'id': self.account}}]
         if '/dns_records?' in path:
-            assert path.split('name=')[1].split('&')[0] == HOST
-            return copy.deepcopy(self.dns)
+            return copy.deepcopy(self.dns[path.split('name=')[1].split('&')[0]])
         if path.endswith('/connections'):
             client = '11111111-1111-1111-1111-111111111111'
             return [{'id': client, 'conns': [{'id': '22222222-2222-2222-2222-222222222222',
@@ -43,9 +44,17 @@ class Client:
             self.config['config'] = copy.deepcopy(body['config'])
             self.config['version'] += 1
         elif method == 'POST':
-            self.dns = [copy.deepcopy(body)]
+            self.dns[body['name']] = [copy.deepcopy(body)]
         else:
             raise AssertionError(method)
+
+
+def enrolled_site_only():
+    # Production state before mc-hub-api: the site hostname is already routed.
+    client = Client()
+    client.config['config']['ingress'].insert(1, origin(SITE))
+    client.dns[SITE] = [{'name': SITE, 'type': 'CNAME', 'proxied': True, 'content': TUNNEL + '.cfargotunnel.com'}]
+    return client
 
 
 class Ingress(unittest.TestCase):
@@ -59,25 +68,37 @@ class Ingress(unittest.TestCase):
         self.assertEqual(config['originRequest'], original['originRequest'])
         self.assertEqual(config['ingress'][0], original['ingress'][0])
         self.assertEqual(config['ingress'][-1], original['ingress'][-1])
-        self.assertEqual([rule['hostname'] for rule in config['ingress'][1:-1]], [HOST])
-        self.assertIs(config['ingress'][1]['originRequest']['noTLSVerify'], False)
-        self.assertEqual(client.dns[0]['content'], TUNNEL + '.cfargotunnel.com')
+        self.assertEqual([rule['hostname'] for rule in config['ingress'][1:-1]], list(HOSTS))
+        self.assertTrue(all(rule['originRequest']['noTLSVerify'] is False for rule in config['ingress'][1:-1]))
+        self.assertTrue(all(self.dns_ok(client, host) for host in HOSTS))
         writes = len(client.writes)
         run(client, 'apply')
         self.assertEqual(len(client.writes), writes)
 
+    def test_adds_only_api_when_site_exists(self):
+        client = enrolled_site_only()
+        before = copy.deepcopy(client.config['config']['ingress'])
+        result = run(client, 'survey')
+        self.assertEqual(result['missing_dns'], [API])
+        run(client, 'apply')
+        ingress = client.config['config']['ingress']
+        self.assertEqual(ingress[:2], before[:2])
+        self.assertEqual(ingress[2], origin(API))
+        self.assertEqual([body['name'] for method, _, body in client.writes if method == 'POST'], [API])
+
     def test_conflicts_never_write(self):
-        for conflict in ('dns', 'wildcard', 'foreign-rule'):
-            client = Client()
-            if conflict == 'dns':
-                client.dns = [{'name': HOST, 'type': 'A', 'content': '192.0.2.1'}]
-            elif conflict == 'wildcard':
-                client.config['config']['ingress'].insert(0, {'hostname': '*.tuannguyenviet.site', 'service': 'http://foreign'})
-            else:
-                client.config['config']['ingress'].insert(0, {'hostname': HOST, 'service': 'http://foreign'})
-            with self.subTest(conflict=conflict), self.assertRaises(Failure):
-                run(client, 'apply')
-            self.assertEqual(client.writes, [])
+        for host in HOSTS:
+            for conflict in ('dns', 'wildcard', 'foreign-rule'):
+                client = Client()
+                if conflict == 'dns':
+                    client.dns[host] = [{'name': host, 'type': 'A', 'content': '192.0.2.1'}]
+                elif conflict == 'wildcard':
+                    client.config['config']['ingress'].insert(0, {'hostname': '*.tuannguyenviet.site', 'service': 'http://foreign'})
+                else:
+                    client.config['config']['ingress'].insert(0, {'hostname': host, 'service': 'http://foreign'})
+                with self.subTest(host=host, conflict=conflict), self.assertRaises(Failure):
+                    run(client, 'apply')
+                self.assertEqual(client.writes, [])
 
     def test_tunnel_drift_refuses_shared_write(self):
         client = Client()
@@ -85,6 +106,10 @@ class Ingress(unittest.TestCase):
         with self.assertRaisesRegex(Failure, 'TUNNEL_VERSION_DRIFT'):
             run(client, 'apply')
         self.assertEqual(client.writes, [])
+
+    @staticmethod
+    def dns_ok(client, host):
+        return [record['content'] for record in client.dns[host]] == [TUNNEL + '.cfargotunnel.com']
 
 
 if __name__ == '__main__':

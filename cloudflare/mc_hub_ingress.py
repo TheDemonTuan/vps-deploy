@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Enroll only mc-hub's public hostname on the shared tunnel; preserve sibling state.
+"""Enroll only mc-hub's public hostnames on the shared tunnel; preserve sibling state.
 
-mc-hub is a public site: no Access application or WAF rule is required. Its
-admin (/keystatic) authenticates through GitHub OAuth in the application.
+minecraft.tuannguyenviet.site serves the mc-hub frontend (and mc-hub-api under
+/api/ and /media/ via Traefik); minecraft-api.tuannguyenviet.site serves
+mc-hub-api. Both are public: no Access application or WAF rule is required.
+Admin authentication (password + TOTP) lives in mc-hub-api.
 """
 import argparse
 import copy
@@ -11,11 +13,14 @@ import json
 import sys
 from penpot_ingress import Client, Failure, TUNNEL, ZONE, active_connectors, inventory_list
 
-HOST = 'minecraft.tuannguyenviet.site'
-ORIGIN = {'hostname': HOST, 'service': 'https://172.31.250.4:8080',
-          'originRequest': {'originServerName': HOST,
-                            'caPool': '/etc/cloudflare-origin-ca/origin-ca.pem',
-                            'noTLSVerify': False}}
+HOSTS = ('minecraft.tuannguyenviet.site', 'minecraft-api.tuannguyenviet.site')
+
+
+def origin(host):
+    return {'hostname': host, 'service': 'https://172.31.250.4:8080',
+            'originRequest': {'originServerName': host,
+                              'caPool': '/etc/cloudflare-origin-ca/origin-ca.pem',
+                              'noTLSVerify': False}}
 
 
 def prepare(client):
@@ -34,17 +39,21 @@ def prepare(client):
         raise Failure('TUNNEL_CATCHALL_POLICY')
     if active_connectors(client.get(base + '/cfd_tunnel/' + TUNNEL + '/connections')) < 1:
         raise Failure('ACTIVE_CONNECTOR_REQUIRED')
-    selected = [rule for rule in ingress if rule.get('hostname') == HOST]
-    if len(selected) > 1 or selected and selected[0] != ORIGIN or any(
-            '*' in rule.get('hostname', '') and fnmatch.fnmatchcase(HOST, rule['hostname']) for rule in ingress):
-        raise Failure('TUNNEL_SCOPE_CONFLICT')
-    if not selected:
-        config['ingress'].insert(len(config['ingress']) - 1, ORIGIN)
+    for host in HOSTS:
+        selected = [rule for rule in ingress if rule.get('hostname') == host]
+        if len(selected) > 1 or selected and selected[0] != origin(host) or any(
+                '*' in rule.get('hostname', '') and fnmatch.fnmatchcase(host, rule['hostname']) for rule in ingress):
+            raise Failure('TUNNEL_SCOPE_CONFLICT')
+        if not selected:
+            config['ingress'].insert(len(config['ingress']) - 1, origin(host))
     path = '/zones/' + matches[0]['id'] + '/dns_records'
-    records = inventory_list(client.get(path + '?name=' + HOST + '&per_page=100'))
-    if len(records) > 1 or any(record.get('name') != HOST or record.get('type') != 'CNAME' or
-            record.get('proxied') is not True or record.get('content', '').rstrip('.') != TUNNEL + '.cfargotunnel.com' for record in records):
-        raise Failure('DNS_OWNERSHIP_CONFLICT')
+    records = {}
+    for host in HOSTS:
+        found = inventory_list(client.get(path + '?name=' + host + '&per_page=100'))
+        if len(found) > 1 or any(record.get('name') != host or record.get('type') != 'CNAME' or
+                record.get('proxied') is not True or record.get('content', '').rstrip('.') != TUNNEL + '.cfargotunnel.com' for record in found):
+            raise Failure('DNS_OWNERSHIP_CONFLICT')
+        records[host] = found
     return tunnel_path, tunnel, config, path, records
 
 
@@ -58,13 +67,14 @@ def run(client, operation):
             client.request('PUT', tunnel_path, {'config': wanted})
         if client.get(tunnel_path).get('config') != wanted:
             raise Failure('TUNNEL_VERIFY_FAILED')
-        if not records:
-            client.request('POST', dns_path, {'type': 'CNAME', 'name': HOST,
-                'content': TUNNEL + '.cfargotunnel.com', 'proxied': True, 'ttl': 1})
+        for host in HOSTS:
+            if not records[host]:
+                client.request('POST', dns_path, {'type': 'CNAME', 'name': host,
+                    'content': TUNNEL + '.cfargotunnel.com', 'proxied': True, 'ttl': 1})
         _, after, _, _, final_records = prepare(client)
-        if after['config'] != wanted or not final_records:
+        if after['config'] != wanted or not all(final_records.values()):
             raise Failure('INGRESS_VERIFY_FAILED')
-    return {'operation': operation, 'host': HOST, 'existing_dns': bool(records),
+    return {'operation': operation, 'hosts': list(HOSTS), 'missing_dns': [host for host in HOSTS if not records[host]],
             'tunnel_change_needed': before['config'] != wanted, 'sibling_routes_preserved': True}
 
 
