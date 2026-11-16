@@ -3,8 +3,9 @@
 
 minecraft.tuannguyenviet.site serves the mc-hub frontend (and mc-hub-api under
 /api/ and /media/ via Traefik); minecraft-api.tuannguyenviet.site serves
-mc-hub-api. Both are public: no Access application or WAF rule is required.
-Admin authentication (password + TOTP) lives in mc-hub-api.
+mc-hub-api's SSR reads. Public content needs no WAF rule; the admin paths are
+covered by the "MC Hub Admin" Access app (mc_hub_access.py), and admin
+authentication (password + TOTP) still lives in mc-hub-api.
 """
 import argparse
 import copy

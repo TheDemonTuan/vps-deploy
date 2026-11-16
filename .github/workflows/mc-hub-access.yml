@@ -1,0 +1,32 @@
+name: mc-hub Cloudflare Access
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Survey first; apply creates only the "MC Hub Admin" app and its policy
+        type: choice
+        required: true
+        options: [survey, apply]
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-access-mc-hub
+  cancel-in-progress: false
+jobs:
+  access:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: ${{ inputs.operation == 'apply' && 'platform-admin' || 'production' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify scoped Access state transitions without credentials
+        run: python3 -m unittest discover -s cloudflare/tests -p test_mc_hub_access.py -v
+      - name: Protect only the mc-hub admin paths
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OPERATION: ${{ inputs.operation }}
+        run: python3 cloudflare/mc_hub_access.py --operation "$OPERATION"

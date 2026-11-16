@@ -397,6 +397,15 @@ UID 1000 with a read-only root, and deploy independently.
   `https://minecraft-api.tuannguyenviet.site` (`API_URL` in its Compose profile).
 - Neither app needs runtime env. Admin auth (argon2id password + TOTP) lives in the API;
   enrollment links come from `docker exec mc-hub-api-<slot> /app/mc-hub-api admin invite --username <u>`.
+- Admin is two layers: `mc-hub-access.yml` (survey, then apply) creates the Cloudflare Access
+  app "MC Hub Admin" over `/admin`, `/api/admin` and `/api/auth` on the site host, linked to the
+  reusable allow policy "MC Hub admins" (exact emails; first copied from the OmniRoute admin
+  app, then edited only in the dashboard). The API host routes only SSR reads
+  (`/api/posts*`, `/api/pages/*`, `/api/settings`, `/api/auth/me`, `/healthz`); everything else
+  there hits `deny-internal`.
+- Changing `apps/mc-hub-api/adapter.sh` means the live route no longer matches the next
+  release: before installing it, re-render the route with that release's adapter at the
+  current slot and generation (`deployctl status`) and replace the route file atomically.
 - Routes use app-owned security headers instead of shared `security-headers`: the shared
   CSP blocks AdSense and YouTube embeds. `tunnel-only` and `deny-internal` stay.
 - Enrollment follows the portfolio procedure per app: create `edge-<app>` and attach
