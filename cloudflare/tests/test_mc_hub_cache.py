@@ -7,8 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mc_hub_cache import RULE, Failure, run
 
 ZONE_ID = 'z' * 32
-PENPOT = {'id': 'r1', 'ref': 'r1', 'version': '3', 'description': 'penpot-bypass-cache',
-          'expression': '(http.host eq "design.tuannguyenviet.site")', 'action': 'set_cache_settings',
+SIBLING = {'id': 'r1', 'ref': 'r1', 'version': '3', 'description': 'sibling-bypass-cache',
+          'expression': '(http.host eq "sibling.tuannguyenviet.site")', 'action': 'set_cache_settings',
           'action_parameters': {'cache': False}, 'enabled': True}
 
 
@@ -17,7 +17,7 @@ class Client:
 
     def __init__(self, rules=None):
         self.ruleset = None if rules is None else {'id': 'cache', 'kind': 'zone', 'phase': 'http_request_cache_settings',
-                                                    'name': 'Penpot cache settings', 'version': '7', 'rules': rules}
+                                                    'name': 'Zone cache settings', 'version': '7', 'rules': rules}
         self.writes = []
 
     def get(self, path):
@@ -39,7 +39,7 @@ class Client:
 
 class Cache(unittest.TestCase):
     def test_appends_one_rule_keeps_siblings_and_is_repeatable(self):
-        client = Client([copy.deepcopy(PENPOT)])
+        client = Client([copy.deepcopy(SIBLING)])
         self.assertEqual(run(client, 'survey')['rule_present'], False)
         self.assertEqual(client.writes, [])
         result = run(client, 'apply')
@@ -47,7 +47,7 @@ class Cache(unittest.TestCase):
         ((method, body),) = client.writes
         self.assertEqual(method, 'PUT')
         sibling, own = body['rules']
-        self.assertEqual(sibling, {k: v for k, v in PENPOT.items() if k != 'version'})
+        self.assertEqual(sibling, {k: v for k, v in SIBLING.items() if k != 'version'})
         self.assertEqual(own, RULE)
         self.assertIn('not http.cookie contains "__Host-mch_session="', own['expression'])
         self.assertEqual(run(client, 'apply')['changed'], False)
@@ -60,14 +60,14 @@ class Cache(unittest.TestCase):
         self.assertEqual((method, body['phase'], body['rules']), ('POST', 'http_request_cache_settings', [RULE]))
 
     def test_repairs_drifted_own_rule_in_place(self):
-        client = Client([copy.deepcopy(PENPOT), dict(copy.deepcopy(RULE), id='own', expression='(http.host eq "minecraft.tuannguyenviet.site")')])
+        client = Client([copy.deepcopy(SIBLING), dict(copy.deepcopy(RULE), id='own', expression='(http.host eq "minecraft.tuannguyenviet.site")')])
         self.assertTrue(run(client, 'apply')['changed'])
         self.assertEqual(client.ruleset['rules'][1]['id'], 'own')
         self.assertEqual(client.ruleset['rules'][1]['expression'], RULE['expression'])
 
     def test_unsafe_state_never_writes(self):
-        other = dict(copy.deepcopy(PENPOT), id='x', description='someone else', expression='(http.host eq "minecraft.tuannguyenviet.site")')
-        for rules in ([copy.deepcopy(PENPOT), other], [dict(RULE, id='a'), dict(RULE, id='b')]):
+        other = dict(copy.deepcopy(SIBLING), id='x', description='someone else', expression='(http.host eq "minecraft.tuannguyenviet.site")')
+        for rules in ([copy.deepcopy(SIBLING), other], [dict(RULE, id='a'), dict(RULE, id='b')]):
             client = Client(rules)
             with self.subTest(rules=len(rules)), self.assertRaises(Failure):
                 run(client, 'apply')

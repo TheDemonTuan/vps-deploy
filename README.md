@@ -409,7 +409,7 @@ UID 1000 with a read-only root, and deploy independently.
   (`/api/posts*`, `/api/pages/*`, `/api/settings`, `/api/auth/me`, `/healthz`); everything else
   there hits `deny-internal`.
 - Edge cache: `mc-hub-cache.yml` (survey, then apply) keeps one rule
-  (`mc-hub-public-edge-cache`) on the zone's cache-settings entrypoint, beside the Penpot rule.
+  (`mc-hub-public-edge-cache`) on the zone's cache-settings entrypoint.
   It covers the site host except `/api/`, `/admin` and requests with `__Host-mch_session`;
   edge TTL follows origin and bypasses when absent, so only pages the frontend marks
   (`Cloudflare-CDN-Cache-Control`) and the immutable `/media` and `/_astro` files are cached.

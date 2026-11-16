@@ -13,8 +13,7 @@ import argparse
 import copy
 import json
 import sys
-from penpot_ingress import Client, Failure, ZONE, inventory_list
-from penpot_apply import identity
+from tunnel_api import Client, Failure, ZONE, identity, inventory_list
 
 SITE = 'minecraft.tuannguyenviet.site'
 PHASE = 'http_request_cache_settings'
