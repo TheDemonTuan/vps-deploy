@@ -95,7 +95,7 @@ def check(root, app, registration, binding, runtime, previous, *, cgw_transition
         for key, expected in service.get('environment', {}).items():
             if current.get(key) != str(expected):
                 mismatch.add('env:' + key)
-        wanted_mounts = {(mount['target'], mount.get('source')) for mount in service.get('volumes', []) if mount.get('type') == 'volume'}
+        wanted_mounts = {(mount['target'], composed['volumes'][mount['source']]['name']) for mount in service.get('volumes', []) if mount.get('type') == 'volume'}
         actual_mounts = {(mount['Destination'], mount.get('Name')) for mount in value['Mounts'] if mount.get('Type') == 'volume'}
         if wanted_mounts != actual_mounts:
             mismatch.add('volumes')

@@ -474,7 +474,7 @@ def main():
     penpot_proof = {'source_sha': args.app_ref, 'platform_ref': args.release} if registration['manifest']['strategy'] == 'penpot' else {}
     composed = preflight(root, args.app, registration, binding, source_env, previous,
                          cgw_transition=cgw_transition, cgw_suspension=cgw_suspension, **penpot_proof)
-    selected_volumes = {mount['source'] for service in composed['services'].values() for mount in service.get('volumes', []) if mount.get('type') == 'volume'}
+    selected_volumes = {composed['volumes'][mount['source']]['name'] for service in composed['services'].values() for mount in service.get('volumes', []) if mount.get('type') == 'volume'}
     from core import container
     for enrolled in CONFIG.iterdir() if CONFIG.exists() else ():
         if enrolled.name == args.app or not (enrolled / 'host.json').is_file():

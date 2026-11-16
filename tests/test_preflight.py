@@ -34,9 +34,10 @@ class GatewayEnrollment(unittest.TestCase):
         self.binding = host_registration(activation, 'oracle-main')['apps']['9router']
         self.base = {
             'services': {name: {'container_name': name, 'environment': {'INITIAL_PASSWORD': 'fixture-only'},
-                               'networks': ['edge'], 'volumes': [{'type': 'volume', 'target': '/app/data', 'source': '9router-data'}]}
+                               'networks': ['edge'], 'volumes': [{'type': 'volume', 'target': '/app/data', 'source': 'data'}]}
                          for name in ('9router-blue', '9router-green')},
-            'networks': {'edge': {'name': 'edge-9router'}},
+            # Compose keys volumes by their file key; containers report the resolved name.
+            'networks': {'edge': {'name': 'edge-9router'}}, 'volumes': {'data': {'name': '9router-data'}},
         }
         self.live = {'State': {'Running': True}, 'Config': {'Env': ['INITIAL_PASSWORD=fixture-only']},
                      'NetworkSettings': {'Networks': {'edge-9router': {}}},
