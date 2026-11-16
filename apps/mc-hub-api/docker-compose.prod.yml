@@ -7,7 +7,10 @@ x-runtime: &runtime
   security_opt: [no-new-privileges:true]
   tmpfs:
     - /tmp:rw,noexec,nosuid,size=16m,mode=1777
-  networks: [edge]
+  networks:
+    edge: {}
+    # Outbound only for Cloudflare Turnstile siteverify (comment and login captcha).
+    egress: {gw_priority: 1}
   expose: ["8080"]
   # Blue and green share one SQLite (WAL) database and media store during cutover.
   volumes:
@@ -33,6 +36,8 @@ x-environment: &environment
   SITE_URL: https://minecraft.tuannguyenviet.site
   # Only cloudflared reaches Traefik (tunnel-only), so CF-Connecting-IP is authoritative.
   TRUST_CF_CONNECTING_IP: "1"
+  TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY required}
+  TURNSTILE_SECRET: ${TURNSTILE_SECRET:?TURNSTILE_SECRET required}
 services:
   mc-hub-api-blue:
     <<: *runtime
@@ -50,7 +55,10 @@ volumes:
   data:
     name: mc-hub-api-data
 networks:
-  # Internal: the API never initiates outbound connections.
+  # Internal: inbound from Traefik only.
   edge:
     external: true
     name: ${EDGE_NETWORK:-edge-mc-hub-api}
+  egress:
+    name: mc-hub-api-egress
+    labels: {vps-deploy.app: mc-hub-api}
