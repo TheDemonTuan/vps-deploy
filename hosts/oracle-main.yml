@@ -42,3 +42,11 @@ apps:
     compose_project: omniroute
     edge_network: edge-omniroute
     route_name: omniroute.yml
+  mc-hub:
+    api_host: minecraft.tuannguyenviet.site
+    dashboard_host: ""
+    dashboard_alias_host: ""
+    work_dir: /opt/mc-hub
+    compose_project: mc-hub
+    edge_network: edge-mc-hub
+    route_name: mc-hub.yml

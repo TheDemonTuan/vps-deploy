@@ -1,0 +1,50 @@
+x-runtime: &runtime
+  image: ${IMAGE_REF:?IMAGE_REF must be an immutable image digest}
+  restart: unless-stopped
+  user: "1000:1000"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+  networks: [edge]
+  expose: ["8080"]
+  stop_grace_period: 60s
+  healthcheck:
+    test: [CMD, wget, -qO-, "http://127.0.0.1:8080/healthz"]
+    interval: 5s
+    timeout: 3s
+    retries: 6
+    start_period: 10s
+  mem_limit: 384m
+  cpus: 0.50
+  pids_limit: 128
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+x-environment: &environment
+  NODE_ENV: production
+  # Keystatic admin (GitHub storage). Optional: the public site runs without them.
+  KEYSTATIC_GITHUB_CLIENT_ID: ${KEYSTATIC_GITHUB_CLIENT_ID:-}
+  KEYSTATIC_GITHUB_CLIENT_SECRET: ${KEYSTATIC_GITHUB_CLIENT_SECRET:-}
+  KEYSTATIC_SECRET: ${KEYSTATIC_SECRET:-}
+services:
+  mc-hub-blue:
+    <<: *runtime
+    container_name: mc-hub-blue
+    environment:
+      <<: *environment
+      DEPLOY_SLOT: blue
+  mc-hub-green:
+    <<: *runtime
+    container_name: mc-hub-green
+    environment:
+      <<: *environment
+      DEPLOY_SLOT: green
+networks:
+  # Not internal: the Keystatic OAuth callback exchanges tokens with github.com.
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-edge-mc-hub}
