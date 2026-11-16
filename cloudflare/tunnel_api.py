@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Scoped Penpot ingress inventory and guarded apply. No credentials in receipts."""
-import argparse
+"""Shared Cloudflare API client and helper routines for tunnel and zone management."""
 import fnmatch
 import json
 import os
@@ -10,11 +9,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-HOST = 'design.tuannguyenviet.site'
 ZONE = 'tuannguyenviet.site'
 TUNNEL = '09575df7-5465-4201-94c0-130e16472dce'
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_INVENTORY_PAGES = 1000
+READ_ONLY = {'id', 'version', 'last_updated', 'created_at', 'updated_at', 'aud'}
 
 
 class Failure(Exception):
@@ -69,8 +68,6 @@ class Client:
         if pages not in ([], ['1']) or len(per_pages) > 1:
             raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
         if 'result_info' not in data:
-            # These endpoints return all objects without pagination. Paginated
-            # inventories (notably Access apps) must supply complete metadata.
             if re.fullmatch(r'/accounts/[0-9a-f]{32}/cfd_tunnel/[^/]+/connections', endpoint):
                 return data['result']
             raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
@@ -89,7 +86,6 @@ class Client:
                 if self._pagination(data, page, endpoint) != (total_pages, per_page, total_count):
                     raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
                 result.extend(data['result'])
-            # Overlapping resource IDs can hide an omitted ownership conflict.
             for item in data['result']:
                 if type(item) is dict and type(item.get('id')) is str:
                     if item['id'] in seen_ids:
@@ -105,19 +101,15 @@ class Client:
         for number in range(MAX_INVENTORY_PAGES):
             items = inventory_list(data.get('result'))
             for item in items:
-                identity = item.get('id')
-                if type(identity) is not str or not identity or identity in ids:
+                identity_val = item.get('id')
+                if type(identity_val) is not str or not identity_val or identity_val in ids:
                     raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
-                ids.add(identity)
+                ids.add(identity_val)
             result.extend(items)
             info = data.get('result_info')
-            # Legacy list responses omit pagination metadata. Only a short
-            # first page can terminate without risking an omitted next page.
             if info is None and number == 0 and len(items) < 50:
                 return result
             if type(info) is not dict or type(info.get('cursors')) is not dict:
-                # Only fixed field names and JSON types: never response values,
-                # cursor bytes, resource IDs or credentials in diagnostics.
                 fields = ('page', 'per_page', 'count', 'total_count', 'total_pages', 'cursors')
                 shape = {key: type(info[key]).__name__ for key in fields if type(info) is dict and key in info}
                 diagnostic = {'result_info_type': type(info).__name__, 'fields': shape,
@@ -187,10 +179,6 @@ class Client:
         return data, len(raw)
 
 
-def wildcard_matches(pattern):
-    return type(pattern) is str and '*' in pattern and fnmatch.fnmatchcase(HOST, pattern.split('/', 1)[0])
-
-
 def inventory_list(value):
     if type(value) is not list or any(type(item) is not dict for item in value):
         raise Failure('CLOUDFLARE_INVENTORY_POLICY')
@@ -198,27 +186,21 @@ def inventory_list(value):
 
 
 def active_connectors(value):
-    """Count Client objects, not their individual Cloudflare edge connections.
-
-    The connections endpoint returns Client[] with nested conns; only a
-    validated connection explicitly reporting false is evidence of activity.
-    Missing/ambiguous identities or activity fields fail closed without
-    exposing response values. Optional API metadata is not an activity signal.
-    """
+    """Count Client objects, not their individual Cloudflare edge connections."""
     clients, connections, count = set(), set(), 0
     uuid = r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
     for client in inventory_list(value):
-        identity = client.get('id')
-        if type(identity) is not str or not re.fullmatch(uuid, identity) or identity.lower() in clients:
+        client_id = client.get('id')
+        if type(client_id) is not str or not re.fullmatch(uuid, client_id) or client_id.lower() in clients:
             raise Failure('CLOUDFLARE_INVENTORY_POLICY')
-        clients.add(identity.lower())
+        clients.add(client_id.lower())
         active = False
         for connection in inventory_list(client.get('conns')):
-            connection_id, client_id = connection.get('id'), connection.get('client_id')
+            connection_id, conn_client_id = connection.get('id'), connection.get('client_id')
             pending = connection.get('is_pending_reconnect')
             if (type(connection_id) is not str or not re.fullmatch(uuid, connection_id) or
-                    connection_id.lower() in connections or type(client_id) is not str or
-                    client_id.lower() != identity.lower() or type(pending) is not bool):
+                    connection_id.lower() in connections or type(conn_client_id) is not str or
+                    conn_client_id.lower() != client_id.lower() or type(pending) is not bool):
                 raise Failure('CLOUDFLARE_INVENTORY_POLICY')
             if 'uuid' in connection and (type(connection['uuid']) is not str or
                                          connection['uuid'].lower() != connection_id.lower()):
@@ -229,82 +211,17 @@ def active_connectors(value):
     return count
 
 
-def survey(api, account):
-    if type(account) is not str or not re.fullmatch('[0-9a-f]{32}', account):
-        raise Failure('EXACT_ACCOUNT_REQUIRED')
-    zones = api('/zones?name=' + ZONE + '&per_page=50')
-    matches = [item for item in inventory_list(zones) if item.get('name') == ZONE and item.get('account', {}).get('id') == account]
-    if len(matches) != 1 or not re.fullmatch('[0-9a-f]{32}', matches[0].get('id', '')):
-        raise Failure('EXACT_ACCOUNT_ZONE_REQUIRED')
-    zone = matches[0]['id']
-    base = '/accounts/' + account
-    records = api('/zones/' + zone + '/dns_records?name=' + HOST + '&per_page=100')
-    connections = api(base + '/cfd_tunnel/' + TUNNEL + '/connections')
-    config = api(base + '/cfd_tunnel/' + TUNNEL + '/configurations')
-    apps = api(base + '/access/apps?per_page=100')
-    rulesets = api('/zones/' + zone + '/rulesets?per_page=50')
-    for value in (records, connections, apps, rulesets):
-        inventory_list(value)
-    connector_count = active_connectors(connections)
-    if type(config) is not dict or type(config.get('version')) is not int:
-        raise Failure('CLOUDFLARE_INVENTORY_POLICY')
-    conflicts = []
-    if len(records) > 1 or any(item.get('name') != HOST or item.get('type') != 'CNAME' or
-                              item.get('content', '').rstrip('.') != TUNNEL + '.cfargotunnel.com' or
-                              item.get('proxied') is not True for item in records):
-        conflicts.append('DNS_OWNERSHIP_CONFLICT')
-    if connector_count == 0:
-        conflicts.append('ACTIVE_CONNECTOR_REQUIRED')
-    ingress = config.get('config', {}).get('ingress', [])
-    inventory_list(ingress)
-    selected = [item for item in ingress if item.get('hostname') == HOST]
-    if len(selected) > 1 or any(wildcard_matches(item.get('hostname', '')) for item in ingress):
-        conflicts.append('TUNNEL_SCOPE_CONFLICT')
-    access = []
-    for app in apps:
-        extra = app.get('self_hosted_domains', [])
-        if type(extra) is not list:
-            raise Failure('CLOUDFLARE_INVENTORY_POLICY')
-        domains = [app.get('domain', '')] + extra
-        if any(type(domain) is not str for domain in domains):
-            raise Failure('CLOUDFLARE_INVENTORY_POLICY')
-        if any(wildcard_matches(domain) or domain.split('/', 1)[0].lower().rstrip('.') == HOST and domain != HOST for domain in domains):
-            conflicts.append('ACCESS_SCOPE_CONFLICT')
-        if HOST in domains:
-            access.append({'id': app.get('id'), 'dedicated': all(domain in ('', HOST) for domain in domains)})
-    cache = []
-    for item in rulesets:
-        if item.get('phase') == 'http_request_cache_settings':
-            detail = api('/zones/' + zone + '/rulesets/' + item['id'])
-            cache.append({'id': item['id'], 'version': detail.get('version'),
-                          'penpot_rule_ids': [rule.get('id') for rule in detail.get('rules', [])
-                                              if rule.get('description') == 'penpot-bypass-cache']})
-    return {'status': 'read_only', 'host': HOST, 'zone_id': zone, 'tunnel_id': TUNNEL,
-            'tunnel_version': config.get('version'), 'active_connector_count': connector_count,
-            'dns_record_ids': [item.get('id') for item in records], 'exact_ingress_count': len(selected),
-            'access_apps': access, 'cache_rulesets': cache, 'conflicts': sorted(set(conflicts)),
-            'note': 'No DNS, tunnel, Access, cache rules, certificates or VPS state modified'}
+def identity(value):
+    if type(value) is not str or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', value):
+        raise Failure('CLOUDFLARE_RESOURCE_ID_POLICY')
+    return value
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--operation', choices=['survey', 'apply'], required=True)
-    args = parser.parse_args()
-    client = Client()
-    if args.operation == 'apply':
-        from penpot_apply import apply, public_ready
-        from penpot_origin import verifier
-        value = apply(client, client.account, verifier())
-        public_ready()
-        value['public_ready'] = True
-    else:
-        value = survey(client.get, client.account)
-    print(json.dumps(value, sort_keys=True, indent=2))
-
-
-if __name__ == '__main__':
-    try:
-        main()
-    except (Failure, KeyError, TypeError, AttributeError) as error:
-        print(str(error) if isinstance(error, Failure) else 'CLOUDFLARE_INVENTORY_POLICY', file=sys.stderr)
-        sys.exit(1)
+def domains(app):
+    extra = app.get('self_hosted_domains', [])
+    if type(extra) is not list or any(type(value) is not str for value in extra):
+        raise Failure('ACCESS_DOMAIN_POLICY')
+    primary = app.get('domain', '')
+    if type(primary) is not str:
+        raise Failure('ACCESS_DOMAIN_POLICY')
+    return list(dict.fromkeys([value for value in [primary] + extra if value]))

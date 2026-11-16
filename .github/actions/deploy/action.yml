@@ -23,10 +23,7 @@ inputs:
     description: App manifest path
     default: .deploy/app.yml
   image-ref:
-    description: Immutable single-image digest for non-Penpot deploys
-    default: ''
-  images:
-    description: Exact JSON map of four immutable digests for Penpot deploys
+    description: Immutable single-image digest
     default: ''
 runs:
   using: composite
@@ -123,6 +120,6 @@ runs:
               --source-sha "$SOURCE_SHA" --platform-ref "$PLATFORM_REF" --config "$CONFIG"
               --request-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${COMPONENT}")
         if [[ "$OPERATION" == deploy ]]; then
-          if [[ "$APP" == penpot ]]; then args+=(--images "$IMAGES"); else args+=(--image "$IMAGE_REF"); fi
+          args+=(--image "$IMAGE_REF")
         fi
         DEPLOY_KEY_FILE="$sshdir/key" python3 ../platform/scripts/ssh-request.py "${args[@]}"

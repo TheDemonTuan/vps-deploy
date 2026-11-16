@@ -59,8 +59,7 @@ class RetiredDeployment(unittest.TestCase):
             with self.assertRaisesRegex(Failure, 'REGISTRY_POLICY'):
                 app_registration(root, '9router')
         schema = json.loads((ROOT / 'schema/app.schema.json').read_text())
-        self.assertEqual(schema['properties']['strategy']['enum'], ['blue-green', 'penpot'])
-
+        self.assertEqual(schema['properties']['strategy']['const'], 'blue-green')
     def test_retired_strategy_never_falls_through_to_gateway_route_or_probe(self):
         profile = {'app': 'demo', 'registration': {
             'manifest': {'strategy': 'recreate', 'runtime': {'port': 8080}},

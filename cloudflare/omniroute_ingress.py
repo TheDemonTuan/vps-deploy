@@ -5,8 +5,7 @@ import copy
 import fnmatch
 import json
 import sys
-from penpot_ingress import Client, Failure, TUNNEL, ZONE, active_connectors, inventory_list
-from penpot_apply import domains, identity
+from tunnel_api import Client, Failure, TUNNEL, ZONE, active_connectors, domains, identity, inventory_list
 
 HOSTS = ('omniroute-api.tuannguyenviet.site', 'omniroute.tuannguyenviet.site')
 ADMIN_NAME = 'OmniRoute Admin Dashboard'

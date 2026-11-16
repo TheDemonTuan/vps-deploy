@@ -1,6 +1,6 @@
 # Registered app enrollment and 9router engine upgrade
 
-Do not run this procedure until the platform PR's AMD64/ARM64 checks and disposable migration rehearsal pass. The release, app commit, public key, VPS inventory, and caller workflow changes need operator review. This runbook does not authorize a production operation; ACB, Messenger, and the shared Traefik middleware are outside this upgrade. If Oracle host key, network, route, directory, or owner differs from `hosts/oracle-main.yml`, stop; review inventory and publish a corrected platform release rather than overriding policy at runtime.
+Do not run this procedure until the platform PR's AMD64/ARM64 checks and disposable migration rehearsal pass. The release, app commit, public key, VPS inventory, and caller workflow changes need operator review. This runbook does not authorize a production operation; ACB and the shared Traefik middleware are outside this upgrade. If Oracle host key, network, route, directory, or owner differs from `hosts/oracle-main.yml`, stop; review inventory and publish a corrected platform release rather than overriding policy at runtime.
 
 ## Dedicated Uptimeflare browser probe enrollment
 
@@ -136,7 +136,7 @@ serialized transient systemd unit as the unprivileged probe account with a
 `PrivateTmp`, private devices, strict system/home protection, read-only probe
 runtime, no new privileges and empty capability sets. App/private paths
 `/etc/vps-deploy`, `/var/lib/vps-deploy`, `/opt/platform`, `/opt/9router`,
-`/opt/penpot` and `/opt/tuan-portfolio` are inaccessible. The Docker socket remains
+`/opt/tuan-portfolio` are inaccessible. The Docker socket remains
 root:docker mode 0660 and the probe belongs only to its own group, so it has no
 Docker access; masking that SELinux-labelled socket is not required or permitted.
 Chromium's temporary profile lives in that unit's private
@@ -155,200 +155,6 @@ printf '{"web_sha":"","monitor_sha":""}\n' | ssh \
 The controller supplies the expected nonempty source SHAs during deploys. The
 empty values above are the operator's fresh-browser public reachability probe;
 they do not change expected deployment revisions or bypass Cloudflare policy.
-
-## Penpot production enrollment
-
-The old OpenDesign registry, controllers, workflows and recreate engine no longer
-ship in new platform releases. Prior versions remain in Git history. This source
-change does not remove installed releases, live security configuration, routes,
-containers or volumes on the VPS.
-
-Penpot has its own four-image release engine, six-service Compose, offline restore
-and daily backup units. `bootstrap-penpot.py --check` validates source/image identity,
-volume ownership and edge TLS without creating directories, keys or volumes.
-Native ARM64 diagnostic [38338864464](https://github.com/TheDemonTuan/vps-deploy/actions/runs/38338864464)
-at platform `9bde24c399104a2eb9c3f1850ac79561a7fba4aa` passed all 22 lifecycle
-cases, including ten crash checkpoints, backup/offline restore and log safety.
-The temporary blanket production fence is removed; root/registration/ownership,
-immutable release, request locks and strict fixture admission remain mandatory.
-The native fixture seeds the previous enrolled release before installer `--check`;
-the new target release remains absent until apply. Production trust checks are
-unchanged, and fixture cleanup removes its owned baseline release.
-Fixture SSH client and host private keys are explicitly root-owned regular files
-with mode 0600 at creation; OpenSSH rejects a 0644 private key before startup.
-Deployment accounts use an explicitly created root-owned home containing only
-the managed `.ssh/authorized_keys` on fresh enrollment. `useradd` does not copy
-host `/etc/skel` startup files: forced-command transport needs no interactive
-login skeleton. Existing homes remain subject to the same ownership/path checks.
-Retention starts with an empty snapshot baseline on fresh enrollment: the backup
-root is created by the first backup, not by installer activation. Existing
-snapshots are still verified and included in reference-preservation assertions.
-Dump validation checks the custom-format header using an unbuffered file and
-rewinds the underlying descriptor before handing stdin to `pg_restore --list`.
-Python read-ahead must not advance the child past the archive header.
-Installer failures preserve the trusted controller's structured error code.
-They never include subprocess arguments, stderr or free-form error details;
-unstructured command failures still report `COMMAND_FAILED`.
-Unexpected installer exceptions report `INSTALL_IO_ERROR_<CLASS>_L<line>`;
-OS errors also include numeric `_E<errno>`. The location is restricted to the
-installer's own source, without traceback text, paths, messages or local values.
-For subprocess exceptions, the line identifies the caller, not the shared `run` wrapper.
-Native command failures retain only a bounded uppercase structured `error_code`
-from JSON stdout, never other stdout fields, so backup failures remain diagnosable.
-Key enrollment emits numeric source progress markers, without expanded commands.
-On timeout only its last validated marker becomes `INSTALL_KEY_TIMEOUT_L<line>`;
-raw stderr stays private and the timeout remains unchanged.
-Key timeouts also retain at most 16 allowlisted account-process names and kernel
-wait symbols, never process arguments, environment, account files or hook contents.
-For `useradd`, evidence also includes the syscall number without arguments,
-at most 16 kernel stack symbols without addresses, and exact allowlisted account
-file categories for open descriptors; arbitrary paths and file contents are omitted.
-On native ARM64/x86-64 `read` waits, the active descriptor is classified separately
-as an allowlisted account/config file, home skeleton, system library or `OTHER`.
-This identifies the blocked input category without exposing descriptor paths.
-
-
-First Penpot enrollment adopts in-process from the immutable installed controller
-while activation still holds the selected app operation lock. Adoption never
-reopens that lock in a child process: a second open conflicts with the installer
-even on the same host. The shared adoption entry keeps the
-route lock/preflight/acknowledgement, manifest and live-image identity checks before
-writing state. Standalone `deployctl adopt` still acquires the app operation lock;
-concurrent operations remain excluded through adoption and installer completion.
-Real-lock installer regressions can run without host root privileges using
-`unshare --user --map-root-user -- env PYTHONPATH=tests python3 -m unittest test_preflight.InstallerPenpotAdoption -v`.
-
-Frontend, backend and exporter share the outbound `penpot-egress` network;
-datastores and MCP remain on the internal network. Frontend needs external DNS
-and HTTPS for its GitHub template and Google Fonts proxies, including nginx
-startup resolution. Exporter uses `redis://penpot-valkey/0`, not the upstream
-default hostname `redis`.
-Datastore references use canonical `repository@sha256:digest` form, without a
-tag, so exact identity checks match Docker's `RepoDigests` representation.
-Enrollment compares Docker's integer byte limits with Compose's decimal byte
-strings or integers. Memory and declared shared-memory limits must be positive
-and match exactly; missing, unlimited and mismatched limits fail enrollment.
-
-Bootstrap uses the host CA `/opt/platform/edge/cloudflare-ca/origin-ca.pem`, mounted
-read-only at `/etc/cloudflare-origin-ca` in `edge-cloudflared`. Its origin probe runs
-the checked frontend digest in that container's network namespace, with design
-Host/SNI and CA verification against `172.31.250.4:8080`. It checks the shared edge
-IPs and TLS entrypoint first and needs two matching readiness responses before
-enrollment. DNS need not exist yet. Deploy, reconcile and backup retain their public
-HTTPS checks; they never fall back to the origin probe.
-The locally originated probe sends `CF-Connecting-IP` equal to the pinned host
-inventory address. CrowdSec trusts this header only from the existing tunnel
-source; the probe still executes the normal tunnel allowlist, CrowdSec and TLS
-checks. Without client metadata, the production bouncer rejects readiness with
-403 even when all six services are healthy. No shared middleware is disabled.
-Bootstrap resume admits exactly frontend/backend/exporter on the egress network;
-MCP, datastores and foreign consumers remain forbidden.
-
-The reviewed CrowdSec policy `security/crowdsec/penpot-scope.yaml` is installed as
-`/etc/crowdsec/appsec-configs/local-penpot-scope.yaml` and registered as
-`local/penpot-scope` in `/etc/crowdsec/acquis.d/appsec.yaml`. Validate with
-`crowdsec -t` before `systemctl reload crowdsec`; preserve the previous acquisition
-file for rollback. Do not modify vendor rules or the shared Traefik bouncer.
-It skips body inspection only for POST design RPC and `/mcp/stream`, whose payloads
-contain intentional user text/SVG/code. On Transit RPC only, it removes out-of-band
-CRS 920420 (unsupported media type); on notification WebSocket handshakes only,
-it removes 943120 (session-id without Referer). This also skips the AppSec body-size
-check on those POST endpoints; application authentication and request validation
-remain required. IP decisions, URI/header inspection and all other rules stay on.
-Live engine smoke verified Transit/code bodies and notification handshakes do not
-match those false positives, while XSS bodies on other hosts/paths, unrelated
-session-id paths and traversal/command payloads in RPC query strings still match.
-No global allowlist, decision deletion or domain-wide WAF bypass is needed.
-
-Apply copies reviewed platform bytes into `/opt/vps-deploy/releases/<platform-sha>`
-using the installer's immutable release-copy API. Reuse requires identical bytes.
-Enrollment restores the backup timer's prior enabled/active state. A fresh timer
-stays disabled/inactive until public readiness, a complete production backup and
-a private ARM64 restore rehearsal pass; only then enable the daily timer.
-
-Cloudflare `penpot-ingress.yml` offers manual survey/apply on platform `main`. Apply
-requires `origin-platform-ref`, the full immutable platform SHA already enrolled
-on the VPS, separately from the reviewed controller workflow revision. Obtain it
-from the installed origin receipt and review its native CI/bootstrap evidence.
-The protected `platform-admin` identity proves that exact installed platform,
-healthy coherent Penpot state and verified origin TLS before any API write; a
-missing/mutable SHA or mismatched receipt fails closed. Controller fixes do not
-require reinstalling Penpot or rebuilding its images. Dispatch with
-`gh workflow run penpot-ingress.yml --repo TheDemonTuan/vps-deploy --ref main -f operation=apply -f origin-platform-ref=<installed-platform-sha>`.
-Apply changes only the design hostname and preserves sibling routes and policies.
-The first cache ruleset is created with `POST /zones/{zone_id}/rulesets`, kind
-`zone`, phase `http_request_cache_settings`; an existing ruleset is updated by ID.
-See the [Cloudflare cache API procedure](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/).
-HTTP 401/403 reports the relevant permission; other HTTP failures report bounded
-numeric API error codes, never response messages or credentials. Access removal
-is the last write, followed by public HTTPS readiness.
-The HTTPS readiness request identifies itself as `penpot-readiness/1.0`, rather
-than Python's generic scanner-like user agent. It still requires status 200 and
-exact body `OK`, rejects redirects, and does not change any firewall rule.
-
-Survey and apply preflight enumerate every GET inventory page before evaluating
-ownership, including Access conflicts found on later pages. Pagination requires
-integer `page`, `per_page`, `count` and `total_count`; `total_pages` may be derived
-from the counts when absent, but a present value must agree. Empty inventories
-accept zero or one total page only with zero counts and page 1. Missing metadata,
-short pages, overlapping resource IDs or changing totals fail closed; only the
-nonpaginated tunnel-connections endpoint may omit metadata. Ruleset lists use
-`per_page=50` and follow `result_info.cursors.after` until no next cursor remains;
-repeated cursors and overlapping IDs fail closed. Legacy ruleset responses without
-metadata are accepted only on the first page with fewer than 50 items and an
-explicit `per_page=50`; full pages or missing metadata after a cursor fail closed.
-Cursor metadata rejection reports only fixed pagination field names, JSON types,
-item count and traversal number. It never prints metadata values, cursors or
-inventory contents. Use this evidence to diagnose API differences before changing
-completeness validation; a diagnostic failure is not a successful survey.
-Inventory reads are bounded to 1,000 pages and 4 MiB total response bytes, keep
-filters and block redirects. Writes remain single requests without retries or
-pagination. A failed survey does not establish that ownership conflicts are absent.
-
-After a reviewed platform revision reaches `main`, run the read-only smoke with
-`gh workflow run penpot-ingress.yml --repo TheDemonTuan/vps-deploy --ref main -f operation=survey`
-and inspect that exact run's sanitized summary before considering apply. Local
-focused coverage is `python3 -m unittest discover -s cloudflare/tests -p 'test_penpot_ingress.py' -v`.
-
-## Separate-VM Penpot production backup rehearsal
-
-`penpot-production-restore.yml` is a manual, central-repository `main` workflow
-using the protected `platform-admin` environment and a one-use GitHub-hosted
-`ubuntu-24.04-arm` runner. It does not install or restore anything on production.
-Keep automatic deployments and the backup timer disabled until native lifecycle,
-public Web/export/MCP acceptance, log safety, backup verification and this separate-VM
-restore all pass. Native diagnostic proof does not replace the production release gate.
-
-Only synthetic acceptance data may be sent to this runner. A backup includes
-private runtime credentials, database contents and assets: if real user data is
-already present, do not dispatch; use an explicitly approved private ARM64 VM
-instead. Never upload the archive, private receipt, environment or restore data
-as artifacts or cache entries. Only the bounded sanitized helper result appears
-in the job summary; no successful production rehearsal is implied by local tests.
-
-Close browser/MCP writers after Saved, validate the acceptance file UUID, and keep
-only the SHA256 of the approved `file`/ordered `file_data` query stdout with its
-trailing newline removed. Take the root production backup, require a complete
-receipt, and confirm the fingerprint is unchanged after backup. Use its exact
-request ID, file UUID and lowercase 64-hex fingerprint:
-
-```bash
-gh workflow run penpot-production-restore.yml --repo TheDemonTuan/vps-deploy --ref main \
-  -f backup-id="$BACKUP_ID" -f file-id="$FILE_ID" -f file-sha256="$FILE_SHA256"
-```
-
-The main checkout SHA must equal the installed origin and snapshot platform SHA.
-The downloader consumes only the protected admin SSH secret, verifies the origin
-first, pins the existing Oracle SSH fingerprint, and reads exactly six root-owned
-private regular files from the selected backup directory without following links.
-It streams a private tar plus a separate sanitized origin receipt; no production
-file is created or changed. The root helper runs with an explicit clean environment,
-without admin SSH or Cloudflare credentials, stages its own root-owned configuration,
-and checks snapshot identity/integrity, the acceptance-file fingerprint, every asset
-path/hash/size and six-service readiness. It tears down only resources it created.
-Require all four success booleans and exact source/platform/data timestamp in the
-summary before enabling the backup timer; a failed run does not authorize fallback
-to another snapshot or an in-place production restore.
 
 ## Upgrade 9router
 

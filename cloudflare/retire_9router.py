@@ -6,8 +6,7 @@ import json
 import re
 import sys
 from urllib.parse import urlsplit
-from penpot_ingress import Client, Failure, ZONE, TUNNEL, inventory_list, active_connectors
-from penpot_apply import READ_ONLY, domains
+from tunnel_api import Client, Failure, READ_ONLY, TUNNEL, ZONE, active_connectors, domains, inventory_list
 
 HOSTS = ('9router-api.tuannguyenviet.site', '9router.tuannguyenviet.site', '9router-admin.tuannguyenviet.site')
 MARKER = '9router'

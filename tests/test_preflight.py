@@ -218,178 +218,15 @@ class RuntimeAdoption(unittest.TestCase):
         self.assertEqual((cfg / 'app.yml').read_bytes(), b'old-manifest')
 
 
-@unittest.skipUnless(os.geteuid() == 0, 'requires root-owned locks (use unshare --user --map-root-user)')
-class InstallerPenpotAdoption(unittest.TestCase):
-    """Exercise actual flock exclusion; only host/runtime dependencies are stubbed."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
-        self.directories = {name: self.root / name for name in
-                            ('config', 'state', 'releases', 'locks', 'systemd', 'libexec', 'sudoers', 'home')}
-        for directory in self.directories.values():
-            directory.mkdir(mode=0o700)
-        self.cfg = self.directories['config'] / 'penpot'
-        self.state = self.directories['state'] / 'penpot'
-        self.cfg.mkdir(mode=0o700)
-        self.state.mkdir(mode=0o700)
-        self.release = self.directories['releases'] / ('a' * 40)
-        (self.release / 'install').mkdir(parents=True)
-        (self.release / 'bin').mkdir()
-        (self.release / 'bin/deployctl').write_bytes((ROOT / 'bin/deployctl').read_bytes())
-        for name in ('vps-deploy-drain@.service', 'vps-deploy-drain@.timer', 'vps-deploy-app'):
-            (self.release / 'install' / name).write_text('fixture @APP@ @RELEASE@ @ACTION@')
-        (self.cfg / 'runtime.env').write_text('fixture-only\n')
-        (self.cfg / 'runtime.env').chmod(0o600)
-        self.profile = {'app': 'penpot', 'fixture_ci': True,
-                        'registration': {'host': 'fixture-local', 'manifest': {'strategy': 'penpot'}}}
-        self.adopted = {'version': 1, 'revision': 1, 'generation': 'b' * 32, 'operation': None}
-        self.args = SimpleNamespace(app='penpot', release='a' * 40, public_key=self.root / 'fixture.pub')
-        stack = self.enterContext(contextlib.ExitStack())
-        for name, value in [('CONFIG', self.directories['config']), ('STATE', self.directories['state']),
-                            ('RELEASES', self.directories['releases']), ('LOCKS', self.directories['locks']),
-                            ('SYSTEMD', self.directories['systemd']), ('LIBEXEC', self.directories['libexec'])]:
-            stack.enter_context(mock.patch.object(installer, name, value))
-        def mapped_path(path):
-            if str(path) == '/etc/sudoers.d':
-                return self.directories['sudoers']
-            if str(path) == '/home':
-                return self.directories['home']
-            return Path(path)
-        stack.enter_context(mock.patch.object(installer, 'Path', side_effect=mapped_path))
-        stack.enter_context(mock.patch.object(installer, 'trusted_path', side_effect=lambda path, **kw: path))
-        stack.enter_context(mock.patch.object(installer, 'busy'))
-        stack.enter_context(mock.patch.object(installer, 'stop_drain', return_value=('fixture.timer', False, False)))
-        stack.enter_context(mock.patch.object(installer, 'restore_timers'))
-        stack.enter_context(mock.patch.object(installer, 'release_copy'))
-        stack.enter_context(mock.patch.object(installer, 'app_registration', return_value=self.profile['registration']))
-        stack.enter_context(mock.patch('core.host', return_value=self.profile))
-        stack.enter_context(mock.patch('core.fixture_authorized', return_value=True))
-        stack.enter_context(mock.patch('penpot.trusted_path', side_effect=lambda path, **kw: Path(path)))
-        stack.enter_context(mock.patch('core.trusted_path', side_effect=lambda path, **kw: Path(path)))
-        stack.enter_context(mock.patch('penpot_backup.files', return_value={}))
-        self.preflight = stack.enter_context(mock.patch('route.preflight', return_value=(self.root / 'route.yml', b'fixture', None)))
-        stack.enter_context(mock.patch('route.dynamic', return_value=self.root))
-        stack.enter_context(mock.patch('route.route_state', return_value=('single', 'b' * 32)))
-        self.ack = stack.enter_context(mock.patch('route.ack'))
-        self.identity = stack.enter_context(mock.patch('penpot.adopt_state', side_effect=self.runtime_identity))
-        self.runtime = stack.enter_context(mock.patch('penpot.runtime_values', return_value={}))
-        self.controller = self.load_controller(str(self.release / 'bin/deployctl'))
-        # Load the installed controller's real functions, not a mocked adopt helper.
-        stack.enter_context(mock.patch.object(runpy, 'run_path', side_effect=self.load_controller))
-        stack.enter_context(mock.patch.object(installer, 'run', side_effect=self.host_command))
-
-    def load_controller(self, path):
-        namespace = self.run_path(path)
-        functions = namespace['adopt'].__globals__
-        functions['registered'] = lambda cfg, registration: ({}, 'c' * 64)
-        functions['trusted_path'] = lambda path, **kw: path
-        functions['state_status'] = lambda state, req, cfg, profile: load(state / 'state.json')
-        functions['app_registration'] = lambda release, app: self.profile['registration']
-        functions['host_registration'] = lambda release, host: {}
-        functions['Path'] = lambda path: (self.directories['releases'] if str(path) == '/opt/vps-deploy/releases' else Path(path))
-        return namespace
-
-    run_path = staticmethod(runpy.run_path)
-
-    def contend(self, name):
-        # A different process opens the same inode; no lock/acquire/fcntl mocks.
-        program = '''import sys
-from core import Failure, lock
-try:
-    with lock(sys.argv[1]):
-        print("acquired")
-except Failure as exc:
-    print(exc.code)
-'''
-        env = dict(os.environ, PYTHONPATH=str(ROOT / 'lib'), PYTHONDONTWRITEBYTECODE='1')
-        result = subprocess.run([sys.executable, '-c', program, str(self.directories['locks'] / name)],
-                                capture_output=True, timeout=10, env=env, check=True)
-        return result.stdout.decode().strip()
-
-    def runtime_identity(self, profile, manifest_sha, generation):
-        self.assertEqual(self.contend('penpot@operation.lock'), 'APP_BUSY')
-        self.assertEqual(self.contend('traefik.lock'), 'APP_BUSY')
-        self.assertEqual((manifest_sha, generation), ('c' * 64, 'b' * 32))
-        self.ack.assert_called_with(profile, ('single', generation))
-        return self.adopted
-
-    def host_command(self, *argv, **kwargs):
-        if len(argv) > 1 and argv[1] == 'adopt':
-            # The old installer reopens its held operation lock here and fails.
-            self.controller['adopt'](self.cfg, self.state, self.directories['locks'], self.profile)
-        elif len(argv) > 1 and argv[1] == 'status':
-            self.assertEqual(load(self.state / 'state.json'), self.adopted)
-        elif argv[0] == '/usr/bin/bash':
-            self.assertEqual(self.contend('penpot@operation.lock'), 'APP_BUSY')
-            self.assertEqual(load(self.state / 'state.json'), self.adopted)
-        return SimpleNamespace(returncode=0)
-
-    def activate(self):
-        installer.activation(self.args, ROOT, b'fixture-manifest', {},
-                             {'traefik': {'dynamic_dir': '/fixture'}}, None,
-                             self.cfg / 'runtime.env', {})
-
-    def test_activation_adopts_without_reopening_its_operation_lock(self):
-        self.activate()
-        self.identity.assert_called_once()
-        self.runtime.assert_called_once_with(b'fixture-only\n', self.profile['registration'])
-        self.assertEqual(load(self.state / 'state.json'), self.adopted)
-        self.assertEqual(self.contend('penpot@operation.lock'), 'acquired')
-        self.assertEqual(self.contend('traefik.lock'), 'acquired')
-
-    def test_standalone_adopt_is_excluded_then_succeeds_after_unlock(self):
-        from core import lock
-        with lock(self.directories['locks'] / 'penpot@operation.lock'):
-            # Execute the real standalone adoption entry point in another process.
-            program = '''import core, json, runpy, sys
-from core import Failure
-core.fixture_authorized = lambda: True
-controller = runpy.run_path(sys.argv[1])
-try:
-    controller['adopt'](*map(__import__('pathlib').Path, sys.argv[2:5]), json.loads(sys.argv[5]))
-except Failure as exc:
-    print(exc.code)
-'''
-            env = dict(os.environ, PYTHONPATH=str(ROOT / 'lib'), PYTHONDONTWRITEBYTECODE='1')
-            result = subprocess.run([sys.executable, '-c', program, str(self.release / 'bin/deployctl'),
-                                     str(self.cfg), str(self.state), str(self.directories['locks']), json.dumps(self.profile)],
-                                    capture_output=True, timeout=10, env=env, check=True)
-            self.assertEqual(result.stdout.decode().strip(), 'APP_BUSY')
-            self.preflight.assert_not_called()
-            self.assertFalse((self.state / 'state.json').exists())
-        self.controller['adopt'](self.cfg, self.state, self.directories['locks'], self.profile)
-        self.assertEqual(load(self.state / 'state.json'), self.adopted)
-
-    def test_activation_preserves_runtime_route_and_identity_failures(self):
-        for failure in ('INVALID_RUNTIME_ENV', 'ROUTE_MISMATCH', 'PENPOT_IMAGE_REVISION'):
-            with self.subTest(failure=failure), contextlib.ExitStack() as stack:
-                self.preflight.reset_mock()
-                if failure == 'INVALID_RUNTIME_ENV':
-                    stack.enter_context(mock.patch('penpot.runtime_values', side_effect=Failure(failure)))
-                elif failure == 'ROUTE_MISMATCH':
-                    stack.enter_context(mock.patch('route.route_state', return_value=('blue', 'b' * 32)))
-                else:
-                    stack.enter_context(mock.patch('penpot.adopt_state', side_effect=Failure(failure)))
-                with self.assertRaisesRegex(Failure, failure):
-                    self.activate()
-                self.assertFalse((self.state / 'state.json').exists())
-                if failure == 'INVALID_RUNTIME_ENV':
-                    self.preflight.assert_not_called()
-                self.assertEqual(self.contend('penpot@operation.lock'), 'acquired')
-                self.assertEqual(self.contend('traefik.lock'), 'acquired')
-
-
 class InstallerCommandErrors(unittest.TestCase):
     def test_controller_error_survives_without_forwarding_secret_output(self):
-        report = json.dumps({'status': 'failed', 'error_code': 'PENPOT_PUBLIC_HEALTH',
+        report = json.dumps({'status': 'failed', 'error_code': 'PUBLIC_HEALTH',
                              'detail': 'private credential'}).encode()
         result = SimpleNamespace(returncode=1, stdout=report, stderr=b'private credential')
         with mock.patch.object(installer.subprocess, 'run', return_value=result):
             with self.assertRaises(Failure) as caught:
-                installer.run('/fixture/bin/deployctl', 'adopt', '--app', 'penpot')
-        self.assertEqual(caught.exception.code, 'PENPOT_PUBLIC_HEALTH')
+                installer.run('/fixture/bin/deployctl', 'adopt', '--app', 'demo')
+        self.assertEqual(caught.exception.code, 'PUBLIC_HEALTH')
         self.assertNotIn('private credential', str(caught.exception))
 
     def test_unstructured_or_foreign_command_output_stays_private(self):
@@ -397,7 +234,7 @@ class InstallerCommandErrors(unittest.TestCase):
                 ('/fixture/bin/deployctl', b'private credential'),
                 ('/fixture/bin/deployctl', b'[]'),
                 ('/fixture/bin/deployctl', b'{"status":"failed","error_code":"private credential"}'),
-                ('/bin/bash', b'{"status":"failed","error_code":"PENPOT_PUBLIC_HEALTH"}')):
+                ('/bin/bash', b'{"status":"failed","error_code":"PUBLIC_HEALTH"}')):
             with self.subTest(command=command, output=output):
                 result = SimpleNamespace(returncode=1, stdout=output, stderr=b'private credential')
                 with mock.patch.object(installer.subprocess, 'run', return_value=result):

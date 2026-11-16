@@ -21,25 +21,11 @@
             "pattern": "^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$"
         },
         "strategy": {
-            "enum": [
-                "blue-green",
-                "penpot"
-            ]
+            "const": "blue-green"
         },
         "image": {
             "type": "string",
             "pattern": "^(?:ghcr\\.io/[a-z0-9./_-]+|localhost:5000/[a-z0-9-]+)$"
-        },
-        "images": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["frontend", "backend", "exporter", "mcp"],
-            "properties": {
-                "frontend": {"const": "ghcr.io/thedemontuan/penpot-frontend"},
-                "backend": {"const": "ghcr.io/thedemontuan/penpot-backend"},
-                "exporter": {"const": "ghcr.io/thedemontuan/penpot-exporter"},
-                "mcp": {"const": "ghcr.io/thedemontuan/penpot-mcp"}
-            }
         },
         "platform": {
             "const": "linux/arm64"
@@ -128,24 +114,8 @@
     },
     "allOf": [
         {
-            "if": {"properties": {"strategy": {"const": "penpot"}}, "required": ["strategy"]},
-            "then": {
-                "required": ["images"],
-                "not": {"anyOf": [
-                    {"required": ["image"]}, {"required": ["build"]},
-                    {"required": ["rtk"]}, {"required": ["cgw"]}
-                ]},
-                "properties": {
-                    "app": {"const": "penpot"},
-                    "runtime": {"properties": {"port": {"const": 8080}}},
-                    "health": {"properties": {"path": {"const": "/readyz"}, "timeout_seconds": {"const": 180}}}
-                }
-            },
-            "else": {
-                "required": ["image"],
-                "not": {"required": ["images"]},
-                "properties": {"health": {"properties": {"timeout_seconds": {"const": 60}}}}
-            }
+            "required": ["image"],
+            "properties": {"health": {"properties": {"timeout_seconds": {"const": 60}}}}
         },
         {
             "if": {

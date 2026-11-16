@@ -15,7 +15,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
-from core import Failure, app_registration, fixture_authorized, host_registration, image_map, manifest, parse_json, trusted_path
+from core import Failure, app_registration, fixture_authorized, host_registration, manifest, parse_json, trusted_path
 
 
 def require(pattern, value, name):
@@ -60,38 +60,22 @@ def main():
     policy = registration["manifest"]
     if args.component != 'app' and args.component not in policy:
         raise ValueError('unregistered component')
-    penpot = policy['strategy'] == 'penpot'
-    repositories = policy.get('images')
-    repository = None if penpot else (policy['image'] if args.component == 'app' else policy[args.component]['image'])
+    repository = policy['image'] if args.component == 'app' else policy[args.component]['image']
     if args.fixture:
         profile = pathlib.Path("/etc/vps-deploy/apps") / args.app / "host.json"
         selected = json.loads(trusted_path(profile).read_bytes())
         if selected.get("platform_ref") != args.platform_ref or selected.get("fixture_ci") is not True:
             raise ValueError("fixture release mismatch")
-        if penpot:
-            repositories = selected['image_repositories']
-            if repositories != {role: 'localhost:5000/penpot-' + role for role in policy['images']}:
-                raise ValueError('invalid fixture image repositories')
-        elif args.component != 'cgw':
+        if args.component != 'cgw':
             repository = selected['image_repository' if args.component == 'app' else 'rtk_image_repository']
             if not re.fullmatch(r'localhost:5000/[a-z0-9/_-]+', repository):
                 raise ValueError('invalid fixture image repository')
-    if penpot:
-        if args.component != 'app' or args.image:
-            raise ValueError('invalid Penpot component or single image')
-        if args.operation == 'rollback':
-            raise ValueError('PENPOT_ROLLBACK_REQUIRES_OFFLINE_RESTORE')
-        if args.operation == 'deploy':
-            args.images = image_map(parse_json(args.images.encode()), repositories)
-        elif args.images:
-            raise ValueError('images not accepted for operation')
-    else:
-        if args.images:
-            raise ValueError('image map requires Penpot strategy')
-        if args.operation == 'deploy':
-            require(re.escape(repository) + r'@sha256:[0-9a-f]{64}', args.image, 'image')
-        elif args.image:
-            raise ValueError('image not accepted for operation')
+    if args.images:
+        raise ValueError('images map not accepted')
+    if args.operation == 'deploy':
+        require(re.escape(repository) + r'@sha256:[0-9a-f]{64}', args.image, 'image')
+    elif args.image:
+        raise ValueError('image not accepted for operation')
     if args.operation == "rollback" and args.component != "app":
         raise ValueError("rollback only accepts app")
     if args.operation != "status":
@@ -103,7 +87,7 @@ def main():
                        app=args.app, component=args.component, platform_ref=args.platform_ref,
                        manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(), source_sha=args.source_sha)
         if args.operation == "deploy":
-            payload['images' if penpot else 'image'] = args.images if penpot else args.image
+            payload['image'] = args.image
     else:
         payload = dict(version=1, op="status", app=args.app, request_id=args.request_id)
 
@@ -166,7 +150,7 @@ def dispatch(args, payload, ssh):
             raise ValueError("invalid host response")
         return response
 
-    deadline = time.monotonic() + (1860 if args.app == 'penpot' or args.component == 'cgw' else 960)
+    deadline = time.monotonic() + (1860 if args.component == 'cgw' else 960)
 
     def connected(request):
         while True:
@@ -199,10 +183,7 @@ def dispatch(args, payload, ssh):
     if answer.get("healthy") is not True:
         raise RuntimeError("strict route, image, or health proof failed")
     if args.operation == 'deploy' and args.component == 'app':
-        if args.app == 'penpot':
-            if answer.get('images') != args.images or answer.get('source_sha') != args.source_sha:
-                raise RuntimeError('deployed Penpot release digest or source mismatch')
-        elif answer.get('image') != args.image:
+        if answer.get('image') != args.image:
             raise RuntimeError('deployed image digest mismatch')
     if args.operation == 'deploy' and args.component == 'cgw' and (answer.get('cgw') or {}).get('current') != args.image:
         raise RuntimeError('deployed CGW image digest mismatch')
@@ -213,7 +194,7 @@ def dispatch(args, payload, ssh):
                       "|---|---|---|---|---|---|---|\n"
                       "| {request_id} | {source} | {image} | {platform} | {active} | {generation} | {draining} |\n".format(
                           request_id=args.request_id, source=args.source_sha,
-                          image=json.dumps(answer.get('images'), sort_keys=True) if args.app == 'penpot' else (args.image or answer.get('image')),
+                          image=(args.image or answer.get('image')),
                           platform=args.platform_ref, active=answer.get("active"),
                           generation=answer.get("configured_generation"), draining=answer.get("draining")))
 
