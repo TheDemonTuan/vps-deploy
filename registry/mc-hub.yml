@@ -17,7 +17,7 @@ manifest:
   health: {path: /healthz, timeout_seconds: 60}
   route: {timeout_seconds: 30}
 runtime:
-  allowed_env: [KEYSTATIC_GITHUB_CLIENT_ID, KEYSTATIC_GITHUB_CLIENT_SECRET, KEYSTATIC_SECRET]
+  allowed_env: []
   required_env: []
 route:
   generation_header: X-MC-Hub-Route-Generation

@@ -1,0 +1,56 @@
+x-runtime: &runtime
+  image: ${IMAGE_REF:?IMAGE_REF must be an immutable image digest}
+  restart: unless-stopped
+  user: "1000:1000"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+  networks: [edge]
+  expose: ["8080"]
+  # Blue and green share one SQLite (WAL) database and media store during cutover.
+  volumes:
+    - data:/data
+  stop_grace_period: 60s
+  healthcheck:
+    test: [CMD, wget, -qO-, "http://127.0.0.1:8080/healthz"]
+    interval: 5s
+    timeout: 3s
+    retries: 6
+    start_period: 10s
+  # Image uploads decode up to 50 MP in memory.
+  mem_limit: 768m
+  cpus: 1.0
+  pids_limit: 128
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+x-environment: &environment
+  DATA_DIR: /data
+  SITE_URL: https://minecraft.tuannguyenviet.site
+  # Only cloudflared reaches Traefik (tunnel-only), so CF-Connecting-IP is authoritative.
+  TRUST_CF_CONNECTING_IP: "1"
+services:
+  mc-hub-api-blue:
+    <<: *runtime
+    container_name: mc-hub-api-blue
+    environment:
+      <<: *environment
+      DEPLOY_SLOT: blue
+  mc-hub-api-green:
+    <<: *runtime
+    container_name: mc-hub-api-green
+    environment:
+      <<: *environment
+      DEPLOY_SLOT: green
+volumes:
+  data:
+    name: mc-hub-api-data
+networks:
+  # Internal: the API never initiates outbound connections.
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-edge-mc-hub-api}

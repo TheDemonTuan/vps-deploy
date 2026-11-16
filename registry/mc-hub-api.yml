@@ -1,0 +1,24 @@
+version: 1
+app: mc-hub-api
+host: oracle-main
+caller:
+  repository: TheDemonTuan/mc-hub-api
+  ref: refs/heads/main
+  config: .deploy/app.yml
+  build_workflows: [deploy.yml]
+  deploy_workflows: [deploy.yml]
+manifest:
+  version: 1
+  app: mc-hub-api
+  strategy: blue-green
+  image: ghcr.io/thedemontuan/mc-hub-api
+  platform: linux/arm64
+  runtime: {port: 8080}
+  health: {path: /healthz, timeout_seconds: 60}
+  route: {timeout_seconds: 30}
+runtime:
+  allowed_env: []
+  required_env: []
+route:
+  generation_header: X-MC-Hub-API-Route-Generation
+  required_middlewares: [deny-internal, tunnel-only]
