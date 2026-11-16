@@ -380,6 +380,24 @@ receives only the forced-command account's `DEPLOY_SSH_KEY`, not the operator ke
 After a platform deployment passes, remove the old portfolio container, unused
 network attachment, and obsolete caller `VPS_*` secrets; never remove shared ingress.
 
+### mc-hub: Astro/Bun blue-green enrollment
+
+`mc-hub` registers `TheDemonTuan/mc-hub` on `main`, image `ghcr.io/thedemontuan/mc-hub`,
+port `8080`, JSON `/healthz` (in-flight request count from the Bun HTTP server), public
+host `minecraft.tuannguyenviet.site`. Containers run UID 1000 with a read-only root.
+
+- `edge-mc-hub` is **not** internal: the Keystatic admin's OAuth callback exchanges
+  tokens with `github.com`. Runtime env is optional (`KEYSTATIC_GITHUB_CLIENT_ID`,
+  `KEYSTATIC_GITHUB_CLIENT_SECRET`, `KEYSTATIC_SECRET`); the public site runs without them.
+- The route uses app-owned `mc-hub-security-headers` instead of shared `security-headers`:
+  the shared CSP blocks AdSense and YouTube embeds. `tunnel-only` and `deny-internal` stay.
+- Admin saves commit to the app repo's `main`, which is the normal deploy trigger.
+- First enrollment follows the portfolio procedure: stage `mc-hub-blue` from this
+  release's Compose profile, attach Traefik to `edge-mc-hub` (live `docker network
+  connect` plus the edge Compose file, no restart), publish the adapter-rendered
+  `mc-hub.yml`, run `mc-hub-ingress.yml` survey then apply, installer `--check`/apply,
+  `restorecon`, then `deployctl adopt --app mc-hub`.
+
 ### 4. Thành phần Stateful ChatGPT Web Runtime (`cgw`)
 
 **Production 9router đang tạm ngừng CGW (2026-10-16).** Registration không enroll `cgw`, host binding không có `cgw_network`, và caller runtime không còn trong build/security/deploy allowlists. Web app không cần Chrome/runtime để build, healthy hoặc deploy. Source/runtime implementation và account/browser volumes được giữ lại; không tự enroll hay khởi chạy lại.
