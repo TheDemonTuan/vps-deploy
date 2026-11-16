@@ -276,7 +276,7 @@ class UptimeflareProbeInstall(unittest.TestCase):
                       b'NoNewPrivileges=yes', b'CapabilityBoundingSet=', b'AmbientCapabilities=', b'RuntimeMaxSec=90',
                       b'MemoryMax=768M', b'CPUQuota=100%', b'TasksMax=256', b'/usr/bin/env -i',
                       b'PrivateDevices=yes', b'ReadOnlyPaths=', b'InaccessiblePaths=-/etc/vps-deploy',
-                      b'-/var/lib/vps-deploy', b'-/opt/platform', b'-/opt/9router', b'-/opt/penpot',
+                      b'-/var/lib/vps-deploy', b'-/opt/platform', b'-/opt/9router',
                       b'-/opt/tuan-portfolio', b'HOME=/tmp'):
             self.assertIn(token, wrapper)
         self.assertIn(b'NOPASSWD: /usr/local/libexec/vps-deploy-uptimeflare-probe ""\n', sudoers)

@@ -8,10 +8,6 @@ from core import Failure, container, container_digest, require
 
 def check(root, app, registration, binding, runtime, previous, *, cgw_transition=False,
           cgw_suspension=False, source_sha=None, platform_ref=None):
-    if registration['manifest'].get('strategy') == 'penpot':
-        require(app == 'penpot' and not cgw_transition and not cgw_suspension, 'PENPOT_COMPOSE_ARGUMENT')
-        from penpot_preflight import check as penpot_check
-        return penpot_check(root, registration, binding, runtime, source_sha, platform_ref)
     names = registration['runtime']
     raw = runtime.read_text()
     present = {line.split('=', 1)[0] for line in raw.splitlines() if '=' in line and not line.startswith('#')}

@@ -18,14 +18,6 @@ apps:
     edge_network: edge-9router
     rtk_network: 9router-rtk
     route_name: 9router.yml
-  penpot:
-    api_host: design.tuannguyenviet.site
-    dashboard_host: ""
-    dashboard_alias_host: ""
-    work_dir: /opt/penpot
-    compose_project: penpot
-    edge_network: edge-penpot
-    route_name: penpot.yml
   tuan-portfolio:
     api_host: tuannguyenviet.site
     dashboard_host: ""

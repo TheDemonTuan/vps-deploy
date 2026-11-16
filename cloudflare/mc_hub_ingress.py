@@ -12,7 +12,7 @@ import copy
 import fnmatch
 import json
 import sys
-from penpot_ingress import Client, Failure, TUNNEL, ZONE, active_connectors, inventory_list
+from tunnel_api import Client, Failure, TUNNEL, ZONE, active_connectors, inventory_list
 
 HOSTS = ('minecraft.tuannguyenviet.site', 'minecraft-api.tuannguyenviet.site')
 

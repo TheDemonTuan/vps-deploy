@@ -14,8 +14,7 @@ import copy
 import fnmatch
 import json
 import sys
-from penpot_ingress import Client, Failure, inventory_list
-from penpot_apply import domains, identity
+from tunnel_api import Client, Failure, domains, identity, inventory_list
 
 SITE = 'minecraft.tuannguyenviet.site'
 API = 'minecraft-api.tuannguyenviet.site'

@@ -207,7 +207,7 @@ exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C /usr/bin/flock -n /run/vps-deploy
  --property=RuntimeMaxSec=90 --property=MemoryMax=768M --property=CPUQuota=100% --property=TasksMax=256 \\
  --property=PrivateTmp=yes --property=ProtectSystem=strict --property=ProtectHome=yes \\
  --property=PrivateDevices=yes --property=ReadOnlyPaths=RUNTIME \\
- '--property=InaccessiblePaths=-/etc/vps-deploy -/var/lib/vps-deploy -/opt/platform -/opt/9router -/opt/penpot -/opt/tuan-portfolio' \\
+ '--property=InaccessiblePaths=-/etc/vps-deploy -/var/lib/vps-deploy -/opt/platform -/opt/9router -/opt/tuan-portfolio' \\
  --property=NoNewPrivileges=yes --property=CapabilityBoundingSet= --property=AmbientCapabilities= \\
  --property=UMask=0077 --property=WorkingDirectory=/tmp \\
  /usr/bin/env -i PATH=/usr/bin:/bin LANG=C HOME=/tmp UPTIMEFLARE_BROWSER_EXECUTABLE=/usr/bin/chromium-browser \\
