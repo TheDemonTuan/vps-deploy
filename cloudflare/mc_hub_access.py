@@ -2,10 +2,11 @@
 """Put mc-hub's admin surface behind Cloudflare Access; touch nothing else.
 
 One self-hosted app ("MC Hub Admin") covers the admin pages and the admin/auth API on the
-site host, linked to one reusable allow policy over exact email addresses. Its first allow
-list and identity providers are copied from the OmniRoute admin app (the operator's existing
-admin identity); afterwards the script only verifies shape, so dashboard edits to the email
-list are kept. The API host needs no Access app: Traefik routes only SSR reads there.
+site host. Like the OmniRoute admin app, it is its own policy source: one app-scoped allow
+policy over exact email addresses (the token cannot create reusable policies). The first
+allow list and identity providers are copied from the OmniRoute admin app; afterwards the
+script only verifies shape, so dashboard edits to the email list are kept. The API host needs
+no Access app: Traefik routes only SSR reads there.
 Output is counts and booleans only: this repository's Actions logs are public.
 """
 import argparse
@@ -34,9 +35,12 @@ def uris(app):
     return sorted(set(found + domains(app)))
 
 
-def email_rules(policy):
-    includes = inventory_list(policy.get('include'))
-    if (policy.get('decision') != 'allow' or not includes or policy.get('exclude') or policy.get('require') or
+def email_rules(app):
+    """The app's single allow policy; its includes must be exact email addresses."""
+    policies = inventory_list(app.get('policies'))
+    includes = inventory_list(policies[0].get('include')) if len(policies) == 1 else []
+    if (len(policies) != 1 or policies[0].get('decision') != 'allow' or not includes or
+            policies[0].get('exclude') or policies[0].get('require') or
             any(set(rule) != {'email'} or type(rule['email']) is not dict or type(rule['email'].get('email')) is not str or
                 '@' not in rule['email']['email'] or '*' in rule['email']['email'] for rule in includes)):
         raise Failure('ACCESS_POLICY_SHAPE')
@@ -57,60 +61,49 @@ def survey(client):
     for app in apps:
         if app not in own and any(fnmatch.fnmatchcase(host, uri.split('/', 1)[0]) for uri in uris(app) for host in (SITE, API)):
             raise Failure('ACCESS_SCOPE_CONFLICT')
-    named = [policy for policy in inventory_list(client.get(base + '/policies?per_page=100')) if policy.get('name') == POLICY]
-    if len(own) > 1 or len(named) > 1:
+    if len(own) > 1:
         raise Failure('ACCESS_DUPLICATE')
-    state = {'base': base, 'app': None, 'policy': None, 'source': None}
-    if named:
-        policy = client.get(base + '/policies/' + identity(named[0].get('id')))
-        if policy.get('id') != named[0]['id'] or policy.get('name') != POLICY:
-            raise Failure('ACCESS_POLICY_SHAPE')
-        email_rules(policy)
-        state['policy'] = policy
+    state = {'base': base, 'app': None, 'source': None}
     if own:
         app = client.get(base + '/apps/' + identity(own[0].get('id')))
-        links = inventory_list(app.get('policies'))
         if (app.get('id') != own[0]['id'] or app.get('type') != 'self_hosted' or uris(app) != sorted(PATHS) or
-                app.get('http_only_cookie_attribute') is not True or state['policy'] is None or
-                [link.get('id') for link in links] != [state['policy']['id']]):
+                app.get('http_only_cookie_attribute') is not True):
             raise Failure('ACCESS_APP_DRIFT')
+        email_rules(app)
         idps(app)
         state['app'] = app
-    if state['app'] is None:
+    else:
         sources = [app for app in apps if app.get('name') == SOURCE]
         if len(sources) != 1:
             raise Failure('SOURCE_ACCESS_APP_REQUIRED')
         source = client.get(base + '/apps/' + identity(sources[0].get('id')))
-        policies = inventory_list(source.get('policies'))
-        if source.get('id') != sources[0]['id'] or len(policies) != 1:
+        if source.get('id') != sources[0]['id']:
             raise Failure('SOURCE_ACCESS_POLICY_SHAPE')
-        state['source'] = {'include': email_rules(policies[0]), 'allowed_idps': idps(source)}
+        state['source'] = {'include': email_rules(source), 'allowed_idps': idps(source)}
     return state
 
 
-def app_body(policy_id, allowed_idps):
+def app_body(include, allowed_idps):
     return {'name': NAME, 'type': 'self_hosted',
             'destinations': [{'type': 'public', 'uri': uri} for uri in PATHS],
             'session_duration': '24h', 'http_only_cookie_attribute': True, 'same_site_cookie_attribute': 'lax',
             'app_launcher_visible': False, 'allowed_idps': list(allowed_idps),
             'auto_redirect_to_identity': len(allowed_idps) == 1,
-            'policies': [{'id': policy_id, 'precedence': 1}]}
+            'policies': [{'name': POLICY, 'decision': 'allow', 'include': copy.deepcopy(include), 'precedence': 1}]}
 
 
 def run(client, operation):
     state = survey(client)
-    before = {'app_present': state['app'] is not None, 'policy_present': state['policy'] is not None}
-    if operation == 'apply' and state['app'] is None:
-        base, source = state['base'], state['source']
-        policy = state['policy'] or client.request('POST', base + '/policies',
-            {'name': POLICY, 'decision': 'allow', 'include': copy.deepcopy(source['include'])})
-        client.request('POST', base + '/apps', app_body(identity(policy.get('id')), source['allowed_idps']))
+    present = state['app'] is not None
+    if operation == 'apply' and not present:
+        source = state['source']
+        client.request('POST', state['base'] + '/apps', app_body(source['include'], source['allowed_idps']))
         state = survey(client)
         if state['app'] is None:
             raise Failure('ACCESS_VERIFY_FAILED')
-    rules = state['policy']['include'] if state['policy'] else state['source']['include']
-    return dict(before, operation=operation, paths=list(PATHS), allowed_emails=len(rules),
-                protected=state['app'] is not None)
+    rules = email_rules(state['app']) if state['app'] else state['source']['include']
+    return {'operation': operation, 'app_present': present, 'paths': list(PATHS),
+            'allowed_emails': len(rules), 'protected': state['app'] is not None}
 
 
 def main():
