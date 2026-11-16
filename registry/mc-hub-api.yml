@@ -17,8 +17,8 @@ manifest:
   health: {path: /healthz, timeout_seconds: 60}
   route: {timeout_seconds: 30}
 runtime:
-  allowed_env: []
-  required_env: []
+  allowed_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET]
+  required_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET]
 route:
   generation_header: X-MC-Hub-API-Route-Generation
   required_middlewares: [deny-internal, tunnel-only]

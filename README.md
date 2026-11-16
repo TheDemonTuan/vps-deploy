@@ -392,10 +392,15 @@ UID 1000 with a read-only root, and deploy independently.
   priority 200 over the frontend's 100), so admin and uploads stay same-origin.
 - `mc-hub-api` blue and green share the named volume `mc-hub-api-data` (SQLite + media +
   daily `VACUUM INTO` backups under `/data/backups`); its migrations must stay additive.
-  `edge-mc-hub-api` is internal: the API makes no outbound connections.
+  `edge-mc-hub-api` is internal (inbound from Traefik only); outbound goes through
+  `mc-hub-api-egress`, used solely for Cloudflare Turnstile siteverify.
 - `edge-mc-hub` is **not** internal: frontend SSR reads published content from
   `https://minecraft-api.tuannguyenviet.site` (`API_URL` in its Compose profile).
-- Neither app needs runtime env. Admin auth (argon2id password + TOTP) lives in the API;
+- `mc-hub-api` requires `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET` in
+  `/etc/vps-deploy/apps/mc-hub-api/runtime.env` (root, 0600; widget for the site host).
+  Adding a network or env changes Compose parity: recreate the running slot from the new
+  release's Compose profile before installing that release. The frontend needs no env.
+- Admin auth (argon2id password + TOTP + Turnstile) lives in the API;
   enrollment links come from `docker exec mc-hub-api-<slot> /app/mc-hub-api admin invite --username <u>`.
 - Admin is two layers: `mc-hub-access.yml` (survey, then apply) creates the Cloudflare Access
   app "MC Hub Admin" over `/admin`, `/api/admin` and `/api/auth` on the site host, with its own
