@@ -8,7 +8,7 @@ import sys
 from urllib.parse import urlsplit
 from tunnel_api import Client, Failure, READ_ONLY, TUNNEL, ZONE, active_connectors, domains, inventory_list
 
-HOSTS = ('design.tuannguyenviet.site', 'files.tuannguyenviet.site')
+HOSTS = ('design.tuannguyenviet.site', 'files.tuannguyenviet.site', 'share.tuannguyenviet.site')
 MARKERS = ('penpot', 'filemgr') + HOSTS
 
 
