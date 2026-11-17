@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import core
 from core import Failure, app_registration, exact, host_registration, parse_yaml, resource_collisions, trusted_path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,21 @@ class Registration(unittest.TestCase):
         }
         with self.assertRaisesRegex(Failure, 'RESOURCE_COLLISION'):
             resource_collisions(host)
+
+    def test_production_host_profile_loads_single_image_app(self):
+        # #81 left a dangling multi_image reference: every real host load raised NameError.
+        registration = app_registration(ROOT, 'omniroute')
+        host_record = host_registration(ROOT, 'oracle-main')
+        profile = dict(host_record['apps']['omniroute'], platform_ref='a' * 40,
+                       dynamic_dir=host_record['traefik']['dynamic_dir'])
+        with mock.patch('core.trusted_path'), mock.patch('core.load', return_value=dict(profile)), \
+                mock.patch('core.app_registration', return_value=registration), \
+                mock.patch('core.host_registration', return_value=host_record), \
+                mock.patch('core.fixture_authorized', return_value=False), \
+                mock.patch.object(Path, 'stat', return_value=SimpleNamespace(st_mode=0o100600)):
+            value = core.host(Path('/etc/vps-deploy/apps/omniroute'), registration, host_record)
+        self.assertEqual(value['image_repository'], 'ghcr.io/thedemontuan/omniroute-vps')
+        self.assertEqual(value['architecture'], 'arm64')
 
 
     def test_root_owned_sticky_lock_ancestor_only(self):

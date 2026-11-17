@@ -30,7 +30,7 @@ x-runtime: &runtime
     timeout: 3s
     retries: 6
     start_period: 15s
-  mem_limit: 2048m
+  mem_limit: 3072m
   cpus: 2.0
   pids_limit: 256
   logging:

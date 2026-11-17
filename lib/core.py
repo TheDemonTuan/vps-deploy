@@ -464,10 +464,7 @@ def host(config, registration, host_record):
             if fault.exists() or fault.is_symlink():
                 trusted_path(fault)
     else:
-        if multi_image:
-            value['image_repositories'] = registration['manifest']['images']
-        else:
-            value['image_repository'] = registration['manifest']['image']
+        value['image_repository'] = registration['manifest']['image']
         value['rtk_image_repository'] = registration['manifest'].get('rtk', {}).get('image')
         value['architecture'] = 'arm64'
     value['cgw_image_repository'] = registration['manifest'].get('cgw', {}).get('image')
