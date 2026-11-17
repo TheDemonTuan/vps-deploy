@@ -406,7 +406,7 @@ UID 1000 with a read-only root, and deploy independently.
   app "MC Hub Admin" over `/admin`, `/api/admin` and `/api/auth` on the site host, with its own
   allow policy "MC Hub admins" (exact emails; first copied from the OmniRoute admin app, then
   edited only in the dashboard). The API host routes only SSR reads
-  (`/api/posts*`, `/api/pages/*`, `/api/settings`, `/api/auth/me`, `/healthz`); everything else
+  (`/api/posts*`, `/api/pages/*`, `/api/settings`, `/api/stats`, `/api/auth/me`, `/healthz`); everything else
   there hits `deny-internal`.
 - Edge cache: `mc-hub-cache.yml` (survey, then apply) keeps one rule
   (`mc-hub-public-edge-cache`) on the zone's cache-settings entrypoint.
