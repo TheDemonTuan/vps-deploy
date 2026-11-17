@@ -24,7 +24,7 @@ class McHubApi(unittest.TestCase):
             allowed = routers['mc-hub-api-router']
             # Admin and login exist only on the site host, behind Cloudflare Access.
             self.assertEqual(set(re.findall(r'Path(?:Prefix)?\(`([^`]*)`\)', allowed['rule'])),
-                             {'/healthz', '/api/posts', '/api/posts/', '/api/pages/', '/api/settings', '/api/auth/me'})
+                             {'/healthz', '/api/posts', '/api/posts/', '/api/pages/', '/api/settings', '/api/stats', '/api/auth/me'})
             self.assertIn('tunnel-only', allowed['middlewares'])
             fallback = routers['mc-hub-api-fallback']
             self.assertEqual((fallback['rule'], fallback['middlewares']), ('Host(`' + host['api_host'] + '`)', ['deny-internal']))

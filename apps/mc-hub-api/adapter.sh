@@ -33,7 +33,7 @@ http:
       middlewares: [deny-internal]
       service: mc-hub-api-service
     mc-hub-api-router:
-      rule: "Host(\`$api\`) && (Path(\`/healthz\`) || Path(\`/api/posts\`) || PathPrefix(\`/api/posts/\`) || PathPrefix(\`/api/pages/\`) || Path(\`/api/settings\`) || Path(\`/api/auth/me\`))"
+      rule: "Host(\`$api\`) && (Path(\`/healthz\`) || Path(\`/api/posts\`) || PathPrefix(\`/api/posts/\`) || PathPrefix(\`/api/pages/\`) || Path(\`/api/settings\`) || Path(\`/api/stats\`) || Path(\`/api/auth/me\`))"
       entryPoints: [web]
       priority: 500
       middlewares: [mc-hub-api-route-generation, tunnel-only, mc-hub-api-security-headers]
