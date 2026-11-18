@@ -1,0 +1,24 @@
+name: local/mc-hub-bot-scope
+# Scope for the hub collection crowdsecurity/appsec-bot-challenge (balanced, JS proof-of-browser).
+# Its scoring config challenges every request that no pre_eval exempts, on every host behind
+# Traefik, so this config must stay loaded with it. Verified good bots (Googlebot, Bingbot,
+# AdSense, social previews, monitoring) are exempted by the collection's IP/rDNS-checked lists.
+# Installed as /etc/crowdsec/appsec-configs/local-mc-hub-bot-scope.yaml and listed in
+# /etc/crowdsec/acquis.d/appsec.yaml.
+inband:
+  pre_eval:
+    # Only MC Hub's public pages: APIs, dashboards and other apps never see a challenge.
+    - filter: req.Host != "tuannguyenviet.site"
+      apply:
+        - ExemptFromChallenge("not-mc-hub")
+    # Everything on the site a script, crawler, deploy probe or Cloudflare Access reads,
+    # not a person navigating: JSON/API, media, assets, feeds, admin, health, non-GET.
+    - filter: |-
+        req.Method != "GET" ||
+        req.URL.Path in ["/healthz", "/search.json", "/rss.xml", "/sitemap.xml", "/robots.txt", "/ads.txt", "/favicon.svg"] ||
+        req.URL.Path startsWith "/api/" ||
+        req.URL.Path startsWith "/media/" ||
+        req.URL.Path startsWith "/_astro/" ||
+        req.URL.Path == "/admin" || req.URL.Path startsWith "/admin/"
+      apply:
+        - ExemptFromChallenge("mc-hub-non-page")

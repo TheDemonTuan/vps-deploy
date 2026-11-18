@@ -31,6 +31,26 @@ class McHubApi(unittest.TestCase):
             self.assertLess(fallback['priority'], allowed['priority'])
             site = host_registration(ROOT, 'oracle-main')['apps']['mc-hub']['api_host']
             self.assertIn('Host(`' + site + '`)', routers['mc-hub-api-site-router']['rule'])
+            # SSR reads all come from the VPS: a per-IP limit there would throttle every reader at once.
+            self.assertFalse({'mc-hub-api-rate-limit', 'mc-hub-api-inflight'} & set(allowed['middlewares']))
+            reads, writes = routers['mc-hub-api-site-router'], routers['mc-hub-api-site-write']
+            self.assertIn('mc-hub-api-rate-limit', reads['middlewares'])
+            self.assertEqual(writes['rule'], 'Host(`' + site + '`) && Method(`POST`) && PathPrefix(`/api/`) && !PathPrefix(`/api/admin/`)')
+            self.assertGreater(writes['priority'], reads['priority'])
+            self.assertEqual(writes['middlewares'][:3], ['mc-hub-api-route-generation', 'tunnel-only', 'mc-hub-api-write-rate-limit'])
+            self.assertIn('mc-hub-api-write-body-limit', writes['middlewares'])
+            limiters = parse_yaml(raw)['http']['middlewares']
+            for name in ('mc-hub-api-rate-limit', 'mc-hub-api-write-rate-limit', 'mc-hub-api-inflight'):
+                key = next(iter(limiters[name].values()))['sourceCriterion']
+                self.assertEqual(key, {'requestHeaderName': 'CF-Connecting-IP'})
+
+    def test_site_pages_are_rate_limited_per_visitor(self):
+        site = host_registration(ROOT, 'oracle-main')['apps']['mc-hub']['api_host']
+        raw = subprocess.check_output(['bash', str(ROOT / 'apps/mc-hub/adapter.sh'), 'blue', 'a' * 32, '', '', site])
+        http = parse_yaml(raw)['http']
+        self.assertEqual(http['routers']['mc-hub-router']['middlewares'][:4],
+                         ['mc-hub-route-generation', 'tunnel-only', 'mc-hub-rate-limit', 'mc-hub-inflight'])
+        self.assertEqual(http['middlewares']['mc-hub-rate-limit']['rateLimit']['sourceCriterion'], {'requestHeaderName': 'CF-Connecting-IP'})
 
 
 if __name__ == '__main__':

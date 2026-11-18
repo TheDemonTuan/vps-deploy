@@ -11,7 +11,10 @@ cat <<EOF
 # Also serves /api/ and /media/ on the mc-hub site host so the browser stays same-origin;
 # admin and login run only there, behind the "MC Hub Admin" Cloudflare Access app.
 # The API host is for frontend SSR: only the reads it makes (and the session check its
-# cache purge needs) are routed; everything else on it is denied.
+# cache purge needs) are routed; everything else on it is denied. All its traffic comes from
+# the VPS itself, so it gets no per-IP limit. Browser traffic on the site host does, keyed on
+# CF-Connecting-IP (only cloudflared reaches Traefik); public writes get a stricter budget and
+# a 64 KiB body cap. The API keeps its own per-action limits (comments, feedback, login).
 http:
   middlewares:
     mc-hub-api-route-generation:
@@ -25,6 +28,28 @@ http:
           X-Frame-Options: "DENY"
           Referrer-Policy: "strict-origin-when-cross-origin"
           Permissions-Policy: "camera=(), microphone=(), geolocation=()"
+    mc-hub-api-rate-limit:
+      rateLimit:
+        average: 10
+        period: 1s
+        burst: 30
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
+    mc-hub-api-write-rate-limit:
+      rateLimit:
+        average: 30
+        period: 1m
+        burst: 10
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
+    mc-hub-api-inflight:
+      inFlightReq:
+        amount: 8
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
+    mc-hub-api-write-body-limit:
+      buffering:
+        maxRequestBodyBytes: 65536
   routers:
     mc-hub-api-deny-internal:
       rule: "Host(\`$api\`) && PathPrefix(\`/internal\`)"
@@ -48,7 +73,13 @@ http:
       rule: "Host(\`$site\`) && (PathPrefix(\`/api/\`) || PathPrefix(\`/media/\`))"
       entryPoints: [web]
       priority: 200
-      middlewares: [mc-hub-api-route-generation, tunnel-only, mc-hub-api-security-headers]
+      middlewares: [mc-hub-api-route-generation, tunnel-only, mc-hub-api-rate-limit, mc-hub-api-inflight, mc-hub-api-security-headers]
+      service: mc-hub-api-service
+    mc-hub-api-site-write:
+      rule: "Host(\`$site\`) && Method(\`POST\`) && PathPrefix(\`/api/\`) && !PathPrefix(\`/api/admin/\`)"
+      entryPoints: [web]
+      priority: 300
+      middlewares: [mc-hub-api-route-generation, tunnel-only, mc-hub-api-write-rate-limit, mc-hub-api-inflight, mc-hub-api-write-body-limit, mc-hub-api-security-headers]
       service: mc-hub-api-service
   services:
     mc-hub-api-service:

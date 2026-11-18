@@ -8,6 +8,8 @@ slot="$1"; generation="$2"; dashboard="$3"; alias="$4"; api="$5"
 cat <<EOF
 # Managed by vps-deploy; mc-hub-owned route only.
 # Own headers instead of shared security-headers: its CSP blocks AdSense and YouTube embeds.
+# Per-visitor limits key on CF-Connecting-IP, which only cloudflared (tunnel-only) can set.
+# Edge-cached pages never reach them, so they only bound cache misses and scrapers.
 http:
   middlewares:
     mc-hub-route-generation:
@@ -21,6 +23,18 @@ http:
           X-Frame-Options: "SAMEORIGIN"
           Referrer-Policy: "strict-origin-when-cross-origin"
           Permissions-Policy: "camera=(), microphone=(), geolocation=()"
+    mc-hub-rate-limit:
+      rateLimit:
+        average: 20
+        period: 1s
+        burst: 60
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
+    mc-hub-inflight:
+      inFlightReq:
+        amount: 16
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
   routers:
     mc-hub-deny-internal:
       rule: "Host(\`$api\`) && PathPrefix(\`/internal\`)"
@@ -32,7 +46,7 @@ http:
       rule: "Host(\`$api\`)"
       entryPoints: [web]
       priority: 100
-      middlewares: [mc-hub-route-generation, tunnel-only, mc-hub-security-headers]
+      middlewares: [mc-hub-route-generation, tunnel-only, mc-hub-rate-limit, mc-hub-inflight, mc-hub-security-headers]
       service: mc-hub-service
   services:
     mc-hub-service:
