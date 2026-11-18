@@ -398,6 +398,20 @@ UID 1000 with a read-only root, and deploy independently.
   current slot and generation (`deployctl status`) and replace the route file atomically.
 - Routes use app-owned security headers instead of shared `security-headers`: the shared
   CSP blocks AdSense and YouTube embeds. `tunnel-only` and `deny-internal` stay.
+- Per-visitor limits key on `CF-Connecting-IP` (safe only because `tunnel-only` admits just
+  cloudflared): pages 20 req/s burst 60 and 16 in flight; `/api/` + `/media/` on the site host
+  10 req/s burst 30 and 8 in flight; public `POST /api/*` (router `mc-hub-api-site-write`,
+  `/api/admin/` excluded) 30/min burst 10 with a 64 KiB body. The API host has none: all of it
+  is SSR traffic from the VPS. Both adapters changed, so re-render both live routes first.
+- Bot challenge (CrowdSec AppSec, global `crowdsec-ip` bouncer): hub collection
+  `crowdsecurity/appsec-bot-challenge` (balanced) plus `security/crowdsec/mc-hub-bot-scope.yaml`
+  (as `local/mc-hub-bot-scope`), all listed in `/etc/crowdsec/acquis.d/appsec.yaml`. Its scoring
+  config challenges every non-exempt request on every host, so the scope file must stay loaded:
+  it exempts every host but `tuannguyenviet.site` and, there, non-GET, `/api/`, `/media/`,
+  `/_astro/`, `/admin`, `/healthz` and crawler files. Googlebot, Bingbot, AdSense, social and
+  monitoring bots pass when UA and forward-confirmed rDNS/IP agree (`cscli bot match --ip …
+  --user-agent …`); a spoofed UA is challenged. Challenge pages are `no-store` (Cloudflare BYPASS).
+  Disable: drop those entries from `appsec.yaml`, `systemctl reload crowdsec`.
 - Enrollment follows the portfolio procedure per app: create `edge-<app>` and attach
   Traefik (live `docker network connect` plus the edge Compose file, no restart), stage
   `<app>-blue` from this release's Compose profile, publish the adapter-rendered route,
