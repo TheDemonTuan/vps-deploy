@@ -5,7 +5,7 @@ slot="$1"; generation="$2"; dashboard="$3"; alias="$4"; api="$5"
 [[ $slot == blue || $slot == green ]] || exit 2
 [[ $generation =~ ^[0-9a-f]{32}$ ]] || exit 2
 [[ -z $dashboard && -z $alias && $api == minecraft-api.tuannguyenviet.site ]] || exit 2
-site=minecraft.tuannguyenviet.site
+site=tuannguyenviet.site
 cat <<EOF
 # Managed by vps-deploy; mc-hub-api-owned routes only.
 # Also serves /api/ and /media/ on the mc-hub site host so the browser stays same-origin;

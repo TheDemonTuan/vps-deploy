@@ -4,7 +4,7 @@ set -euo pipefail
 slot="$1"; generation="$2"; dashboard="$3"; alias="$4"; api="$5"
 [[ $slot == blue || $slot == green ]] || exit 2
 [[ $generation =~ ^[0-9a-f]{32}$ ]] || exit 2
-[[ -z $dashboard && -z $alias && $api == minecraft.tuannguyenviet.site ]] || exit 2
+[[ -z $dashboard && -z $alias && $api == tuannguyenviet.site ]] || exit 2
 cat <<EOF
 # Managed by vps-deploy; mc-hub-owned route only.
 # Own headers instead of shared security-headers: its CSP blocks AdSense and YouTube embeds.

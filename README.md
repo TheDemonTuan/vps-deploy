@@ -353,37 +353,14 @@ Thực hiện một lần bởi Quản trị viên (Operator) có quyền root:
 
 
 
-### Portfolio: Nginx blue-green enrollment
+### Portfolio (retired)
 
-`tuan-portfolio` registers `TheDemonTuan/tuan-portfolio` on `main`, with the
-immutable image repository `ghcr.io/thedemontuan/tuan-portfolio`, port `8080`
-and JSON `/healthz`. Its application-owned supervisor observes Nginx connections;
-unknown activity must fail health rather than invent an idle count. The platform
-retains its standard identity, route-generation and drain checks without exceptions.
-
-The canonical ingress network and route are `edge-tuan-portfolio` and
-`tuan-portfolio.yml`. The previous `edge-portfolio` / `portfolio.yml` deployment is
-not an enrolled slot. Before first installation, the root operator must stage the
-reviewed app image as `tuan-portfolio-blue` using this release's Compose profile,
-prove direct slot health, persist Traefik's attachment to the dedicated internal
-network without restarting shared ingress, and atomically migrate only the portfolio
-route. Preserve a private copy of the old route/container until public health and
-the generation header acknowledge the new slot. Do not change shared middleware,
-Cloudflare credentials, or other application routes.
-
-Use `install/install.sh --check --app tuan-portfolio --host oracle-main` with the
-reviewed release SHA, immutable app source/ref and dedicated public key, then the
-same command without `--check`. First blue-green enrollment requires an explicit
-`deployctl adopt --app tuan-portfolio` from that installed release before strict
-status and the per-app drain timer are enabled. The production GitHub environment
-receives only the forced-command account's `DEPLOY_SSH_KEY`, not the operator key.
-After a platform deployment passes, remove the old portfolio container, unused
-network attachment, and obsolete caller `VPS_*` secrets; never remove shared ingress.
+The portfolio is no longer routed. The apex serves mc-hub; the portfolio source remains in its own repository.
 
 ### mc-hub + mc-hub-api: Astro frontend and Go API, separate blue-green apps
 
 `mc-hub` registers `TheDemonTuan/mc-hub` on `main`, image `ghcr.io/thedemontuan/mc-hub`
-(Astro SSR on Bun), public host `minecraft.tuannguyenviet.site`. `mc-hub-api` registers
+(Astro SSR on Bun), public host `tuannguyenviet.site`. `mc-hub-api` registers
 `TheDemonTuan/mc-hub-api`, image `ghcr.io/thedemontuan/mc-hub-api` (Go, SQLite WAL), public
 host `minecraft-api.tuannguyenviet.site`. Both expose JSON `/healthz` on port `8080`, run
 UID 1000 with a read-only root, and deploy independently.
@@ -396,6 +373,9 @@ UID 1000 with a read-only root, and deploy independently.
   `mc-hub-api-egress`, used solely for Cloudflare Turnstile siteverify.
 - `edge-mc-hub` is **not** internal: frontend SSR reads published content from
   `https://minecraft-api.tuannguyenviet.site` (`API_URL` in its Compose profile).
+- A Cloudflare Single Redirect on `minecraft.tuannguyenviet.site` sends traffic to the apex
+  with HTTP 301, preserving both path and query string. Keep the old hostname proxied in DNS.
+  The Turnstile widget must allow `tuannguyenviet.site` for login, comments and download unlocks.
 - `mc-hub-api` requires `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET` in
   `/etc/vps-deploy/apps/mc-hub-api/runtime.env` (root, 0600; widget for the site host).
   Adding a network or env changes Compose parity: recreate the running slot from the new

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Enroll only mc-hub's public hostnames on the shared tunnel; preserve sibling state.
 
-minecraft.tuannguyenviet.site serves the mc-hub frontend (and mc-hub-api under
+tuannguyenviet.site serves the mc-hub frontend (and mc-hub-api under
 /api/ and /media/ via Traefik); minecraft-api.tuannguyenviet.site serves
 mc-hub-api's SSR reads. Public content needs no WAF rule; the admin paths are
 covered by the "MC Hub Admin" Access app (mc_hub_access.py), and admin
@@ -14,7 +14,7 @@ import json
 import sys
 from tunnel_api import Client, Failure, TUNNEL, ZONE, active_connectors, inventory_list
 
-HOSTS = ('minecraft.tuannguyenviet.site', 'minecraft-api.tuannguyenviet.site')
+HOSTS = (ZONE, 'minecraft-api.tuannguyenviet.site')
 
 
 def origin(host):
