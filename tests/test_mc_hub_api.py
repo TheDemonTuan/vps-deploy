@@ -29,6 +29,8 @@ class McHubApi(unittest.TestCase):
             fallback = routers['mc-hub-api-fallback']
             self.assertEqual((fallback['rule'], fallback['middlewares']), ('Host(`' + host['api_host'] + '`)', ['deny-internal']))
             self.assertLess(fallback['priority'], allowed['priority'])
+            site = host_registration(ROOT, 'oracle-main')['apps']['mc-hub']['api_host']
+            self.assertIn('Host(`' + site + '`)', routers['mc-hub-api-site-router']['rule'])
 
 
 if __name__ == '__main__':

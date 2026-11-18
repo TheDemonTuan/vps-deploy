@@ -15,7 +15,7 @@ import json
 import sys
 from tunnel_api import Client, Failure, ZONE, identity, inventory_list
 
-SITE = 'minecraft.tuannguyenviet.site'
+SITE = ZONE
 PHASE = 'http_request_cache_settings'
 RULE = {
     'description': 'mc-hub-public-edge-cache',
@@ -64,7 +64,7 @@ def plan(client):
     if len(own) > 1:
         raise Failure('CACHE_RULE_DUPLICATE')
     # Another rule naming the site would silently override or be overridden by ours.
-    if any(rule not in own and SITE in str(rule.get('expression', '')) for rule in rules):
+    if any(rule not in own and '"' + SITE + '"' in str(rule.get('expression', '')) for rule in rules):
         raise Failure('CACHE_SCOPE_CONFLICT')
     body['rules'] = [{key: copy.deepcopy(value) for key, value in rule.items() if key not in READ_ONLY} for rule in rules]
     if own:

@@ -16,7 +16,7 @@ import json
 import sys
 from tunnel_api import Client, Failure, domains, identity, inventory_list
 
-SITE = 'minecraft.tuannguyenviet.site'
+SITE = 'tuannguyenviet.site'
 API = 'minecraft-api.tuannguyenviet.site'
 NAME = 'MC Hub Admin'
 POLICY = 'MC Hub admins'

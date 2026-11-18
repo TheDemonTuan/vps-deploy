@@ -66,7 +66,7 @@ class Cache(unittest.TestCase):
         self.assertEqual(client.ruleset['rules'][1]['expression'], RULE['expression'])
 
     def test_unsafe_state_never_writes(self):
-        other = dict(copy.deepcopy(SIBLING), id='x', description='someone else', expression='(http.host eq "minecraft.tuannguyenviet.site")')
+        other = dict(copy.deepcopy(SIBLING), id='x', description='someone else', expression='(http.host eq "tuannguyenviet.site")')
         for rules in ([copy.deepcopy(SIBLING), other], [dict(RULE, id='a'), dict(RULE, id='b')]):
             client = Client(rules)
             with self.subTest(rules=len(rules)), self.assertRaises(Failure):
