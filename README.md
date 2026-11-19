@@ -390,11 +390,14 @@ UID 1000 with a read-only root, and deploy independently.
   site again from the same origin (canonical URLs keep naming the new one).
   The Turnstile widget must allow every site domain for login, comments and download unlocks;
   the API checks each token against the host the request was sent to.
-- Each zone carries the same settings: SSL Full (strict), Always HTTPS, TLS ≥ 1.2, Bot Fight
-  Mode with JS detections, managed robots.txt, the `Edge IP bans` rule (zone listed in the
-  CrowdSec Telegram controller's `cloudflare.zone_ids`), Web Analytics and email routing.
-  Traefik serves one Origin CA certificate per zone (`/opt/platform/edge/certs/cf-origin-*`,
-  listed in `dynamic/00-tls-origin.yml`).
+- Each zone carries SSL Full (strict), Always HTTPS, TLS ≥ 1.2, Tiered Cache (smart topology),
+  the `Edge IP bans` rule (zone listed in the CrowdSec Telegram controller's
+  `cloudflare.zone_ids`), Web Analytics and email routing. `thedemontuan.dev` also has Image
+  Transformations on (the site serves covers through `/cdn-cgi/image/`) and, for page speed,
+  Bot Fight Mode, JS detections and Cloudflare's managed robots.txt / Bot Preference Sync off:
+  the site's own `/robots.txt` lists the blocked AI crawlers, and CrowdSec, the IP-ban rule and
+  Turnstile remain the bot defences. Traefik serves one Origin CA certificate per zone
+  (`/opt/platform/edge/certs/cf-origin-*`, listed in `dynamic/00-tls-origin.yml`).
 - `mc-hub-api` requires `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET` in
   `/etc/vps-deploy/apps/mc-hub-api/runtime.env` (root, 0600; widget for the site host).
   Adding a network or env changes Compose parity: recreate the running slot from the new
