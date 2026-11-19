@@ -105,6 +105,16 @@ class Ingress(unittest.TestCase):
                     run(client, 'apply')
                 self.assertEqual(client.writes, [])
 
+    def test_mail_and_verification_records_coexist(self):
+        missing = HOSTS[0]
+        client = enrolled_but(missing)
+        client.dns[missing] = [{'name': missing, 'type': 'MX', 'content': 'route1.mx.cloudflare.net'},
+                               {'name': missing, 'type': 'TXT', 'content': '"google-site-verification=x"'}]
+        self.assertEqual(run(client, 'survey')['missing_dns'], [missing])
+        run(client, 'apply')
+        posts = [body['name'] for method, path, body in client.writes if method == 'POST']
+        self.assertEqual(posts, [missing])
+
     def test_tunnel_drift_refuses_shared_write(self):
         client = Client()
         client.drift = True
