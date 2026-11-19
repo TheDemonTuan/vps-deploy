@@ -49,7 +49,9 @@ def prepare(client):
     records = {}
     for host in HOSTS:
         path = '/zones/' + zones[host] + '/dns_records'
-        found = inventory_list(client.get(path + '?name=' + host + '&per_page=100'))
+        # An apex also carries MX and TXT (mail routing, Search Console); only address records route.
+        found = [record for record in inventory_list(client.get(path + '?name=' + host + '&per_page=100'))
+                 if record.get('type') in ('A', 'AAAA', 'CNAME')]
         if len(found) > 1 or any(record.get('name') != host or record.get('type') != 'CNAME' or
                 record.get('proxied') is not True or record.get('content', '').rstrip('.') != TUNNEL + '.cfargotunnel.com' for record in found):
             raise Failure('DNS_OWNERSHIP_CONFLICT')
