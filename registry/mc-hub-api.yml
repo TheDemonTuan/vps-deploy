@@ -22,3 +22,4 @@ runtime:
 route:
   generation_header: X-MC-Hub-API-Route-Generation
   required_middlewares: [deny-internal, tunnel-only]
+image_access: private
