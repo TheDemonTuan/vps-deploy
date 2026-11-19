@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """Let Cloudflare's edge cache mc-hub's public pages; touch no sibling cache rule.
 
-One rule on the zone's cache-settings entrypoint makes the site host eligible for the edge
-cache, except the API, the admin pages and requests carrying the admin session cookie (so the
-creator always sees an edit at once). Edge TTL follows the origin and bypasses responses
-without cache headers: the site marks only its route-cached public pages
-(Cloudflare-CDN-Cache-Control), /media keeps its immutable headers, and redirects, errors and
-/healthz stay uncached. The API host is not matched at all.
+One rule on the cache-settings entrypoint of the zone that owns the site host (mc-hub's
+api_host in hosts/oracle-main.yml) makes it eligible for the edge cache, except the API, the
+admin pages and requests carrying the admin session cookie (so the creator always sees an edit
+at once). Edge TTL follows the origin and bypasses responses without cache headers: the site
+marks only its route-cached public pages (Cloudflare-CDN-Cache-Control), /media keeps its
+immutable headers, and redirects, errors and /healthz stay uncached. The API host is not
+matched at all, nor the fallback alias, which Cloudflare redirects to the site host.
 Output is counts and booleans only: this repository's Actions logs are public.
 """
 import argparse
 import copy
 import json
 import sys
-from tunnel_api import Client, Failure, ZONE, identity, inventory_list
+from mc_hub_hosts import hosts, zone_id as owning_zone
+from tunnel_api import Client, Failure, identity, inventory_list
 
-SITE = ZONE
+SITE = hosts('mc-hub')[0]
 PHASE = 'http_request_cache_settings'
 RULE = {
     'description': 'mc-hub-public-edge-cache',
@@ -32,11 +34,7 @@ READ_ONLY = {'version', 'last_updated'}
 
 
 def zone_id(client):
-    zones = inventory_list(client.get('/zones?name=' + ZONE + '&per_page=50'))
-    matches = [zone for zone in zones if zone.get('name') == ZONE and zone.get('account', {}).get('id') == client.account]
-    if len(matches) != 1:
-        raise Failure('EXACT_ACCOUNT_ZONE_REQUIRED')
-    return identity(matches[0].get('id'))
+    return owning_zone(client, SITE)
 
 
 def shape(rule):

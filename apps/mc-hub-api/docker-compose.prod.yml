@@ -33,7 +33,8 @@ x-runtime: &runtime
       max-file: "3"
 x-environment: &environment
   DATA_DIR: /data
-  SITE_URL: https://tuannguyenviet.site
+  # The site's domain: mc-hub's api_host in hosts/oracle-main.yml (a test keeps them equal).
+  SITE_URL: https://thedemontuan.dev
   # Only cloudflared reaches Traefik (tunnel-only), so CF-Connecting-IP is authoritative.
   TRUST_CF_CONNECTING_IP: "1"
   TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY required}

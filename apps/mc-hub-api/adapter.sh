@@ -4,10 +4,14 @@ set -euo pipefail
 slot="$1"; generation="$2"; dashboard="$3"; alias="$4"; api="$5"
 [[ $slot == blue || $slot == green ]] || exit 2
 [[ $generation =~ ^[0-9a-f]{32}$ ]] || exit 2
-[[ -z $dashboard && -z $alias && $api == minecraft-api.tuannguyenviet.site ]] || exit 2
-site=tuannguyenviet.site
-# Same site on its parallel domain (see apps/mc-hub/adapter.sh).
-site_hosts="Host(\`$site\`) || Host(\`thedemontuan.dev\`)"
+# Hosts come from hosts/<host>.yml: $api is the SSR API host, $alias (optional) the previous one,
+# kept routed as a fallback (README: "Moving mc-hub to another domain").
+name='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+[[ -z $dashboard && $api =~ $name && ( -z $alias || $alias =~ $name ) ]] || exit 2
+api_hosts="Host(\`$api\`)"
+[[ -z $alias ]] || api_hosts+=" || Host(\`$alias\`)"
+# The site's hosts: mc-hub's api_host and fallback alias (tests/test_mc_hub_api.py keeps them equal).
+site_hosts="Host(\`thedemontuan.dev\`) || Host(\`tuannguyenviet.site\`)"
 cat <<EOF
 # Managed by vps-deploy; mc-hub-api-owned routes only.
 # Also serves /api/ and /media/ on the mc-hub site host so the browser stays same-origin;
@@ -54,19 +58,19 @@ http:
         maxRequestBodyBytes: 65536
   routers:
     mc-hub-api-deny-internal:
-      rule: "Host(\`$api\`) && PathPrefix(\`/internal\`)"
+      rule: "($api_hosts) && PathPrefix(\`/internal\`)"
       entryPoints: [web]
       priority: 1000
       middlewares: [deny-internal]
       service: mc-hub-api-service
     mc-hub-api-router:
-      rule: "Host(\`$api\`) && (Path(\`/healthz\`) || Path(\`/api/posts\`) || PathPrefix(\`/api/posts/\`) || PathPrefix(\`/api/pages/\`) || Path(\`/api/settings\`) || Path(\`/api/stats\`) || Path(\`/api/auth/me\`))"
+      rule: "($api_hosts) && (Path(\`/healthz\`) || Path(\`/api/posts\`) || PathPrefix(\`/api/posts/\`) || PathPrefix(\`/api/pages/\`) || Path(\`/api/settings\`) || Path(\`/api/stats\`) || Path(\`/api/auth/me\`))"
       entryPoints: [web]
       priority: 500
       middlewares: [mc-hub-api-route-generation, tunnel-only, mc-hub-api-security-headers]
       service: mc-hub-api-service
     mc-hub-api-fallback:
-      rule: "Host(\`$api\`)"
+      rule: "$api_hosts"
       entryPoints: [web]
       priority: 400
       middlewares: [deny-internal]
