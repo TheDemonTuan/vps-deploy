@@ -5,6 +5,8 @@ slot="$1"; generation="$2"; dashboard="$3"; alias="$4"; api="$5"
 [[ $slot == blue || $slot == green ]] || exit 2
 [[ $generation =~ ^[0-9a-f]{32}$ ]] || exit 2
 [[ -z $dashboard && -z $alias && $api == tuannguyenviet.site ]] || exit 2
+# Second domain serving the same site in parallel (future primary); canonical URLs still name $api.
+mirror=thedemontuan.dev
 cat <<EOF
 # Managed by vps-deploy; mc-hub-owned route only.
 # Own headers instead of shared security-headers: its CSP blocks AdSense and YouTube embeds.
@@ -37,13 +39,13 @@ http:
           requestHeaderName: CF-Connecting-IP
   routers:
     mc-hub-deny-internal:
-      rule: "Host(\`$api\`) && PathPrefix(\`/internal\`)"
+      rule: "(Host(\`$api\`) || Host(\`$mirror\`)) && PathPrefix(\`/internal\`)"
       entryPoints: [web]
       priority: 1000
       middlewares: [deny-internal]
       service: mc-hub-service
     mc-hub-router:
-      rule: "Host(\`$api\`)"
+      rule: "Host(\`$api\`) || Host(\`$mirror\`)"
       entryPoints: [web]
       priority: 100
       middlewares: [mc-hub-route-generation, tunnel-only, mc-hub-rate-limit, mc-hub-inflight, mc-hub-security-headers]

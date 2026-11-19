@@ -7,8 +7,8 @@ name: local/mc-hub-bot-scope
 # /etc/crowdsec/acquis.d/appsec.yaml.
 inband:
   pre_eval:
-    # Only MC Hub's public pages: APIs, dashboards and other apps never see a challenge.
-    - filter: req.Host != "tuannguyenviet.site"
+    # Only MC Hub's public pages (on both its domains): APIs, dashboards and other apps never see a challenge.
+    - filter: req.Host not in ["tuannguyenviet.site", "thedemontuan.dev"]
       apply:
         - ExemptFromChallenge("not-mc-hub")
     # Everything on the site a script, crawler, deploy probe or Cloudflare Access reads,
