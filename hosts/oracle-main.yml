@@ -35,9 +35,10 @@ apps:
     edge_network: edge-mc-hub
     route_name: mc-hub.yml
   mc-hub-api:
-    api_host: minecraft-api.tuannguyenviet.site
+    # SSR API host; the alias is the previous one, still routed as a fallback.
+    api_host: api.thedemontuan.dev
     dashboard_host: ""
-    dashboard_alias_host: ""
+    dashboard_alias_host: minecraft-api.tuannguyenviet.site
     work_dir: /opt/mc-hub-api
     compose_project: mc-hub-api
     edge_network: edge-mc-hub-api

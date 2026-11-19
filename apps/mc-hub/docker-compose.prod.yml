@@ -26,8 +26,9 @@ x-runtime: &runtime
       max-file: "3"
 x-environment: &environment
   NODE_ENV: production
-  # Server-side rendering reads published content from mc-hub-api through Cloudflare.
-  API_URL: https://minecraft-api.tuannguyenviet.site
+  # Server-side rendering reads published content from mc-hub-api through Cloudflare, at
+  # mc-hub-api's api_host in hosts/oracle-main.yml (a test keeps them equal).
+  API_URL: https://api.thedemontuan.dev
 services:
   mc-hub-blue:
     <<: *runtime

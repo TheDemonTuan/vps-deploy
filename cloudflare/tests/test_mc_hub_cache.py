@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from mc_hub_cache import RULE, Failure, run
+from mc_hub_cache import RULE, SITE, Failure, run
 
 ZONE_ID = 'z' * 32
 SIBLING = {'id': 'r1', 'ref': 'r1', 'version': '3', 'description': 'sibling-bypass-cache',
@@ -21,8 +21,9 @@ class Client:
         self.writes = []
 
     def get(self, path):
-        if path.startswith('/zones?name='):
-            return [{'id': ZONE_ID, 'name': 'tuannguyenviet.site', 'account': {'id': self.account}}]
+        if path.startswith('/zones?'):
+            return [{'id': 'o' * 32, 'name': 'example.org', 'account': {'id': self.account}},
+                    {'id': ZONE_ID, 'name': SITE.split('.', SITE.count('.') - 1)[-1], 'account': {'id': self.account}}]
         if path == '/zones/' + ZONE_ID + '/rulesets?per_page=50':
             sets = [{'id': 'waf', 'kind': 'zone', 'phase': 'http_request_firewall_custom'}]
             return sets + ([{'id': 'cache', 'kind': 'zone', 'phase': 'http_request_cache_settings'}] if self.ruleset else [])
@@ -66,7 +67,7 @@ class Cache(unittest.TestCase):
         self.assertEqual(client.ruleset['rules'][1]['expression'], RULE['expression'])
 
     def test_unsafe_state_never_writes(self):
-        other = dict(copy.deepcopy(SIBLING), id='x', description='someone else', expression='(http.host eq "tuannguyenviet.site")')
+        other = dict(copy.deepcopy(SIBLING), id='x', description='someone else', expression='(http.host eq "' + SITE + '")')
         for rules in ([copy.deepcopy(SIBLING), other], [dict(RULE, id='a'), dict(RULE, id='b')]):
             client = Client(rules)
             with self.subTest(rules=len(rules)), self.assertRaises(Failure):

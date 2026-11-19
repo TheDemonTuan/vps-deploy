@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mc_hub_ingress import HOSTS, Failure, TUNNEL, origin, run
 
-SITE, API = HOSTS
+ZONES = ('tuannguyenviet.site', 'thedemontuan.dev')
 
 
 class Client:
@@ -23,7 +23,7 @@ class Client:
 
     def get(self, path):
         if path.startswith('/zones?'):
-            return [{'id': 'b' * 32, 'name': 'tuannguyenviet.site', 'account': {'id': self.account}}]
+            return [{'id': str(i) * 32, 'name': name, 'account': {'id': self.account}} for i, name in enumerate(ZONES)]
         if '/dns_records?' in path:
             return copy.deepcopy(self.dns[path.split('name=')[1].split('&')[0]])
         if path.endswith('/connections'):
@@ -49,11 +49,13 @@ class Client:
             raise AssertionError(method)
 
 
-def enrolled_site_only():
-    # Production state before mc-hub-api: the site hostname is already routed.
+def enrolled_but(missing):
+    # Production state before a hostname is added: every other one is routed.
     client = Client()
-    client.config['config']['ingress'].insert(1, origin(SITE))
-    client.dns[SITE] = [{'name': SITE, 'type': 'CNAME', 'proxied': True, 'content': TUNNEL + '.cfargotunnel.com'}]
+    for host in HOSTS:
+        if host != missing:
+            client.config['config']['ingress'].insert(len(client.config['config']['ingress']) - 1, origin(host))
+            client.dns[host] = [{'name': host, 'type': 'CNAME', 'proxied': True, 'content': TUNNEL + '.cfargotunnel.com'}]
     return client
 
 
@@ -75,16 +77,19 @@ class Ingress(unittest.TestCase):
         run(client, 'apply')
         self.assertEqual(len(client.writes), writes)
 
-    def test_adds_only_api_when_site_exists(self):
-        client = enrolled_site_only()
-        before = copy.deepcopy(client.config['config']['ingress'])
-        result = run(client, 'survey')
-        self.assertEqual(result['missing_dns'], [API])
-        run(client, 'apply')
-        ingress = client.config['config']['ingress']
-        self.assertEqual(ingress[:2], before[:2])
-        self.assertEqual(ingress[2], origin(API))
-        self.assertEqual([body['name'] for method, _, body in client.writes if method == 'POST'], [API])
+    def test_adds_only_the_missing_host_in_its_own_zone(self):
+        for missing in HOSTS:
+            with self.subTest(missing):
+                client = enrolled_but(missing)
+                before = copy.deepcopy(client.config['config']['ingress'])
+                self.assertEqual(run(client, 'survey')['missing_dns'], [missing])
+                run(client, 'apply')
+                ingress = client.config['config']['ingress']
+                self.assertEqual(ingress[:-2], before[:-1])
+                self.assertEqual(ingress[-2], origin(missing))
+                posts = [(path, body['name']) for method, path, body in client.writes if method == 'POST']
+                zone = next(str(i) * 32 for i, name in enumerate(ZONES) if missing == name or missing.endswith('.' + name))
+                self.assertEqual(posts, [('/zones/' + zone + '/dns_records', missing)])
 
     def test_conflicts_never_write(self):
         for host in HOSTS:
@@ -93,7 +98,7 @@ class Ingress(unittest.TestCase):
                 if conflict == 'dns':
                     client.dns[host] = [{'name': host, 'type': 'A', 'content': '192.0.2.1'}]
                 elif conflict == 'wildcard':
-                    client.config['config']['ingress'].insert(0, {'hostname': '*.tuannguyenviet.site', 'service': 'http://foreign'})
+                    client.config['config']['ingress'].insert(0, {'hostname': '*.' + host.split('.', 1)[1], 'service': 'http://foreign'})
                 else:
                     client.config['config']['ingress'].insert(0, {'hostname': host, 'service': 'http://foreign'})
                 with self.subTest(host=host, conflict=conflict), self.assertRaises(Failure):

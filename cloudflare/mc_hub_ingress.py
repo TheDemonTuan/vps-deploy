@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Enroll only mc-hub's public hostnames on the shared tunnel; preserve sibling state.
 
-tuannguyenviet.site serves the mc-hub frontend (and mc-hub-api under
-/api/ and /media/ via Traefik); minecraft-api.tuannguyenviet.site serves
-mc-hub-api's SSR reads. Public content needs no WAF rule; the admin paths are
-covered by the "MC Hub Admin" Access app (mc_hub_access.py), and admin
-authentication (password + TOTP) still lives in mc-hub-api.
+The hostnames come from hosts/oracle-main.yml (mc_hub_hosts): the site (mc-hub, which also
+serves mc-hub-api under /api/ and /media/ via Traefik) and the SSR API host (mc-hub-api), each
+with its fallback alias. Every hostname gets a tunnel ingress rule and a proxied CNAME in the
+zone that owns it. Public content needs no WAF rule; the admin paths are covered by the
+"MC Hub Admin" Access app (mc_hub_access.py), and admin authentication (password + TOTP)
+still lives in mc-hub-api.
 """
 import argparse
 import copy
 import fnmatch
 import json
 import sys
-from tunnel_api import Client, Failure, TUNNEL, ZONE, active_connectors, inventory_list
+from mc_hub_hosts import hosts, zone_id
+from tunnel_api import Client, Failure, TUNNEL, active_connectors, inventory_list
 
-HOSTS = (ZONE, 'minecraft-api.tuannguyenviet.site')
+HOSTS = tuple(hosts('mc-hub') + hosts('mc-hub-api'))
 
 
 def origin(host):
@@ -25,10 +27,7 @@ def origin(host):
 
 
 def prepare(client):
-    zones = inventory_list(client.get('/zones?name=' + ZONE + '&per_page=50'))
-    matches = [zone for zone in zones if zone.get('name') == ZONE and zone.get('account', {}).get('id') == client.account]
-    if len(matches) != 1:
-        raise Failure('EXACT_ACCOUNT_ZONE_REQUIRED')
+    zones = {host: zone_id(client, host) for host in HOSTS}
     base = '/accounts/' + client.account
     tunnel_path = base + '/cfd_tunnel/' + TUNNEL + '/configurations'
     tunnel = client.get(tunnel_path)
@@ -47,19 +46,19 @@ def prepare(client):
             raise Failure('TUNNEL_SCOPE_CONFLICT')
         if not selected:
             config['ingress'].insert(len(config['ingress']) - 1, origin(host))
-    path = '/zones/' + matches[0]['id'] + '/dns_records'
     records = {}
     for host in HOSTS:
+        path = '/zones/' + zones[host] + '/dns_records'
         found = inventory_list(client.get(path + '?name=' + host + '&per_page=100'))
         if len(found) > 1 or any(record.get('name') != host or record.get('type') != 'CNAME' or
                 record.get('proxied') is not True or record.get('content', '').rstrip('.') != TUNNEL + '.cfargotunnel.com' for record in found):
             raise Failure('DNS_OWNERSHIP_CONFLICT')
-        records[host] = found
-    return tunnel_path, tunnel, config, path, records
+        records[host] = path, found
+    return tunnel_path, tunnel, config, records
 
 
 def run(client, operation):
-    tunnel_path, before, wanted, dns_path, records = prepare(client)
+    tunnel_path, before, wanted, records = prepare(client)
     if operation == 'apply':
         # Cloudflare has no conditional PUT here; re-read immediately before writing.
         if client.get(tunnel_path) != before:
@@ -69,13 +68,14 @@ def run(client, operation):
         if client.get(tunnel_path).get('config') != wanted:
             raise Failure('TUNNEL_VERIFY_FAILED')
         for host in HOSTS:
-            if not records[host]:
-                client.request('POST', dns_path, {'type': 'CNAME', 'name': host,
+            path, found = records[host]
+            if not found:
+                client.request('POST', path, {'type': 'CNAME', 'name': host,
                     'content': TUNNEL + '.cfargotunnel.com', 'proxied': True, 'ttl': 1})
-        _, after, _, _, final_records = prepare(client)
-        if after['config'] != wanted or not all(final_records.values()):
+        _, after, _, final_records = prepare(client)
+        if after['config'] != wanted or not all(found for _, found in final_records.values()):
             raise Failure('INGRESS_VERIFY_FAILED')
-    return {'operation': operation, 'hosts': list(HOSTS), 'missing_dns': [host for host in HOSTS if not records[host]],
+    return {'operation': operation, 'hosts': list(HOSTS), 'missing_dns': [host for host in HOSTS if not records[host][1]],
             'tunnel_change_needed': before['config'] != wanted, 'sibling_routes_preserved': True}
 
 

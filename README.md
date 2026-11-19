@@ -360,9 +360,9 @@ The portfolio is no longer routed. The apex serves mc-hub; the portfolio source 
 ### mc-hub + mc-hub-api: Astro frontend and Go API, separate blue-green apps
 
 `mc-hub` registers `TheDemonTuan/mc-hub` on `main`, image `ghcr.io/thedemontuan/mc-hub`
-(Astro SSR on Bun), public host `tuannguyenviet.site`. `mc-hub-api` registers
+(Astro SSR on Bun), public host `thedemontuan.dev`. `mc-hub-api` registers
 `TheDemonTuan/mc-hub-api`, image `ghcr.io/thedemontuan/mc-hub-api` (Go, SQLite WAL), public
-host `minecraft-api.tuannguyenviet.site`. Both expose JSON `/healthz` on port `8080`, run
+host `api.thedemontuan.dev`. Both expose JSON `/healthz` on port `8080`, run
 UID 1000 with a read-only root, and deploy independently.
 
 - Both register `image_access: private`: their repositories and GHCR images are private, so
@@ -377,32 +377,40 @@ UID 1000 with a read-only root, and deploy independently.
   `edge-mc-hub-api` is internal (inbound from Traefik only); outbound goes through
   `mc-hub-api-egress`, used solely for Cloudflare Turnstile siteverify.
 - `edge-mc-hub` is **not** internal: frontend SSR reads published content from
-  `https://minecraft-api.tuannguyenviet.site` (`API_URL` in its Compose profile).
-- A Cloudflare Single Redirect on `minecraft.tuannguyenviet.site` sends traffic to the apex
-  with HTTP 301, preserving both path and query string. Keep the old hostname proxied in DNS.
-  The Turnstile widget must allow `tuannguyenviet.site` and `thedemontuan.dev` for login, comments
-  and download unlocks; the API checks each token against the host the request was sent to.
-- Parallel domain `thedemontuan.dev` (future primary) serves the same site: both adapters route it
-  next to the site host, while canonical URLs, the sitemap and `SITE_URL` still name
-  `tuannguyenviet.site`. Its Cloudflare side is dashboard-managed in its own zone: apex CNAME
-  to the tunnel, a tunnel ingress rule shaped like `mc_hub_ingress.origin()`, a copy of
-  `mc-hub-public-edge-cache`, zone/bot settings matching the site zone and the `Edge IP bans`
-  rule (zone also listed in the CrowdSec Telegram controller). Traefik serves its own Origin CA
-  certificate (`/opt/platform/edge/certs/cf-origin-dev-*`, listed in `dynamic/00-tls-origin.yml`).
+  `https://api.thedemontuan.dev` (`API_URL` in its Compose profile).
+- Domains live in `hosts/oracle-main.yml`: each app's `api_host` is its domain and
+  `dashboard_alias_host` the previous one, kept routed by Traefik as a **fallback**
+  (`tuannguyenviet.site`, `minecraft-api.tuannguyenviet.site`). The adapters, the deploy probe
+  (`api_host`) and the Cloudflare scripts (`cloudflare/mc_hub_hosts.py`) read them from there;
+  `tests/test_mc_hub_api.py` fails until the few literal copies agree (mc-hub-api's site hosts,
+  `SITE_URL`, `API_URL`, the CrowdSec scope). Cloudflare Single Redirects (dashboard, zone
+  `tuannguyenviet.site`) send `tuannguyenviet.site` and `minecraft.tuannguyenviet.site` to
+  `https://thedemontuan.dev` with HTTP 301, preserving path and query; keep those hostnames
+  proxied in DNS. **Fallback**: disable the apex redirect rule and the old domain serves the
+  site again from the same origin (canonical URLs keep naming the new one).
+  The Turnstile widget must allow every site domain for login, comments and download unlocks;
+  the API checks each token against the host the request was sent to.
+- Each zone carries the same settings: SSL Full (strict), Always HTTPS, TLS ≥ 1.2, Bot Fight
+  Mode with JS detections, managed robots.txt, the `Edge IP bans` rule (zone listed in the
+  CrowdSec Telegram controller's `cloudflare.zone_ids`), Web Analytics and email routing.
+  Traefik serves one Origin CA certificate per zone (`/opt/platform/edge/certs/cf-origin-*`,
+  listed in `dynamic/00-tls-origin.yml`).
 - `mc-hub-api` requires `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET` in
   `/etc/vps-deploy/apps/mc-hub-api/runtime.env` (root, 0600; widget for the site host).
   Adding a network or env changes Compose parity: recreate the running slot from the new
-  release's Compose profile before installing that release. The frontend needs no env.
+  release's Compose profile before installing that release (same `docker compose` arguments
+  and environment as `install/preflight.py`, `up -d --no-deps --pull never <app>-<slot>`).
+  The frontend needs no env.
 - Admin auth (argon2id password + TOTP + Turnstile) lives in the API;
   enrollment links come from `docker exec mc-hub-api-<slot> /app/mc-hub-api admin invite --username <u>`.
 - Admin is two layers: `mc-hub-access.yml` (survey, then apply) creates the Cloudflare Access
-  app "MC Hub Admin" over `/admin`, `/api/admin` and `/api/auth` on both site domains, with its own
+  app "MC Hub Admin" over `/admin`, `/api/admin` and `/api/auth` on every site domain, with its own
   allow policy "MC Hub admins" (exact emails; first copied from the OmniRoute admin app, then
   edited only in the dashboard). The API host routes only SSR reads
   (`/api/posts*`, `/api/pages/*`, `/api/settings`, `/api/stats`, `/api/auth/me`, `/healthz`); everything else
   there hits `deny-internal`.
 - Edge cache: `mc-hub-cache.yml` (survey, then apply) keeps one rule
-  (`mc-hub-public-edge-cache`) on the zone's cache-settings entrypoint.
+  (`mc-hub-public-edge-cache`) on the cache-settings entrypoint of the site domain's zone.
   It covers the site host except `/api/`, `/admin` and requests with `__Host-mch_session`;
   edge TTL follows origin and bypasses when absent, so only pages the frontend marks
   (`Cloudflare-CDN-Cache-Control`) and the immutable `/media` and `/_astro` files are cached.
@@ -430,6 +438,32 @@ UID 1000 with a read-only root, and deploy independently.
   `<app>-blue` from this release's Compose profile, publish the adapter-rendered route,
   run `mc-hub-ingress.yml` survey then apply (manages both hostnames), installer
   `--check`/apply, `restorecon`, then `deployctl adopt --app <app>`.
+
+#### Moving mc-hub to another domain
+
+The old domain stays a working fallback; nothing is deleted. Change one app's binding per
+platform release: the installer refuses a release whose registry differs from another app's
+installed binding, so the API side goes first.
+
+1. **New zone** (dashboard): the settings above, apex and `api.` CNAMEs to the tunnel, an Origin
+   CA certificate for `<new>` + `*.<new>` from a CSR made on the VPS (`certs/`, `00-tls-origin.yml`),
+   the zone id in the CrowdSec Telegram controller, the Turnstile widget domain, a copy of the
+   `Edge IP bans` rule, Search Console (DNS TXT) and AdSense site.
+2. **Release A, API side**: `mc-hub-api` gets `api_host: api.<new>` and
+   `dashboard_alias_host: <its current api_host>`; add `<new>` to mc-hub-api's `site_hosts`
+   and the CrowdSec scope; `SITE_URL` and `API_URL` name the new hosts. After merge, on the VPS:
+   publish the mc-hub-api route re-rendered with the new binding at its current slot and
+   generation (`lib/route.py publish`), run `mc-hub-ingress.yml` apply, recreate the running
+   mc-hub-api slot (Compose parity, see above), installer `--check` then apply, `restorecon -R`
+   the release, bump the API repository's pin.
+3. **Release B, site side**: `mc-hub` gets `api_host: <new>` and `dashboard_alias_host: <old>`.
+   Same VPS steps for mc-hub (its slot recreate picks up `API_URL`), reinstall mc-hub-api at B,
+   then `mc-hub-access.yml` and `mc-hub-cache.yml` apply. In the website set `SITE` in
+   `astro.config.mjs` (canonical, sitemap, hreflang, RSS, JSON-LD) and bump its pin.
+4. **Cut over**: Single Redirects in the old zone (apex and older hostnames) to `https://<new>`,
+   301, path and query kept; purge the new zone's cache; Search Console Change of Address;
+   GA4 stream URL; editorial `site_api`; links on YouTube, TikTok, Modrinth, CurseForge, PMC.
+   A previous fallback domain only needs its redirect target updated.
 
 ### 4. Thành phần Stateful ChatGPT Web Runtime (`cgw`)
 

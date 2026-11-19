@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Put mc-hub's admin surface behind Cloudflare Access; touch nothing else.
 
-One self-hosted app ("MC Hub Admin") covers the admin pages and the admin/auth API on the
-site host. Like the OmniRoute admin app, it is its own policy source: one app-scoped allow
+One self-hosted app ("MC Hub Admin") covers the admin pages and the admin/auth API on every
+site host (mc-hub's api_host and fallback alias in hosts/oracle-main.yml). Like the OmniRoute
+admin app, it is its own policy source: one app-scoped allow
 policy over exact email addresses (the token cannot create reusable policies). The first
 allow list and identity providers are copied from the OmniRoute admin app; afterwards the
 script only verifies shape, so dashboard edits to the email list are kept. The API host needs
@@ -14,15 +15,15 @@ import copy
 import fnmatch
 import json
 import sys
+from mc_hub_hosts import hosts
 from tunnel_api import Client, Failure, domains, identity, inventory_list
 
-SITE = 'tuannguyenviet.site'
-MIRROR = 'thedemontuan.dev'  # the same site on its parallel domain
-API = 'minecraft-api.tuannguyenviet.site'
+SITES = tuple(hosts('mc-hub'))
+APIS = tuple(hosts('mc-hub-api'))
 NAME = 'MC Hub Admin'
 POLICY = 'MC Hub admins'
 SOURCE = 'OmniRoute Admin Dashboard'
-PATHS = tuple(host + path for host in (SITE, MIRROR) for path in ('/admin', '/api/admin', '/api/auth'))
+PATHS = tuple(host + path for host in SITES for path in ('/admin', '/api/admin', '/api/auth'))
 
 
 def uris(app):
@@ -59,7 +60,7 @@ def survey(client):
     apps = inventory_list(client.get(base + '/apps?per_page=100'))
     own = [app for app in apps if app.get('name') == NAME]
     for app in apps:
-        if app not in own and any(fnmatch.fnmatchcase(host, uri.split('/', 1)[0]) for uri in uris(app) for host in (SITE, MIRROR, API)):
+        if app not in own and any(fnmatch.fnmatchcase(host, uri.split('/', 1)[0]) for uri in uris(app) for host in SITES + APIS):
             raise Failure('ACCESS_SCOPE_CONFLICT')
     if len(own) > 1:
         raise Failure('ACCESS_DUPLICATE')
