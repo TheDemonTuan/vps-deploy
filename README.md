@@ -380,7 +380,15 @@ UID 1000 with a read-only root, and deploy independently.
   `https://minecraft-api.tuannguyenviet.site` (`API_URL` in its Compose profile).
 - A Cloudflare Single Redirect on `minecraft.tuannguyenviet.site` sends traffic to the apex
   with HTTP 301, preserving both path and query string. Keep the old hostname proxied in DNS.
-  The Turnstile widget must allow `tuannguyenviet.site` for login, comments and download unlocks.
+  The Turnstile widget must allow `tuannguyenviet.site` and `thedemontuan.dev` for login, comments
+  and download unlocks; the API checks each token against the host the request was sent to.
+- Parallel domain `thedemontuan.dev` (future primary) serves the same site: both adapters route it
+  next to the site host, while canonical URLs, the sitemap and `SITE_URL` still name
+  `tuannguyenviet.site`. Its Cloudflare side is dashboard-managed in its own zone: apex CNAME
+  to the tunnel, a tunnel ingress rule shaped like `mc_hub_ingress.origin()`, a copy of
+  `mc-hub-public-edge-cache`, zone/bot settings matching the site zone and the `Edge IP bans`
+  rule (zone also listed in the CrowdSec Telegram controller). Traefik serves its own Origin CA
+  certificate (`/opt/platform/edge/certs/cf-origin-dev-*`, listed in `dynamic/00-tls-origin.yml`).
 - `mc-hub-api` requires `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET` in
   `/etc/vps-deploy/apps/mc-hub-api/runtime.env` (root, 0600; widget for the site host).
   Adding a network or env changes Compose parity: recreate the running slot from the new
@@ -388,7 +396,7 @@ UID 1000 with a read-only root, and deploy independently.
 - Admin auth (argon2id password + TOTP + Turnstile) lives in the API;
   enrollment links come from `docker exec mc-hub-api-<slot> /app/mc-hub-api admin invite --username <u>`.
 - Admin is two layers: `mc-hub-access.yml` (survey, then apply) creates the Cloudflare Access
-  app "MC Hub Admin" over `/admin`, `/api/admin` and `/api/auth` on the site host, with its own
+  app "MC Hub Admin" over `/admin`, `/api/admin` and `/api/auth` on both site domains, with its own
   allow policy "MC Hub admins" (exact emails; first copied from the OmniRoute admin app, then
   edited only in the dashboard). The API host routes only SSR reads
   (`/api/posts*`, `/api/pages/*`, `/api/settings`, `/api/stats`, `/api/auth/me`, `/healthz`); everything else
@@ -412,7 +420,7 @@ UID 1000 with a read-only root, and deploy independently.
   `crowdsecurity/appsec-bot-challenge` (balanced) plus `security/crowdsec/mc-hub-bot-scope.yaml`
   (as `local/mc-hub-bot-scope`), all listed in `/etc/crowdsec/acquis.d/appsec.yaml`. Its scoring
   config challenges every non-exempt request on every host, so the scope file must stay loaded:
-  it exempts every host but `tuannguyenviet.site` and, there, non-GET, `/api/`, `/media/`,
+  it exempts every host but the two site domains and, there, non-GET, `/api/`, `/media/`,
   `/_astro/`, `/admin`, `/healthz` and crawler files. Googlebot, Bingbot, AdSense, social and
   monitoring bots pass when UA and forward-confirmed rDNS/IP agree (`cscli bot match --ip …
   --user-agent …`); a spoofed UA is challenged. Challenge pages are `no-store` (Cloudflare BYPASS).

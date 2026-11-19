@@ -17,11 +17,12 @@ import sys
 from tunnel_api import Client, Failure, domains, identity, inventory_list
 
 SITE = 'tuannguyenviet.site'
+MIRROR = 'thedemontuan.dev'  # the same site on its parallel domain
 API = 'minecraft-api.tuannguyenviet.site'
 NAME = 'MC Hub Admin'
 POLICY = 'MC Hub admins'
 SOURCE = 'OmniRoute Admin Dashboard'
-PATHS = (SITE + '/admin', SITE + '/api/admin', SITE + '/api/auth')
+PATHS = tuple(host + path for host in (SITE, MIRROR) for path in ('/admin', '/api/admin', '/api/auth'))
 
 
 def uris(app):
@@ -58,7 +59,7 @@ def survey(client):
     apps = inventory_list(client.get(base + '/apps?per_page=100'))
     own = [app for app in apps if app.get('name') == NAME]
     for app in apps:
-        if app not in own and any(fnmatch.fnmatchcase(host, uri.split('/', 1)[0]) for uri in uris(app) for host in (SITE, API)):
+        if app not in own and any(fnmatch.fnmatchcase(host, uri.split('/', 1)[0]) for uri in uris(app) for host in (SITE, MIRROR, API)):
             raise Failure('ACCESS_SCOPE_CONFLICT')
     if len(own) > 1:
         raise Failure('ACCESS_DUPLICATE')

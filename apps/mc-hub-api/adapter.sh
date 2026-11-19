@@ -6,6 +6,8 @@ slot="$1"; generation="$2"; dashboard="$3"; alias="$4"; api="$5"
 [[ $generation =~ ^[0-9a-f]{32}$ ]] || exit 2
 [[ -z $dashboard && -z $alias && $api == minecraft-api.tuannguyenviet.site ]] || exit 2
 site=tuannguyenviet.site
+# Same site on its parallel domain (see apps/mc-hub/adapter.sh).
+site_hosts="Host(\`$site\`) || Host(\`thedemontuan.dev\`)"
 cat <<EOF
 # Managed by vps-deploy; mc-hub-api-owned routes only.
 # Also serves /api/ and /media/ on the mc-hub site host so the browser stays same-origin;
@@ -70,13 +72,13 @@ http:
       middlewares: [deny-internal]
       service: mc-hub-api-service
     mc-hub-api-site-router:
-      rule: "Host(\`$site\`) && (PathPrefix(\`/api/\`) || PathPrefix(\`/media/\`))"
+      rule: "($site_hosts) && (PathPrefix(\`/api/\`) || PathPrefix(\`/media/\`))"
       entryPoints: [web]
       priority: 200
       middlewares: [mc-hub-api-route-generation, tunnel-only, mc-hub-api-rate-limit, mc-hub-api-inflight, mc-hub-api-security-headers]
       service: mc-hub-api-service
     mc-hub-api-site-write:
-      rule: "Host(\`$site\`) && Method(\`POST\`) && PathPrefix(\`/api/\`) && !PathPrefix(\`/api/admin/\`)"
+      rule: "($site_hosts) && Method(\`POST\`) && PathPrefix(\`/api/\`) && !PathPrefix(\`/api/admin/\`)"
       entryPoints: [web]
       priority: 300
       middlewares: [mc-hub-api-route-generation, tunnel-only, mc-hub-api-write-rate-limit, mc-hub-api-inflight, mc-hub-api-write-body-limit, mc-hub-api-security-headers]
