@@ -365,6 +365,11 @@ The portfolio is no longer routed. The apex serves mc-hub; the portfolio source 
 host `minecraft-api.tuannguyenviet.site`. Both expose JSON `/healthz` on port `8080`, run
 UID 1000 with a read-only root, and deploy independently.
 
+- Both register `image_access: private`: their repositories and GHCR images are private, so
+  the engine skips the anonymous-manifest gate for the app image and `docker compose pull`
+  uses root's `docker login ghcr.io` (a classic token with only `read:packages`, stored in
+  `/root/.docker/config.json`). An expired token surfaces as `IMAGE_PULL_FAILED`; renew it with
+  `sudo docker login ghcr.io -u TheDemonTuan --password-stdin`. Other apps keep the anonymous gate.
 - `mc-hub-api` also owns `/api/` and `/media/` on the site host (`mc-hub-api-site-router`,
   priority 200 over the frontend's 100), so admin and uploads stay same-origin.
 - `mc-hub-api` blue and green share the named volume `mc-hub-api-data` (SQLite + media +

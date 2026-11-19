@@ -116,8 +116,10 @@ def app_registration(release, app):
     path = Path(release) / 'registry' / (app + '.yml')
     require(path.is_file() and not path.is_symlink(), 'APP_NOT_REGISTERED')
     value = parse_yaml(path.read_bytes())
-    fields(value, {'version', 'app', 'host', 'caller', 'manifest', 'runtime', 'route'}, {'version', 'app', 'host', 'caller', 'manifest', 'runtime', 'route'})
+    fields(value, {'version', 'app', 'host', 'caller', 'manifest', 'runtime', 'route', 'image_access'}, {'version', 'app', 'host', 'caller', 'manifest', 'runtime', 'route'})
     require(type(value['version']) is int and value['version'] == 1 and value['app'] == app, 'REGISTRY_POLICY')
+    # Reviewed opt-in: app images stay private and root pulls them with its own `docker login ghcr.io`.
+    require(value.get('image_access', 'public') in ('public', 'private'), 'REGISTRY_POLICY')
     registration_id(value['host'])
     caller = value['caller']
     fields(caller, {'repository', 'ref', 'refs', 'config', 'build_workflows', 'deploy_workflows', 'security_workflows'}, {'repository', 'ref', 'config', 'build_workflows', 'deploy_workflows'})

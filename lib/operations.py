@@ -87,7 +87,9 @@ def pull(release, profile, cfg, ref, slot, rtk=False):
         return image_id(ref)
     except Failure:
         pass
-    anonymous_image(ref)
+    # A private app image is pulled with root's registry login; sidecars always stay anonymous.
+    if rtk or profile['registration'].get('image_access', 'public') != 'private':
+        anonymous_image(ref)
     if not rtk:
         command('/usr/bin/bash', str(Path(__file__).with_name('bluegreen.sh')), 'pull', str(release), str(cfg), slot, env=environment(profile, cfg, ref), timeout=650)
         return image_id(ref)

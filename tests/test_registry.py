@@ -75,6 +75,27 @@ class Registration(unittest.TestCase):
             with self.assertRaisesRegex(Failure, 'UNTRUSTED_PATH'):
                 trusted_path('/run/lock/vps-deploy', directory=True)
 
+    def test_image_access_is_public_unless_registry_opts_in(self):
+        self.assertEqual(app_registration(ROOT, 'mc-hub-api')['image_access'], 'private')
+        self.assertNotIn('image_access', app_registration(ROOT, 'omniroute'))
+        raw = (ROOT / 'registry/mc-hub-api.yml').read_bytes()
+        with tempfile.TemporaryDirectory() as name:
+            (Path(name) / 'registry').mkdir()
+            (Path(name) / 'registry/mc-hub-api.yml').write_bytes(raw.replace(b'image_access: private', b'image_access: anyone'))
+            with self.assertRaisesRegex(Failure, 'REGISTRY_POLICY'):
+                app_registration(Path(name), 'mc-hub-api')
+
+    def test_only_private_app_images_skip_the_anonymous_pull_check(self):
+        import operations
+        for access, rtk, checked in (('public', False, True), ('private', False, False), ('private', True, True)):
+            profile = {'registration': {'image_access': access}, 'image_repository': 'ghcr.io/x/app', 'rtk_image_repository': 'ghcr.io/x/rtk'}
+            ref = ('ghcr.io/x/rtk' if rtk else 'ghcr.io/x/app') + '@sha256:' + 'a' * 64
+            with self.subTest(access=access, rtk=rtk), mock.patch('operations.image_id', side_effect=[Failure('MISSING'), 'id']), \
+                    mock.patch('operations.anonymous_image') as anonymous, mock.patch('operations.command'), mock.patch('operations.compose'), \
+                    mock.patch('operations.environment', return_value={}):
+                operations.pull(Path('/release'), profile, Path('/cfg'), ref, 'blue', rtk=rtk)
+                self.assertEqual(anonymous.called, checked)
+
 
 if __name__ == '__main__':
     unittest.main()
