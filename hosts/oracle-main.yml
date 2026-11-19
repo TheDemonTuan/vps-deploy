@@ -27,9 +27,10 @@ apps:
     edge_network: edge-omniroute
     route_name: omniroute.yml
   mc-hub:
-    api_host: tuannguyenviet.site
+    # The site's domain; the alias is the previous one, still routed as a fallback.
+    api_host: thedemontuan.dev
     dashboard_host: ""
-    dashboard_alias_host: ""
+    dashboard_alias_host: tuannguyenviet.site
     work_dir: /opt/mc-hub
     compose_project: mc-hub
     edge_network: edge-mc-hub
