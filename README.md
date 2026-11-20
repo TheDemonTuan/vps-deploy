@@ -394,9 +394,12 @@ UID 1000 with a read-only root, and deploy independently.
   the `Edge IP bans` rule (zone listed in the CrowdSec Telegram controller's
   `cloudflare.zone_ids`), Web Analytics and email routing. `thedemontuan.dev` also has Image
   Transformations on (the site serves covers through `/cdn-cgi/image/`) and, for page speed,
-  Bot Fight Mode, JS detections and Cloudflare's managed robots.txt / Bot Preference Sync off:
-  the site's own `/robots.txt` lists the blocked AI crawlers, and CrowdSec, the IP-ban rule and
-  Turnstile remain the bot defences. Traefik serves one Origin CA certificate per zone
+  Bot Fight Mode, JS detections, AI Labyrinth and Cloudflare's managed robots.txt / Bot Preference
+  Sync off. AI Crawl Control allows Search, Training and Agents and the site's `/robots.txt` blocks
+  only `/admin` and `/api/`, so search and AI crawlers read the site freely. Crawler Hints is on: on a
+  cache miss Cloudflare sends an IndexNow ping (Bing, Yandex, Seznam, Naver), so new and edited posts
+  reach those engines without a sitemap resubmit. CrowdSec, the IP-ban rule and Turnstile remain the
+  abuse defences. Traefik serves one Origin CA certificate per zone
   (`/opt/platform/edge/certs/cf-origin-*`, listed in `dynamic/00-tls-origin.yml`).
 - `mc-hub-api` requires `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET` in
   `/etc/vps-deploy/apps/mc-hub-api/runtime.env` (root, 0600; widget for the site host).
