@@ -162,7 +162,7 @@ class FrontendReleaseTests(unittest.TestCase):
 
     def runner(self, command, cwd):
         self.commands.append(command)
-        if command[0] == 'node':
+        if command[0] == 'bun':
             self.assertEqual(Path(cwd), self.root / 'web')
             args = command[2:]
             if args[:2] == ['versions', 'upload'] or args[0] == 'deploy':
@@ -231,7 +231,7 @@ class FrontendReleaseTests(unittest.TestCase):
         return json.loads(self.summary_path.read_text())
 
     def mutations(self):
-        return [command[2:] for command in self.commands if command[0] == 'node' and
+        return [command[2:] for command in self.commands if command[0] == 'bun' and
                 command[2:4] != ['versions', 'list']]
 
     def serve_artifact(self, sha=OLD, corrupt=False):

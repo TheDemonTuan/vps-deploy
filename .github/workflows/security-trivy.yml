@@ -107,7 +107,7 @@ jobs:
         run: mkdir -p ~/.cache/trivy
       - name: Restore Trivy DB cache
         id: trivy-cache
-        uses: actions/cache/restore@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/trivy
           key: trivy-db-${{ runner.os }}-${{ github.run_id }}
@@ -115,7 +115,7 @@ jobs:
             trivy-db-${{ runner.os }}-
       - name: Log in to GHCR for private image scan
         if: inputs.scan-mode == 'image'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -253,13 +253,13 @@ jobs:
             echo "::endgroup::"
           fi
       - name: Save Trivy DB cache
-        uses: actions/cache/save@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always() && steps.trivy-cache.outputs.cache-hit != 'true'
         with:
           path: ~/.cache/trivy
           key: trivy-db-${{ runner.os }}-${{ github.run_id }}
       - name: Upload Trivy & SBOM reports
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: trivy-reports-${{ inputs.app }}-${{ inputs.scan-mode }}${{ inputs.image-role && format('-{0}', inputs.image-role) || '' }}

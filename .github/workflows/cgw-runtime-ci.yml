@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p 'test_*.py' -v
           bash tests/blue-green-reconcile.test.sh
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4, existing runtime pin
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1, existing runtime pin
       - name: Build native runtime, prove sandbox, exercise real lifecycle crash matrix
         timeout-minutes: 150
         run: |
