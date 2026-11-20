@@ -47,11 +47,14 @@ jobs:
           python-version: '3.12'
       - name: Install controller verification dependencies
         run: python3 -m pip install 'PyYAML==6.0.3'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.5
       - name: Verify trusted controller and adapters without production credentials
         run: |
           python3 -m unittest discover -s cloudflare/tests -p 'test_*.py' -v
           python3 -m unittest discover -s cloudflare/acb/tests -p 'test_*.py' -v
-          node --test cloudflare/tests/test_uptimeflare_wrappers.mjs
+          bun test ./cloudflare/tests/test_uptimeflare_wrappers.mjs
   resolve:
     needs: verify
     runs-on: ubuntu-latest
@@ -106,13 +109,11 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: cloudflare/package-lock.json
+          bun-version: 1.4.5
       - name: Install pinned platform tooling without source code or credentials
-        run: npm ci --prefix cloudflare --ignore-scripts
+        run: bun install --cwd cloudflare --frozen-lockfile --ignore-scripts
       - name: Invoke only the platform-owned deployment adapter
         env:
           SELECTION: ${{ toJSON(matrix) }}

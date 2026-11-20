@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Offline, root-only enrollment of the dedicated forced-command browser probe."""
+"""Offline, root-only enrollment and upgrade of the dedicated forced-command browser probe."""
 import argparse
 import base64
 import binascii
@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zipfile
 
 sys.dont_write_bytecode = True
 ACCOUNT = 'probe-uptimeflare'
@@ -28,12 +29,13 @@ WRAPPER = Path('/usr/local/libexec/vps-deploy-uptimeflare-probe')
 SUDOERS = Path('/etc/sudoers.d/vps-deploy-uptimeflare-probe')
 INSTALL_LOCK = Path('/run/vps-deploy-probe-install.lock')
 RESTORECON = Path('/usr/sbin/restorecon')
-NODE_VERSION = '24.21.0'
-NODE_DIGESTS = {
-    'arm64': '6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2',
-    'x64': 'fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6',
+BUN_VERSION = '1.4.5'
+BUN_DIGESTS = {
+    'arm64': '18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84',
+    'x64': '94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb',
 }
-SOURCE_FILES = ('cloudflare/uptimeflare-http.mjs', 'cloudflare/package-lock.json',
+BUN_ARCHIVE_NAMES = {'arm64': 'bun-linux-aarch64', 'x64': 'bun-linux-x64'}
+SOURCE_FILES = ('cloudflare/uptimeflare-http.mjs', 'cloudflare/bun.lock',
                 'install/install-uptimeflare-probe.py')
 
 
@@ -153,18 +155,49 @@ def package(archive, name, record):
     return files
 
 
-def node_binary(archive, architecture):
+def bun_binary(archive, architecture):
     path = trusted(archive)
     digest = hashlib.sha256()
     with path.open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(chunk)
-    require(digest.hexdigest() == NODE_DIGESTS[architecture], 'NODE_DIGEST_MISMATCH')
-    with tarfile.open(path, 'r:xz') as tar:
-        name = 'node-v' + NODE_VERSION + '-linux-' + architecture + '/bin/node'
-        members = [member for member in tar if member.name == name]
-        require(len(members) == 1 and members[0].isfile(), 'NODE_ARCHIVE_INVALID')
-        return tar.extractfile(members[0]).read()
+    require(digest.hexdigest() == BUN_DIGESTS[architecture], 'BUN_DIGEST_MISMATCH')
+    prefix = BUN_ARCHIVE_NAMES[architecture]
+    with zipfile.ZipFile(path) as archive_file:
+        members = archive_file.infolist()
+        require(sorted(member.filename for member in members) == [prefix + '/', prefix + '/bun'],
+                'BUN_ARCHIVE_INVALID')
+        member = archive_file.getinfo(prefix + '/bun')
+        require(stat.S_ISREG(member.external_attr >> 16), 'BUN_ARCHIVE_INVALID')
+        return archive_file.read(member)
+
+
+def strip_trailing_commas(text):
+    """Bun's text lockfile is JSON plus trailing commas; drop only commas outside strings."""
+    out, in_string, escaped = [], False, False
+    for index, char in enumerate(text):
+        if in_string:
+            escaped = not escaped and char == '\\'
+            in_string = escaped or char != '"'
+        elif char == '"':
+            in_string = True
+        elif char == ',' and text[index + 1:].lstrip()[:1] in (']', '}'):
+            continue
+        out.append(char)
+    return ''.join(out)
+
+
+def lock_records(raw):
+    lock = json.loads(strip_trailing_commas(raw.decode()))
+    require(lock.get('lockfileVersion') == 2, 'LOCKFILE_POLICY')
+    records = {}
+    for name in ('playwright', 'playwright-core'):
+        entry = lock['packages'][name]
+        require(type(entry) is list and len(entry) == 4 and type(entry[0]) is str and entry[1] == '' and
+                type(entry[2]) is dict and entry[0].startswith(name + '@'), 'LOCKFILE_POLICY')
+        records[name] = {'version': entry[0][len(name) + 1:], 'integrity': entry[3],
+                         'dependencies': entry[2].get('dependencies')}
+    return records
 
 
 def account_state():
@@ -211,7 +244,7 @@ exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C /usr/bin/flock -n /run/vps-deploy
  --property=NoNewPrivileges=yes --property=CapabilityBoundingSet= --property=AmbientCapabilities= \\
  --property=UMask=0077 --property=WorkingDirectory=/tmp \\
  /usr/bin/env -i PATH=/usr/bin:/bin LANG=C HOME=/tmp UPTIMEFLARE_BROWSER_EXECUTABLE=/usr/bin/chromium-browser \\
- RUNTIME/node/bin/node RUNTIME/cloudflare/uptimeflare-http.mjs
+ RUNTIME/bun/bin/bun RUNTIME/cloudflare/uptimeflare-http.mjs
 '''.replace('RUNTIME', str(runtime))
     sudoers = (ACCOUNT + ' ALL=(root) NOPASSWD: ' + str(WRAPPER) + ' ""\n')
     return entry.encode(), wrapper.encode(), sudoers.encode()
@@ -252,17 +285,15 @@ def check(args):
     require((source / '.probe-source-sha').read_bytes() == (args.release + '\n').encode(), 'SOURCE_SHA_MISMATCH')
     source_raw = {name: trusted(source / name).read_bytes() for name in SOURCE_FILES}
     require(source_raw[SOURCE_FILES[2]] == trusted(Path(__file__).absolute()).read_bytes(), 'INSTALLER_SOURCE_MISMATCH')
-    lock = json.loads(source_raw['cloudflare/package-lock.json'])
-    require(lock.get('lockfileVersion') == 3, 'LOCKFILE_POLICY')
-    records = {name: lock['packages']['node_modules/' + name] for name in ('playwright', 'playwright-core')}
+    records = lock_records(source_raw['cloudflare/bun.lock'])
     require(records['playwright'].get('dependencies') == {'playwright-core': records['playwright-core']['version']} and
             not records['playwright-core'].get('dependencies'), 'PACKAGE_DEPENDENCY_POLICY')
     files = {'cloudflare/uptimeflare-http.mjs': (source_raw['cloudflare/uptimeflare-http.mjs'], 0o644),
-             'node/bin/node': (node_binary(Path(args.node_archive), architecture), 0o755)}
+             'bun/bin/bun': (bun_binary(Path(args.bun_archive), architecture), 0o755)}
     for name, archive in (('playwright', args.playwright_archive), ('playwright-core', args.playwright_core_archive)):
         files.update(package(Path(archive), name, records[name]))
-    manifest = {'version': 1, 'release': args.release, 'architecture': architecture,
-                'node': {'version': NODE_VERSION, 'sha256': NODE_DIGESTS[architecture]},
+    manifest = {'version': 2, 'release': args.release, 'architecture': architecture,
+                'bun': {'version': BUN_VERSION, 'sha256': BUN_DIGESTS[architecture]},
                 'source_sha256': {name: sha(raw) for name, raw in source_raw.items()},
                 'package_integrity': {name: record['integrity'] for name, record in records.items()},
                 'files': {name: {'sha256': sha(raw), 'mode': format(mode, '04o')}
@@ -279,7 +310,10 @@ def check(args):
     for path, mode in directories.items():
         existing(path, directory=True, mode=mode)
     for path, (raw, mode) in resources.items():
-        if existing(path, mode=mode):
+        present = existing(path, mode=mode)
+        # An upgrade repoints only the root wrapper; account, key, entry and sudoers must already match.
+        require(present or not args.upgrade, 'UPGRADE_REQUIRES_ENROLLMENT')
+        if present and not (args.upgrade and path == WRAPPER):
             require(path.read_bytes() == raw, 'IMMUTABLE_RESOURCE_CONFLICT')
     if existing(HOME, directory=True):
         require(set(HOME.iterdir()) <= {HOME / '.ssh'}, 'HOME_CONFLICT')
@@ -290,6 +324,7 @@ def check(args):
     if reused:
         release_matches(release_path, files)
     installed_account = account_state()
+    require(installed_account or not args.upgrade, 'UPGRADE_REQUIRES_ENROLLMENT')
     for executable in ('/usr/bin/sudo', '/usr/bin/systemd-run', '/usr/bin/flock', '/usr/bin/env',
                        '/usr/bin/id', '/usr/sbin/useradd', '/usr/sbin/visudo', '/usr/bin/chromium-browser'):
         trusted_executable(Path(executable))
@@ -313,7 +348,26 @@ def exclusive_file(path, raw, mode):
         os.fsync(stream.fileno())
 
 
-def apply(plan):
+def replace_file(path, raw, mode):
+    """Atomically replace one managed file in place (same directory, fsynced, then renamed)."""
+    existing(path, mode=mode)
+    if path.read_bytes() == raw:
+        return
+    temporary = path.with_name('.' + path.name + '.upgrade')
+    exclusive_file(temporary, raw, mode)
+    try:
+        os.rename(temporary, path)
+    finally:
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def apply(plan, upgrade=False):
     for path, mode in plan['directories'].items():
         if not existing(path, directory=True, mode=mode):
             path.mkdir(mode=mode)
@@ -343,6 +397,8 @@ def apply(plan):
     subprocess.run(['/usr/sbin/visudo', '-cf', '-'], input=plan['resources'][SUDOERS][0],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                    env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'})
+    if upgrade:
+        replace_file(WRAPPER, *plan['resources'][WRAPPER])
     for path in (WRAPPER, ENTRY, SUDOERS, HOME / '.ssh/authorized_keys'):
         exclusive_file(path, *plan['resources'][path])
     if plan['restorecon']:
@@ -353,9 +409,11 @@ def apply(plan):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('source', 'release', 'public-key', 'node-archive', 'playwright-archive', 'playwright-core-archive'):
+    for name in ('source', 'release', 'public-key', 'bun-archive', 'playwright-archive', 'playwright-core-archive'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--check', action='store_true', help='validate all inputs/conflicts without any mutation')
+    parser.add_argument('--upgrade', action='store_true',
+                        help='repoint the existing enrollment\'s root wrapper to this release')
     args = parser.parse_args(argv)
     try:
         plan = check(args)
@@ -363,14 +421,14 @@ def main(argv=None):
             fd = os.open(INSTALL_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, 'rb') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                # Recheck after acquiring the installation lock, including immutable bytes.
                 plan = check(args)
-                apply(plan)
-        print(json.dumps({'status': 'checked' if args.check else 'installed',
+                apply(plan, upgrade=args.upgrade)
+        print(json.dumps({'status': 'checked' if args.check else 'upgraded' if args.upgrade else 'installed',
                           'release': args.release, 'reused_release': plan['reused'],
                           'manifest_sha256': sha(encoded(plan['manifest']))}, sort_keys=True))
         return 0
-    except (Failure, OSError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.SubprocessError) as error:
+    except (Failure, OSError, ValueError, KeyError, TypeError, tarfile.TarError, zipfile.BadZipFile,
+            subprocess.SubprocessError) as error:
         print(json.dumps({'error_code': str(error) if isinstance(error, Failure) else 'PROBE_INSTALL_FAILED'}), file=sys.stderr)
         return 1
 

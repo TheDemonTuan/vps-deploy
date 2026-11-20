@@ -313,7 +313,7 @@ class Publisher:
 
     def wrangler(self, *args):
         executable = os.environ.get('WRANGLER_BIN', 'node_modules/wrangler/bin/wrangler.js')
-        return self.runner(['node', executable, *args], self.root / 'web')
+        return self.runner(['bun', executable, *args], self.root / 'web')
 
     def routes(self):
         self.runner([sys.executable, str(Path(__file__).with_name('cloudflare-routes.py')), 'check'], self.root)

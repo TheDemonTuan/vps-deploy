@@ -228,7 +228,7 @@ def upload(root, sha, worker, directory):
     # This is an operator-provided central tool path, never a value taken from the artifact.
     if not wrangler.is_file() or wrangler.is_relative_to(root):
         raise DeployError("Trusted central Wrangler installation is required")
-    command = ["node", str(wrangler), "versions", "upload", "--config", str(config_path), "--no-bundle", "--keep-vars", "--tag", sha, "--message", "central uptimeflare " + sha]
+    command = ["bun", str(wrangler), "versions", "upload", "--config", str(config_path), "--no-bundle", "--keep-vars", "--tag", sha, "--message", "central uptimeflare " + sha]
     env = {name: value for name, value in os.environ.items() if name not in SECRETS}
     env.update({"CI": "true", "NO_COLOR": "1", "WRANGLER_SEND_METRICS": "false"})
     try:

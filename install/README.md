@@ -4,8 +4,8 @@ Do not run this procedure until the platform PR's AMD64/ARM64 checks and disposa
 
 ## Dedicated Uptimeflare browser probe enrollment
 
-`install-uptimeflare-probe.py` is an **offline, root-only, initial-enrollment**
-installer. It does not enroll an application, change a route, disable Cloudflare
+`install-uptimeflare-probe.py` is an **offline, root-only** enrollment and
+upgrade installer. It does not enroll an application, change a route, disable Cloudflare
 Bot Fight Mode, create a persistent runner/service, or touch deployment state.
 The normal deploy identity receives no additional privilege: use a separate
 Ed25519 key solely for `probe-uptimeflare` and pin the VPS SSH host key separately.
@@ -34,16 +34,20 @@ git archive "$RELEASE" | tar -x -C "$STAGE/source"
 printf '%s\n' "$RELEASE" > "$STAGE/source/.probe-source-sha"
 cp "$PROBE_PUBLIC_KEY" "$STAGE/probe.pub"
 python3 - "$STAGE" "$ARCH" <<'PY'
-import json
 from pathlib import Path
 import sys
+import importlib.util
 import urllib.request
 stage, arch = Path(sys.argv[1]), sys.argv[2]
 assert arch in ('arm64', 'x64')
-lock = json.loads((stage / 'source/cloudflare/package-lock.json').read_bytes())
-urls = {'node.tar.xz': f'https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-{arch}.tar.xz'}
+spec = importlib.util.spec_from_file_location('probe', stage / 'source/install/install-uptimeflare-probe.py')
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+records = probe.lock_records((stage / 'source/cloudflare/bun.lock').read_bytes())
+zip_name = probe.BUN_ARCHIVE_NAMES[arch] + '.zip'
+urls = {'bun.zip': f'https://github.com/oven-sh/bun/releases/download/bun-v{probe.BUN_VERSION}/{zip_name}'}
 for name in ('playwright', 'playwright-core'):
-    urls[name + '.tgz'] = lock['packages']['node_modules/' + name]['resolved']
+    urls[name + '.tgz'] = f"https://registry.npmjs.org/{name}/-/{name}-{records[name]['version']}.tgz"
 for name, url in urls.items():
     with urllib.request.urlopen(url, timeout=120) as response:
         (stage / name).write_bytes(response.read())
@@ -55,10 +59,10 @@ scp -r "$STAGE" "$OPERATOR:uptimeflare-probe-stage-$RELEASE"
 that reviewed selection. The installer deliberately does not run Git as root
 or claim that a marker alone cryptographically attests source provenance. The
 operator must review/select the commit and protect the SSH staging transfer.
-Archive authenticity is independently enforced at enrollment: Node 24.21.0 has
-hard-coded architecture-specific SHA-256 pins, and both npm tarballs must match
-the SHA-512 integrity entries in that commit's existing package lock. No `npm`
-command, lifecycle script, browser download, or network fetch runs as root.
+Archive authenticity is independently enforced at enrollment: Bun 1.4.5 has
+hard-coded architecture-specific SHA-256 pins, and both npm registry tarballs must match
+the SHA-512 integrity entries in that commit's `cloudflare/bun.lock`. No package
+manager command, lifecycle script, browser download, or network fetch runs as root.
 
 On the VPS, as the existing operator identity, freeze a private root-owned copy
 before executing any staged code. `INCOMING` is relative to that operator's home,
@@ -77,7 +81,7 @@ sudo chmod -R u=rwX,go=rX "$ROOT_STAGE"
 sudo chmod 0700 "$ROOT_STAGE"
 sudo /usr/bin/python3 -B "$ROOT_STAGE/source/install/install-uptimeflare-probe.py" \
   --source "$ROOT_STAGE/source" --release "$RELEASE" \
-  --public-key "$ROOT_STAGE/probe.pub" --node-archive "$ROOT_STAGE/node.tar.xz" \
+  --public-key "$ROOT_STAGE/probe.pub" --bun-archive "$ROOT_STAGE/bun.zip" \
   --playwright-archive "$ROOT_STAGE/playwright.tgz" \
   --playwright-core-archive "$ROOT_STAGE/playwright-core.tgz" --check
 ```
@@ -89,7 +93,19 @@ directory, lock, account, file, unit, or process**. To enroll, repeat the exact
 last command with only `--check` removed. Save its manifest digest with the
 operator change record. The complete digest manifest is installed at
 `/opt/vps-deploy-probe/releases/<SHA>/manifest.json`: it records source hashes,
-Node pin, package integrity strings, and every runtime file's hash/mode.
+Bun pin, package integrity strings, and every runtime file's hash/mode.
+
+### Upgrade an existing enrollment
+
+Stage the new reviewed commit exactly as above with the **same** probe public
+key, then run the installer command with `--check --upgrade`, and after
+inspecting the JSON, with only `--check` removed (`status: upgraded`). An upgrade
+requires the existing account, `authorized_keys`, forced entry and sudoers rule to
+match byte for byte; it publishes the new immutable release directory and then
+atomically replaces only the root wrapper (same-directory temporary file, fsync,
+rename) so the next probe run uses the new release. Earlier release directories
+stay in place for investigation and rollback. Verify with the public probe
+command below before closing the change record.
 
 ### Resources and immutable retry policy
 
@@ -101,7 +117,7 @@ The installer owns only:
   `.ssh` is root-owned mode 0755 and its public `authorized_keys` is root-owned
   mode 0644 so sshd can open it as the login UID; neither is writable by that UID.
   No private key is installed on the VPS.
-- `/opt/vps-deploy-probe/releases/<SHA>` containing the probe, pinned Node binary,
+- `/opt/vps-deploy-probe/releases/<SHA>` containing the probe, pinned Bun binary,
   `playwright`, `playwright-core`, and digest manifest;
 - `/usr/local/libexec/vps-deploy-uptimeflare-probe-entry`, the fixed root wrapper
   `/usr/local/libexec/vps-deploy-uptimeflare-probe`, and the dedicated no-argument
@@ -121,10 +137,11 @@ grant. Package extraction accepts only regular files/directories within the
 package prefix: no links, devices, traversal, duplicate names or privileged
 modes. Existing runtime trees must contain exactly the expected files,
 directories, bytes and modes. Differing release content, keys, wrappers, account
-policy or home content fails closed, never overwrites. Repeating enrollment with
+policy or home content fails closed, never overwrites; the only exception is
+`--upgrade` repointing the root wrapper to a new release. Repeating enrollment with
 identical inputs reuses the exact runtime (`reused_release: true`) and leaves
 existing runtime/key/wrapper inodes and timestamps unchanged. This is not a key
-rotation or upgrade interface; a different key/release needs separate operator
+rotation interface; a different key needs separate operator
 review, not deletion of conflict checks. Root-owned partial enrollment may be
 resumed only where every already-published managed resource still matches.
 

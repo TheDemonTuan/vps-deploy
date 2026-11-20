@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 15
     environment: ${{ inputs.operation == 'apply' && 'platform-admin' || 'production' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Remove 9router host resources and verify shared state

@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
+import zipfile
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +34,15 @@ def archive(path, members, mode='w:gz'):
             if kind == tarfile.SYMTYPE:
                 member.linkname = '/etc/shadow'
             tar.addfile(member, io.BytesIO(raw) if kind == tarfile.REGTYPE else None)
+
+
+def bun_zip(path, members=(('bun-linux-aarch64/', b'', stat.S_IFDIR | 0o755),
+                           ('bun-linux-aarch64/bun', b'bun fixture', stat.S_IFREG | 0o755))):
+    with zipfile.ZipFile(path, 'w') as output:
+        for name, raw, mode in members:
+            info = zipfile.ZipInfo(name)
+            info.external_attr = mode << 16
+            output.writestr(info, raw)
 
 
 class UptimeflareProbeInstall(unittest.TestCase):
@@ -63,24 +73,26 @@ class UptimeflareProbeInstall(unittest.TestCase):
         (source / '.probe-source-sha').write_text(release + '\n')
         (source / 'cloudflare/uptimeflare-http.mjs').write_text('export const probe = true;\n')
         (source / 'install/install-uptimeflare-probe.py').write_bytes((ROOT / 'install/install-uptimeflare-probe.py').read_bytes())
-        records = {}
+        packages = {}
         for name in ('playwright', 'playwright-core'):
             path = base / (name + '.tgz')
-            archive(path, [('package/package.json', json.dumps({'name': name, 'version': '1.63.0'}).encode(), tarfile.REGTYPE),
+            archive(path, [('package/package.json', json.dumps({'name': name, 'version': '1.65.1'}).encode(), tarfile.REGTYPE),
                            ('package/index.mjs', b'export {};\n', tarfile.REGTYPE)])
-            records['node_modules/' + name] = {'version': '1.63.0',
-                'integrity': 'sha512-' + base64.b64encode(hashlib.sha512(path.read_bytes()).digest()).decode()}
-        records['node_modules/playwright']['dependencies'] = {'playwright-core': '1.63.0'}
-        (source / 'cloudflare/package-lock.json').write_text(json.dumps({'lockfileVersion': 3, 'packages': records}))
-        node = base / 'node.tar.xz'
-        archive(node, [('node-v24.21.0-linux-arm64/bin/node', b'node fixture', tarfile.REGTYPE)], 'w:xz')
-        stack.enter_context(mock.patch.dict(module.NODE_DIGESTS, {'arm64': hashlib.sha256(node.read_bytes()).hexdigest()}))
+            packages[name] = [name + '@1.65.1', '', {'bin': {name: 'cli.js'}},
+                              'sha512-' + base64.b64encode(hashlib.sha512(path.read_bytes()).digest()).decode()]
+        packages['playwright'][2]['dependencies'] = {'playwright-core': '1.65.1'}
+        # Bun's text lockfile carries trailing commas.
+        lock = json.dumps({'lockfileVersion': 2, 'packages': packages}, indent=2)
+        (source / 'cloudflare/bun.lock').write_text(lock.replace('\n  }\n}', ',\n  },\n}'))
+        bun = base / 'bun.zip'
+        bun_zip(bun)
+        stack.enter_context(mock.patch.dict(module.BUN_DIGESTS, {'arm64': hashlib.sha256(bun.read_bytes()).hexdigest()}))
         key = base / 'probe.pub'
         blob = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + b'k' * 32
         key.write_bytes(b'ssh-ed25519 ' + base64.b64encode(blob) + b' operator comment\n')
-        args = SimpleNamespace(source=str(source), release=release, public_key=str(key), node_archive=str(node),
+        args = SimpleNamespace(source=str(source), release=release, public_key=str(key), bun_archive=str(bun),
                                playwright_archive=str(base / 'playwright.tgz'),
-                               playwright_core_archive=str(base / 'playwright-core.tgz'))
+                               playwright_core_archive=str(base / 'playwright-core.tgz'), upgrade=False)
         return module, args
 
     def test_check_has_no_mutations_or_processes_and_reports_digest_manifest(self):
@@ -98,7 +110,8 @@ class UptimeflareProbeInstall(unittest.TestCase):
             self.assertEqual(plan['manifest']['release'], args.release)
             self.assertEqual(set(plan['manifest']['package_integrity']), {'playwright', 'playwright-core'})
             self.assertIn('cloudflare/uptimeflare-http.mjs', plan['manifest']['source_sha256'])
-            self.assertIn('node/bin/node', plan['manifest']['files'])
+            self.assertEqual(plan['files']['bun/bin/bun'], (b'bun fixture', 0o755))
+            self.assertEqual(plan['manifest']['package_integrity']['playwright'][:7], 'sha512-')
 
     def test_main_check_does_not_open_install_lock_or_apply(self):
         module = load_module()
@@ -107,7 +120,7 @@ class UptimeflareProbeInstall(unittest.TestCase):
                 mock.patch.object(module, 'apply') as apply, mock.patch.object(module.os, 'open') as opened, \
                 mock.patch('sys.stdout', new_callable=io.StringIO) as stdout:
             result = module.main(['--source', '/source', '--release', 'a' * 40, '--public-key', '/key',
-                                  '--node-archive', '/node', '--playwright-archive', '/pw',
+                                  '--bun-archive', '/bun', '--playwright-archive', '/pw',
                                   '--playwright-core-archive', '/core', '--check'])
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(stdout.getvalue())['status'], 'checked')
@@ -137,7 +150,7 @@ class UptimeflareProbeInstall(unittest.TestCase):
                 module.check(args)
 
     def test_archive_tampering_rejected_before_use(self):
-        for name, code in (('node_archive', 'NODE_DIGEST_MISMATCH'),
+        for name, code in (('bun_archive', 'BUN_DIGEST_MISMATCH'),
                            ('playwright_archive', 'PACKAGE_DIGEST_MISMATCH'),
                            ('playwright_core_archive', 'PACKAGE_DIGEST_MISMATCH')):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as home, ExitStack() as stack:
@@ -266,6 +279,83 @@ class UptimeflareProbeInstall(unittest.TestCase):
             self.assertEqual(run.call_args.args[0], [str(module.RESTORECON), '-RF', str(module.HOME)])
             self.assertEqual(run.call_count, 3)
 
+    def test_bun_archive_must_hold_only_the_regular_binary(self):
+        for members in ((('bun-linux-aarch64/bun', b'bun', stat.S_IFLNK | 0o777),
+                         ('bun-linux-aarch64/', b'', stat.S_IFDIR | 0o755)),
+                        (('bun-linux-aarch64/', b'', stat.S_IFDIR | 0o755),
+                         ('bun-linux-aarch64/bun', b'bun', stat.S_IFREG | 0o755),
+                         ('bun-linux-aarch64/extra', b'x', stat.S_IFREG | 0o644)),
+                        (('bun-linux-x64/', b'', stat.S_IFDIR | 0o755),
+                         ('bun-linux-x64/bun', b'bun', stat.S_IFREG | 0o755))):
+            with self.subTest(members=[name for name, _, _ in members]), \
+                    tempfile.TemporaryDirectory() as home, ExitStack() as stack:
+                module, args = self.fixture(home, stack)
+                bun_zip(Path(args.bun_archive), members)
+                module.BUN_DIGESTS['arm64'] = hashlib.sha256(Path(args.bun_archive).read_bytes()).hexdigest()
+                with self.assertRaisesRegex(module.Failure, 'BUN_ARCHIVE_INVALID'):
+                    module.check(args)
+
+    def test_lockfile_must_pin_exact_playwright_pair(self):
+        with tempfile.TemporaryDirectory() as home, ExitStack() as stack:
+            module, args = self.fixture(home, stack)
+            lock = Path(args.source) / 'cloudflare/bun.lock'
+            lock.write_text(lock.read_text().replace('"playwright-core": "1.65.1"', '"playwright-core": "1.65.0"'))
+            with self.assertRaisesRegex(module.Failure, 'PACKAGE_DEPENDENCY_POLICY'):
+                module.check(args)
+            lock.write_text(lock.read_text().replace('"lockfileVersion": 2', '"lockfileVersion": 1'))
+            with self.assertRaisesRegex(module.Failure, 'LOCKFILE_POLICY'):
+                module.check(args)
+
+    def enrolled(self, home, stack):
+        module, args = self.fixture(home, stack)
+        stack.enter_context(mock.patch.object(module.subprocess, 'run'))
+        module.apply(module.check(args))
+        module.account_state.return_value = True
+        args.release = 'b' * 40
+        (Path(args.source) / '.probe-source-sha').write_text(args.release + '\n')
+        return module, args
+
+    def test_upgrade_repoints_only_the_wrapper_and_keeps_old_release(self):
+        with tempfile.TemporaryDirectory() as home, ExitStack() as stack:
+            module, args = self.enrolled(home, stack)
+            with self.assertRaisesRegex(module.Failure, 'IMMUTABLE_RESOURCE_CONFLICT'):
+                module.check(args)  # A plain enrollment never overwrites the wrapper.
+            args.upgrade = True
+            kept = {path: (path.stat().st_ino, path.read_bytes())
+                    for path in (module.ENTRY, module.SUDOERS, module.HOME / '.ssh/authorized_keys')}
+            module.apply(module.check(args), upgrade=True)
+            self.assertIn(str(module.BASE / 'releases' / ('b' * 40) / 'bun/bin/bun').encode(), module.WRAPPER.read_bytes())
+            self.assertEqual(stat.S_IMODE(module.WRAPPER.stat().st_mode), 0o755)
+            self.assertEqual(kept, {path: (path.stat().st_ino, path.read_bytes()) for path in kept})
+            self.assertTrue((module.BASE / 'releases' / ('a' * 40) / 'manifest.json').is_file())
+            self.assertEqual(sorted(path.name for path in module.WRAPPER.parent.iterdir()),
+                             sorted([module.ENTRY.name, module.WRAPPER.name]))
+            second = module.check(args)
+            self.assertTrue(second['reused'])
+
+    def test_upgrade_requires_matching_enrollment(self):
+        with tempfile.TemporaryDirectory() as home, ExitStack() as stack:
+            module, args = self.fixture(home, stack)
+            args.upgrade = True
+            with self.assertRaisesRegex(module.Failure, 'UPGRADE_REQUIRES_ENROLLMENT'):
+                module.check(args)
+        for tamper in ('entry', 'sudoers', 'key'):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as home, ExitStack() as stack:
+                module, args = self.enrolled(home, stack)
+                args.upgrade = True
+                if tamper == 'key':
+                    blob = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + b'z' * 32
+                    Path(args.public_key).write_bytes(b'ssh-ed25519 ' + base64.b64encode(blob) + b'\n')
+                else:
+                    path = module.ENTRY if tamper == 'entry' else module.SUDOERS
+                    path.chmod(0o644)
+                    path.write_text('# changed\n')
+                    path.chmod(0o755 if tamper == 'entry' else 0o440)
+                before = module.WRAPPER.read_bytes()
+                with self.assertRaisesRegex(module.Failure, 'IMMUTABLE_RESOURCE_CONFLICT'):
+                    module.check(args)
+                self.assertEqual(module.WRAPPER.read_bytes(), before)
+
     def test_wrappers_have_only_fixed_forced_command_and_transient_sandbox(self):
         module = load_module()
         entry, wrapper, sudoers = module.scripts('a' * 40)
@@ -282,6 +372,7 @@ class UptimeflareProbeInstall(unittest.TestCase):
         self.assertIn(b'NOPASSWD: /usr/local/libexec/vps-deploy-uptimeflare-probe ""\n', sudoers)
         self.assertNotIn(b'--no-sandbox', wrapper)
         self.assertNotIn(b'node_modules/.bin', wrapper)
+        self.assertIn(b'/releases/' + b'a' * 40 + b'/bun/bin/bun ', wrapper)
         self.assertNotIn(b'--unit=', wrapper)
         self.assertNotIn(b'2>/dev/null', wrapper)
 
