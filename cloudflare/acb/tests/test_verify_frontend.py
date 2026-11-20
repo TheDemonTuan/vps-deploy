@@ -40,6 +40,13 @@ BOOTSTRAP = (b"<script>window.__CF$cv$params={r:'a4566af14c049fe9',t:'MTc5MTE0MD
              b"ut:'xUDmNdF__f6h4P8acb8d299M9itzGqM.xLB5XPtqou4-1791140303-1.2.1.1',i:60};"
              b"(function(){if(!document.body)return;var s=document.createElement('script');"
              b"s.src='/cdn-cgi/challenge-platform/scripts/precursor/main.js';document.head.appendChild(s);})();</script>")
+# Form Cloudflare started injecting in 2026-11 (captured from transactions.tuannguyenviet.site).
+BOOTSTRAP_V2 = (b"<script>window.__CF$cv$params={r:'a5d5606bdbd8716b',t:'MTc5NTE1NTkxMg==',u:'01a1f7a1686371e9904f2d38ade9b3f8',"
+                b"ut:'aN5JRd38eEtOyQVNXbzlXDPMds15isbAxBpK1wPK8Os-1795155912-1.2.1.1',i:60};"
+                b"(function(){if(!document.body)return;var l=window.location,o;try{o=new URL(l.origin).origin}catch(e)"
+                b"{try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}"
+                b"var u='/cdn-cgi/challenge-platform/scripts/precursor/main.js?ray=a5d5606bdbd8716b',s=document.createElement('script');"
+                b"s.src=o?new URL(u,o).href:u;document.head.appendChild(s);})();</script>")
 
 
 class FrontendTests(unittest.TestCase):
@@ -162,9 +169,11 @@ class FrontendTests(unittest.TestCase):
         self.fail_mutation(tamper, "checksum does not match")
 
     def test_edge_security_bootstrap_and_beacon_excluded_without_hiding_tampering(self):
+      for bootstrap in (BOOTSTRAP, BOOTSTRAP_V2):
+       with self.subTest(bootstrap=bootstrap[-60:]):
         def inject(path, status, headers, body):
             if headers.get("Content-Type", "").startswith("text/html"):
-                body = body.replace(b"</body>", BEACON + b"\n" + BOOTSTRAP + b"</body>")
+                body = body.replace(b"</body>", BEACON + b"\n" + bootstrap + b"</body>")
             return status, headers, body
         self.mutate = inject
         self.assertIn("edge analytics and security bootstrap excluded from HTML comparison", self.run_static("viewer"))
@@ -179,7 +188,11 @@ class FrontendTests(unittest.TestCase):
     def test_foreign_or_duplicate_security_bootstrap_is_not_excluded(self):
         variants = [BOOTSTRAP.replace(b"/cdn-cgi/challenge-platform/scripts/precursor/main.js", b"https://evil.invalid/main.js"),
                     BOOTSTRAP.replace(b"i:60", b"i:60; eval('alert(1)')"),
-                    BOOTSTRAP + BOOTSTRAP]
+                    BOOTSTRAP + BOOTSTRAP,
+                    BOOTSTRAP_V2.replace(b"var u='/cdn-cgi", b"var u='https://evil.invalid/cdn-cgi"),
+                    BOOTSTRAP_V2.replace(b"?ray=a5d5606bdbd8716b", b"?ray=a5d5606bdbd8716b&x=1"),
+                    BOOTSTRAP_V2.replace(b"o=''}}", b"o=''};eval('alert(1)')}"),
+                    BOOTSTRAP_V2 + BOOTSTRAP_V2]
         for bootstrap in variants:
             with self.subTest(bootstrap=bootstrap):
                 def mutation(path, status, headers, body):

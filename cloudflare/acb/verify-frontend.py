@@ -519,8 +519,12 @@ def without_edge_security_bootstrap(body, expected=None):
         rb"<script>\s*"
         rb"window\.__CF\$cv\$params=\{r:'[0-9a-f]+',t:'[A-Za-z0-9+/=]+',u:'[0-9a-f]{32}',"
         rb"ut:'[A-Za-z0-9_.-]+',i:\d+\};"
-        rb"\(function\(\)\{if\(!document\.body\)return;var s=document\.createElement\('script'\);"
-        rb"s\.src='/cdn-cgi/challenge-platform/scripts/precursor/main\.js';document\.head\.appendChild\(s\);\}\)\(\);"
+        rb"\(function\(\)\{if\(!document\.body\)return;(?:var s=document\.createElement\('script'\);"
+        rb"s\.src='/cdn-cgi/challenge-platform/scripts/precursor/main\.js';"
+        # Cloudflare's 2026-11 form: same-origin precursor URL carrying the request ray.
+        rb"|var l=window\.location,o;try\{o=new URL\(l\.origin\)\.origin\}catch\(e\)\{try\{o=new URL\(new URL\(l\.href\)\.origin\)\.origin\}catch\(e\)\{o=''\}\}"
+        rb"var u='/cdn-cgi/challenge-platform/scripts/precursor/main\.js\?ray=[0-9a-f]+',s=document\.createElement\('script'\);"
+        rb"s\.src=o\?new URL\(u,o\)\.href:u;)document\.head\.appendChild\(s\);\}\)\(\);"
         rb"\s*</script>"
     )
     matches = list(re.finditer(pattern, body))
