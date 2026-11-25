@@ -338,7 +338,7 @@
      }
     }
    ],
-   "description": "outcome: origin = sent to the node, hit = edge Cache API, stale = cache served because every node failed, queued = reader write held in the Queue, bucket = image from R2.",
+   "description": "outcome: origin = sent to the node, hit = edge Cache API, stale = cache served because every node failed, queued = reader write held in the Queue, bucket = image from R2, limited = reader write refused by the edge rate limit (429).",
    "fieldConfig": {
     "defaults": {},
     "overrides": []

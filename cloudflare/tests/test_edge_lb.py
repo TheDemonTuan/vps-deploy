@@ -32,6 +32,7 @@ class EdgeLb(unittest.TestCase):
         self.assertEqual(first['migrations'], {'new_tag': 'v1', 'new_sqlite_classes': ['Lease']})
         self.assertEqual(first['keep_bindings'], ['secret_text'])
         self.assertIn({'type': 'queue', 'name': 'WRITES', 'queue_name': 'edge-lb-writes'}, first['bindings'])
+        self.assertIn(edge_lb.WRITE_LIMIT, first['bindings'])
         self.assertNotIn('migrations', edge_lb.bindings(edge, 'v1'))
 
     def test_narrower_routes_on_a_balanced_host_are_removed_but_not_other_workers(self):

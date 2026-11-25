@@ -131,6 +131,19 @@ async function route(request, url, site, env, ctx, meta) {
     return send(forwarded, pinned, site);
   }
 
+  // Every write from one reader address shares a budget (WRITE_LIMIT, per Cloudflare location and
+  // approximate), so a flood stops here: before the tunnel, and before the queue while the writer
+  // is down. The API's per-endpoint throttles stay the real limits; readers peaked at 28 writes a
+  // minute. Nodes are not limited; a limiter error lets the write through.
+  if (!SAFE.has(request.method) && env.WRITE_LIMIT && client && !NODE_BY_IP.has(client)) {
+    const { success } = await env.WRITE_LIMIT.limit({ key: client }).catch(() => ({ success: true }));
+    if (!success) {
+      meta.outcome = "limited";
+      return Response.json({ error: { code: "RATE_LIMITED", message: "Too many requests. Please wait a few minutes." } },
+        { status: 429, headers: { "retry-after": "60" } });
+    }
+  }
+
   const state = await leaseState(site, env);
   if (needsPrimary(request, url, rules)) {
     meta.node = state.writer;
