@@ -221,6 +221,8 @@ def transaction(req, state, state_dir, cfg, release, profile, locks):
         save(state_dir / 'state.json', state)
         fault(profile, 'publishing')
         trust = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C'}
+        if route.edge_node(profile):
+            trust['EDGE_NODE'] = route.edge_node(profile)
         if profile.get('fixture_ci'):
             trust['CURL_CA_BUNDLE'] = profile['ca_bundle']
             if profile.get('fault_file'):

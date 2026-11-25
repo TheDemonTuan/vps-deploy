@@ -98,6 +98,11 @@ def preflight(directory, profile, release_root=None):
     return target, raw, hashes
 
 
+def edge_node(profile):
+    """This node's id at the edge load balancer, or None; public probes send it as X-Edge-Node."""
+    return profile.get('host_registration', {}).get('edge', {}).get('id')
+
+
 def probe(profile):
     strategy = profile['registration']['manifest']['strategy']
     require(strategy == 'blue-green', 'STRATEGY_MISMATCH')
@@ -105,7 +110,7 @@ def probe(profile):
         trust = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C'}
         if profile.get('fixture_ci'):
             trust['CURL_CA_BUNDLE'] = profile['ca_bundle']
-        node = profile.get('host_registration', {}).get('edge', {}).get('id')
+        node = edge_node(profile)
         line = command('/usr/bin/bash', str(Path(__file__).with_name('traefik.sh')), 'probe', profile['api_host'], profile['registration']['manifest']['health']['path'], profile['registration']['route']['generation_header'], *([node] if node else []), timeout=8, env=trust)
         slot, generation = line.strip().split()
         require(slot in ('blue', 'green') and re.fullmatch('[0-9a-f]{32}', generation), 'PUBLIC_HEALTH')
