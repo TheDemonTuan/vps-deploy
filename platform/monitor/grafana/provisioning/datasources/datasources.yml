@@ -1,0 +1,21 @@
+apiVersion: 1
+datasources:
+  - name: VictoriaMetrics
+    uid: vm
+    type: prometheus
+    access: proxy
+    url: http://monitor-victoriametrics:8428
+    isDefault: true
+    editable: false
+  # edge-lb's Workers Analytics Engine dataset `edge_lb` through the SQL API (one point per
+  # request: blob1 host, blob2 node, blob3 method, blob4 outcome, double1 status, double2 ms).
+  - name: Edge (Analytics Engine)
+    uid: edge
+    type: yesoreyeram-infinity-datasource
+    url: https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID
+    editable: false
+    jsonData:
+      auth_method: bearerToken
+      allowedHosts: [https://api.cloudflare.com]
+    secureJsonData:
+      bearerToken: $CF_ANALYTICS_TOKEN

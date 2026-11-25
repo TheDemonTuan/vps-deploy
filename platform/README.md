@@ -30,8 +30,8 @@ flowchart LR
   - `queue_paths` (views, comments, compat and feedback votes, feedback): while the writer
     answers 5xx or not at all, the write goes to Queue `edge-lb-writes` and the reader gets
     202 `{"queued": true}`; the consumer replays it to the writer with backoff (30 s up to an
-    hour, 100 tries), signing the reader's address in `X-Edge-Replay` (mc-hub-api
-    `EDGE_REPLAY_KEY` = Worker `REPLAY_KEY`). Comments and feedback carry a Turnstile token
+    hour, 100 tries), signing the reader's address in `X-Edge-Replay` (Worker `REPLAY_KEY` =
+    `edge-replay-key` in the mc-hub-api volume). Comments and feedback carry a Turnstile token
     that expires after 5 minutes: those are dropped (a 4xx) if the writer stays down longer.
   - `edge_cache`: GETs of the listed paths without the session cookie stay in the Cache API
     for `ttl_seconds` and are served stale for `stale_seconds` when every node fails; only
@@ -62,6 +62,18 @@ flowchart LR
   `peer/<id>:<scenario>`, so the CrowdSec → Cloudflare controller on n1 puts them on the edge
   list. It also renews the node's lease and, on a replica, checks that the follower keeps up;
   Telegram after two bad runs and on recovery.
+- **Unban once**: `cscli decisions delete -i <ip>` on either node, or the Telegram bot's unban
+  on n1. The node that removed a copy names the peer's ban in its `unbans.json` (`copies.jq`;
+  check with `bash platform/peer/copies.test.sh`), the peer drops it within about two minutes,
+  the controller takes the IP off Cloudflare. Before this, the removed copy came straight back.
+- **No self-renewing bans**: `crowdsec/platform-already-banned.yaml` (postoverflow whitelist) keeps
+  an IP this node already bans from earning a new ban; the bouncer's own 403s used to re-ban it
+  through `http-generic-403-bf`, and the peer copied that back.
+- **Controller** (`/opt/crowdsec-telegram-controller` on n1, no source repository: its releases
+  are the source; change one with `deploy/install.py --check/--install --source <copy>`): it
+  tracks LAPI decisions by id, so it pulls the stream with `dedup=false` (release
+  `574071fe425d99ee`). LAPI's default deduplication hides a deleted ban while another ban on the
+  same IP outlives it, and that ban then stayed on Cloudflare until it would have expired.
 
 ## Change weights, rules or nodes
 
@@ -78,7 +90,8 @@ Worker with its bindings (R2, Durable Object, queue, Analytics Engine; secrets a
 queue consumer and cron, and only then sets the routes (fail-open, Workers Paid). Token:
 Workers Scripts Edit, Workers Routes Edit, Queues Edit, Cloudflare Tunnel Edit, DNS Edit, Zone
 Read. Worker secrets, once: `NODE_KEY` (also each node's `/etc/platform/edge-node-key`),
-`REPLAY_KEY` (also mc-hub-api's `EDGE_REPLAY_KEY` in each node's runtime.env),
+`REPLAY_KEY` (also `edge-replay-key` in each node's mc-hub-api volume, owner 1000, 0600: a
+runtime.env key would change the containers' environment, which a release upgrade refuses),
 `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` (`PUT .../workers/scripts/edge-lb/secrets`). Drain a node
 with `weight: 0` (it still takes retries and pinned probes).
 
@@ -103,7 +116,8 @@ with `weight: 0` (it still takes retries and pinned probes).
    every node's IP to `parsers/s02-enrich/03-self-whitelist.yaml` on every node: SFTP polling
    looks like `ssh-bf`), bouncers `cs-firewall-bouncer-<node>` and `traefik`
    (key in `/opt/platform/edge/secrets/crowdsec-bouncer-key`, root 0600),
-   `crowdsec-endpoint-guard.service` enabled.
+   `crowdsec-endpoint-guard.service` enabled. `crowdsec/platform-already-banned.yaml` into
+   `postoverflows/s01-whitelist/` (part of n1's `/etc/crowdsec` already).
 3. **Networks** (same addressing as n1): `edge-crowdsec` 172.31.254.0/28 internal,
    `edge-cf-ingress` 172.31.250.0/28 internal, `edge-egress` 172.31.252.0/28, and each balanced
    app's edge network (`edge-mc-hub` 172.25.0.0/16, `edge-mc-hub-api` 172.27.0.0/16 internal).
@@ -151,8 +165,11 @@ with `weight: 0` (it still takes retries and pinned probes).
    `LEASE_URL=https://api.thedemontuan.dev/__edge/lease/mc-hub-api`, `TELEGRAM_CHAT_ID`),
    `/etc/platform/telegram-token` (the CrowdSec controller's bot) and
    `/etc/platform/edge-node-key` (the Worker's `NODE_KEY`), both root 0600,
-   `systemctl enable --now platform-peer.timer`.
-9. **Apps** (`dnf install git-core`; GHCR login in `/root/.docker/config.json` as on n1): put
+   `systemctl enable --now platform-peer.timer`. Create `/var/lib/node-exporter` (root 0755):
+   each run writes the lease, role and replica lag there for the monitoring agent (step 11).
+9. **Apps** (`dnf install git-core`; GHCR login in `/root/.docker/config.json` as on n1;
+   `install/vps-deploy.conf` in `/etc/tmpfiles.d/`, else the engine's lock directory is gone
+   after a reboot and every deploy and drain fails `UNTRUSTED_PATH`): put
    `runtime.env` content in `/opt/<app>/.env` (root 0600; mc-hub-api: `TURNSTILE_*`,
    `MEDIA_S3_*`), start `<app>-blue` from the release's Compose profile with the primary's
    current image and `NODE_ROLE=replica`, publish the adapter-rendered route (slot `blue`, a new
@@ -162,6 +179,66 @@ with `weight: 0` (it still takes retries and pinned probes).
    only), then `deployctl adopt --app <app>` on the node,
    `systemctl enable --now vps-deploy-drain@<app>.timer`, and apply again with the real weight.
    Add the host to the app's caller workflow (after the primary host).
+11. **Monitoring agent**: Traefik metrics (below), copy `platform/monitor` to
+   `/opt/platform/monitor`, write `/etc/platform/monitor.env` (root 0600: `NODE`,
+   `METRICS_URL=https://metrics.thedemontuan.dev/api/v1/write` and `remoteWrite_headers` with the
+   `monitor-vmagent` service token), `docker compose --env-file /etc/platform/monitor.env
+   --profile agent up -d`, then `chown 65534:65534` the `monitor_vmagent-buffer` volume's
+   mountpoint (vmagent runs as nobody; Docker creates volumes root-owned) and restart
+   `monitor-vmagent`. `restorecon -R /opt/platform/monitor /etc/platform`.
+
+## Fleet monitoring (replaced Beszel)
+
+<https://monitor.thedemontuan.dev> (Cloudflare Access email login; Grafana trusts the Access JWT,
+no second password), dashboard **Fleet**:
+
+- **Edge routing**: requests, p95 and errors per node from edge-lb's Analytics Engine dataset,
+  and a node × outcome × host table (`origin`, `hit`, `stale`, `queued`, `bucket`).
+- **Lease and roles**: the lease writer as each node last saw it, primary/replica per node,
+  whether the last lease renewal worked, replica lag in transactions (from `peer.sh`).
+- **Nodes**: CPU, memory, disk, network, load, which scrape targets are up.
+- **Containers**: memory and CPU per container (cAdvisor).
+- **Traefik**: requests, 5xx and p95 per service on each node: what actually reached the node.
+
+How it fits together (`platform/monitor/compose.yml`):
+
+- Every node runs the `agent` profile: node-exporter, cAdvisor and vmagent, which scrapes them
+  and Traefik every 30 s, labels everything `node=<NODE>` and pushes it to the hub, buffering up
+  to 1 GB on disk while the hub is unreachable.
+- The hub (n2) also runs `hub`: VictoriaMetrics (90 days) and Grafana. Its own vmagent writes to
+  `127.0.0.1:8428`; the others push to `metrics.thedemontuan.dev` (tunnel B, Access app
+  "Fleet Metrics Ingest": service token `monitor-vmagent` only, expires 2027-11-25), whose
+  Traefik route only accepts `POST /api/v1/write`. The hub's `/etc/platform/monitor.env` also
+  holds `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` (user token `grafana-analytics-read`: Account
+  Analytics Read, IP-filtered to the hub) and `ACCESS_AUD` (the Grafana Access app's AUD).
+- Traefik on each node: a `metrics` entrypoint `:8899` with `metrics.prometheus` (entryPoint
+  `metrics`, `addServicesLabels`), published only on `127.0.0.1:18082`. On the hub Traefik also
+  joins `edge-monitor`, and `platform/monitor/traefik-monitor.yml` is
+  `/opt/platform/edge/dynamic/monitor.yml`. Drain the node (weight 0) before recreating Traefik.
+- CrowdSec: `dynamic/crowdsec.yml` on every node has `excludedHosts: [monitor.thedemontuan.dev,
+  metrics.thedemontuan.dev]`. AppSec reads Grafana's query bodies (Analytics Engine SQL) and
+  vmagent's binary remote-write bodies as SQL injection / HTTP violations and banned the owner's
+  IP; both hosts only take requests Access already let through.
+- Another node: step 11 above; it shows up in every panel by its `NODE`. Moving the hub: a new
+  `grafana-analytics-read` token for the new hub's IP, tunnel ingress for both hostnames on the
+  new hub's tunnel, the other nodes' `METRICS_URL` unchanged.
+
+Not covered: logs (still `docker logs` on each node) and alert rules (alerts stay with the edge
+cron, `peer.sh` and CrowdSec on Telegram; UptimeFlare checks Grafana's `/api/health`).
+
+## Publish content (mc-hub `import`)
+
+From the operator's machine, with the `vps-node-*` ssh aliases:
+
+```sh
+platform/mchub-import.sh path/to/bundle   # content.json + the files it names
+```
+
+It imports once, on the node that is both the lease writer and a running primary (refusing
+while nodes disagree, mid-failover), then waits until every reachable replica's Litestream copy
+has it. Nothing else is copied by hand: the files go to R2 during the import and the other nodes
+read them from there. A replica refuses `import` by itself (read-only database). Pages show the
+change within about 5 minutes (each node's page cache).
 
 ## Failover (the writer is down)
 

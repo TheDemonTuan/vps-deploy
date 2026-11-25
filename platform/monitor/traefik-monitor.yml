@@ -1,0 +1,31 @@
+# The hub's Traefik route (copy to /opt/platform/edge/dynamic/monitor.yml on the hub; Traefik joins
+# the edge-monitor network). Both hosts sit behind Cloudflare Access: Grafana for the owner's
+# login, the ingest for the nodes' service token; only the remote-write path is open on it.
+http:
+  routers:
+    monitor-grafana:
+      rule: "Host(`monitor.thedemontuan.dev`)"
+      entryPoints: [web]
+      # Not the shared security-headers: its CSP (base-uri 'none', no inline scripts) breaks
+      # Grafana, which sends its own nonce-based CSP (GF_SECURITY_CONTENT_SECURITY_POLICY).
+      middlewares: [tunnel-only, monitor-headers]
+      service: monitor-grafana
+    monitor-ingest:
+      rule: "Host(`metrics.thedemontuan.dev`) && Path(`/api/v1/write`) && Method(`POST`)"
+      entryPoints: [web]
+      middlewares: [tunnel-only]
+      service: monitor-victoriametrics
+  middlewares:
+    monitor-headers:
+      headers:
+        customResponseHeaders:
+          X-Content-Type-Options: "nosniff"
+          X-Frame-Options: "DENY"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+  services:
+    monitor-grafana:
+      loadBalancer:
+        servers: [{url: "http://monitor-grafana:3000"}]
+    monitor-victoriametrics:
+      loadBalancer:
+        servers: [{url: "http://monitor-victoriametrics:8428"}]
