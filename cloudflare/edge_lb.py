@@ -44,7 +44,9 @@ def plan(root=ROOT):
             record = hosts.get(name)
             if not record or 'edge' not in record or app not in record['apps']:
                 raise Failure('EDGE_NODE_REQUIRED:' + app + '@' + name)
-            edge = record['edge']
+            # shortcut: the node's egress address is its ssh.address (true for Oracle public IPs); the
+            # Worker accepts X-Edge-Node only from it. Give hosts an explicit egress IP if that changes.
+            edge = dict(record['edge'], ip=record['ssh']['address'])
             if nodes.setdefault(edge['id'], edge) != edge:
                 raise Failure('EDGE_NODE_ID_REUSED:' + edge['id'])
             ids.append(edge['id'])
@@ -64,7 +66,7 @@ def plan(root=ROOT):
         bypass += [site + pattern for pattern in balance.get('bypass_paths', [])]
         for node in ids:
             tunnels.setdefault(node, set()).add(site)
-    worker = {'nodes': {node: {'weight': nodes[node]['weight']} for node in sorted(tunnels)}, 'sites': sites, 'rules': rules}
+    worker = {'nodes': {node: {'weight': nodes[node]['weight'], 'ip': nodes[node]['ip']} for node in sorted(tunnels)}, 'sites': sites, 'rules': rules}
     return {'worker': worker, 'buckets': buckets, 'bypass': bypass,
             'tunnels': {node: (nodes[node]['tunnel'], sorted(hostnames)) for node, hostnames in tunnels.items()}}
 

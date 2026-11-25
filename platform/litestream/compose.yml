@@ -1,15 +1,19 @@
 # Litestream for mc-hub-api's SQLite: one per node, outside blue/green (the engine starts only
-# slot services). Run with the node's role as the profile, from this directory:
+# slot services). Run with the node's role as the profile, from /opt/platform/litestream:
 #   docker compose --env-file /etc/platform/litestream.env --profile <primary|replica> up -d
-# primary (registry `host`): ships every WAL change of /data/mc-hub.db to R2 within ~1 s.
-# replica (registry `replica_hosts`): follows R2 into this node's own /data/mc-hub.db, which
-# mc-hub-api opens read-only (DB_ROLE=replica). A restart resumes from the last applied txid.
-# /etc/platform/litestream.env (root, 0600): LITESTREAM_ACCESS_KEY_ID,
-# LITESTREAM_SECRET_ACCESS_KEY (R2 token scoped to bucket mc-hub-db and the nodes' IPs), R2_ACCOUNT_ID.
+# primary (registry `host`): replicates every WAL change of /data/mc-hub.db within ~1 s into
+#   /srv/platform-sync/litestream (local disk), and `mirror` copies that directory plus
+#   /data/backups to R2 bucket mc-hub-db every hour (off-site; `litestream restore` reads it).
+# replica (registry `replica_hosts`): follows the primary's directory over read-only SFTP into this
+#   node's own /data/mc-hub.db, which mc-hub-api opens read-only (DB_ROLE=replica). A restart
+#   resumes from the last applied txid.
+# Replication makes no R2 requests: following R2 directly listed ~480 objects a minute.
+# /etc/platform/litestream.env (root, 0600): LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
+# (R2 token scoped to bucket mc-hub-db and the nodes' IPs), R2_ACCOUNT_ID; on a replica also
+# PRIMARY_SSH (<ip>:22) and PRIMARY_HOST_KEY (the primary's "ssh-ed25519 AAAA…" host key).
+# /etc/platform/sync_key: this node's SFTP client key (owner 1000, 0600), see platform/README.md.
 name: litestream
-x-litestream: &litestream
-  image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
-  container_name: litestream
+x-hardening: &hardening
   restart: unless-stopped
   # mc-hub-api runs as 1000:1000 and owns the volume.
   user: "1000:1000"
@@ -25,6 +29,10 @@ x-litestream: &litestream
     options:
       max-size: "10m"
       max-file: "3"
+x-litestream: &litestream
+  <<: *hardening
+  image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
+  container_name: litestream
 services:
   primary:
     <<: *litestream
@@ -32,14 +40,49 @@ services:
     command: [replicate, -config, /etc/litestream.yml]
     volumes:
       - mc-hub-api-data:/data
-      - ./litestream.yml:/etc/litestream.yml:ro,z
+      - ./primary.yml:/etc/litestream.yml:ro,z
+      - /srv/platform-sync/litestream:/replica:z
+  mirror:
+    <<: *hardening
+    image: rclone/rclone:1.76.0@sha256:7cbeec24a44f206067597c0368be4de90ae19a64d5113c7d1938bd737a81e466
+    container_name: litestream-mirror
+    profiles: [primary]
+    environment:
+      HOME: /tmp
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ENDPOINT: https://${R2_ACCOUNT_ID:?}.r2.cloudflarestorage.com
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:?}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:?}
+      RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true"
+    entrypoint: [sh, -c]
+    # The file replica keeps level N in ltx/N/; an S3 replica reads it from <%04x of N>/, so the
+    # mirror is a plain S3 replica (`litestream restore` with type s3, path litestream/mc-hub-api).
+    # Snapshot level first, so the mirror never holds increments without their base. LTX files are
+    # immutable and uniquely named: size is enough to compare (no HEAD per file). An empty source
+    # would empty the mirror: sync only once a snapshot exists.
+    command:
+      - |
+        while :; do
+          if [ -n "$$(ls -A /replica/mc-hub-api/ltx/9 2>/dev/null)" ]; then
+            for level in $$(ls -r /replica/mc-hub-api/ltx); do
+              rclone sync "/replica/mc-hub-api/ltx/$$level" "r2:mc-hub-db/litestream/mc-hub-api/$$(printf %04x "$$level")" --size-only --fast-list --stats-one-line -v || true
+            done
+          fi
+          rclone copy /data/backups r2:mc-hub-db/backups --size-only --fast-list --stats-one-line -v || true
+          sleep 3600
+        done
+    volumes:
+      - /srv/platform-sync/litestream:/replica:ro,z
+      - mc-hub-api-data:/data:ro
   replica:
     <<: *litestream
     profiles: [replica]
-    command: [restore, -f, -follow-interval, 1s, -o, /data/mc-hub.db,
-              "s3://mc-hub-db/mc-hub-api/mc-hub.db?endpoint=https://${R2_ACCOUNT_ID:?}.r2.cloudflarestorage.com&region=auto"]
+    command: [restore, -f, -follow-interval, 1s, -config, /etc/litestream.yml, /data/mc-hub.db]
     volumes:
       - mc-hub-api-data:/data
+      - ./replica.yml:/etc/litestream.yml:ro,z
+      - /etc/platform/sync_key:/etc/litestream/sync_key:ro,z
 volumes:
   # Created by mc-hub-api's Compose project (or `docker volume create` on a new node).
   mc-hub-api-data:
