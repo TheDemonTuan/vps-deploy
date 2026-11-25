@@ -1,0 +1,12 @@
+# /etc/crowdsec/postoverflows/s01-whitelist/ on every edge node (platform/README.md, bootstrap step 2).
+# An IP this node already bans (its own ban or a peer copy) is not new evidence: the bouncer's own
+# 403s fed http-generic-403-bf / http-probing, re-banned it here, the peer copied that back, and the
+# ban renewed itself for as long as the client kept retrying.
+# GetActiveDecisionsCount, not GetDecisionsCount: the latter counts expired bans too, which would
+# exempt every IP ever banned.
+name: platform/already-banned
+description: "Overflows from an IP this node already bans create no new ban"
+whitelist:
+  reason: already banned on this node
+  expression:
+    - evt.Overflow.Alert.Source.IP != '' && GetActiveDecisionsCount(evt.Overflow.Alert.Source.IP) > 0

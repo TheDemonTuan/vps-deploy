@@ -62,6 +62,18 @@ flowchart LR
   `peer/<id>:<scenario>`, so the CrowdSec → Cloudflare controller on n1 puts them on the edge
   list. It also renews the node's lease and, on a replica, checks that the follower keeps up;
   Telegram after two bad runs and on recovery.
+- **Unban once**: `cscli decisions delete -i <ip>` on either node, or the Telegram bot's unban
+  on n1. The node that removed a copy names the peer's ban in its `unbans.json` (`copies.jq`;
+  check with `bash platform/peer/copies.test.sh`), the peer drops it within about two minutes,
+  the controller takes the IP off Cloudflare. Before this, the removed copy came straight back.
+- **No self-renewing bans**: `crowdsec/platform-already-banned.yaml` (postoverflow whitelist) keeps
+  an IP this node already bans from earning a new ban; the bouncer's own 403s used to re-ban it
+  through `http-generic-403-bf`, and the peer copied that back.
+- **Controller** (`/opt/crowdsec-telegram-controller` on n1, no source repository: its releases
+  are the source; change one with `deploy/install.py --check/--install --source <copy>`): it
+  tracks LAPI decisions by id, so it pulls the stream with `dedup=false` (release
+  `574071fe425d99ee`). LAPI's default deduplication hides a deleted ban while another ban on the
+  same IP outlives it, and that ban then stayed on Cloudflare until it would have expired.
 
 ## Change weights, rules or nodes
 
@@ -104,7 +116,8 @@ with `weight: 0` (it still takes retries and pinned probes).
    every node's IP to `parsers/s02-enrich/03-self-whitelist.yaml` on every node: SFTP polling
    looks like `ssh-bf`), bouncers `cs-firewall-bouncer-<node>` and `traefik`
    (key in `/opt/platform/edge/secrets/crowdsec-bouncer-key`, root 0600),
-   `crowdsec-endpoint-guard.service` enabled.
+   `crowdsec-endpoint-guard.service` enabled. `crowdsec/platform-already-banned.yaml` into
+   `postoverflows/s01-whitelist/` (part of n1's `/etc/crowdsec` already).
 3. **Networks** (same addressing as n1): `edge-crowdsec` 172.31.254.0/28 internal,
    `edge-cf-ingress` 172.31.250.0/28 internal, `edge-egress` 172.31.252.0/28, and each balanced
    app's edge network (`edge-mc-hub` 172.25.0.0/16, `edge-mc-hub-api` 172.27.0.0/16 internal).

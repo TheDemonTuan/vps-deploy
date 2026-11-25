@@ -4,6 +4,7 @@
 # 1. CrowdSec: publishes this node's own HTTP bans and adds the other node's as
 #    `peer/<id>:<scenario>`, so each node blocks what the other detected and the CrowdSec →
 #    Cloudflare controller on n1 puts both on the edge list (it skips `cscli decisions import`).
+#    Removing a ban on either node (cscli, the Telegram bot) removes it on both (unbans.json).
 #    SSH bans stay per node, as the controller keeps them off the edge list.
 # 2. Renews this node's edge lease (cloudflare/edge-lb) and, when the lease's writer no longer
 #    matches this node's database role, starts platform-role.service (role.sh) to switch it.
@@ -49,28 +50,43 @@ report() {
 }
 
 # --- 1. CrowdSec bans
+# Each node publishes its own HTTP bans with their ids (decisions.json) and the ids of the peer's
+# bans whose copy an operator removed here (unbans.json, from copies.jq). Without the second file
+# the copy came straight back within a minute and the controller put the IP back on Cloudflare.
+rm -f "$state/peer-decisions.json" "$state/peer-unbans.json"
+printf 'get /crowdsec/decisions.json %s\n-get /crowdsec/unbans.json %s\n' \
+  "$state/peer-decisions.json" "$state/peer-unbans.json" | peer_sftp >/dev/null 2>&1
+
+if [ -s "$state/peer-unbans.json" ]; then
+  cscli decisions list -o json --origin crowdsec |
+    jq -r --slurpfile gone "$state/peer-unbans.json" \
+      '[$gone[0][]? | numbers] as $gone | .[]?.decisions[]? | select(.id | IN($gone[])) | .id' |
+    while read -r id; do cscli decisions delete --id "$id" >/dev/null; done
+fi
 own=$(cscli decisions list -o json --origin crowdsec) &&
   jq '[.[]?.decisions[]? | select(.type == "ban" and .scope == "Ip" and (.scenario | test("ssh"; "i") | not)
-       and (.duration | startswith("-") | not)) | {value, scenario, duration: (.duration | sub("\\.[0-9]+s$"; "s"))}]' \
+       and (.duration | startswith("-") | not)) | {id, value, scenario, duration: (.duration | sub("\\.[0-9]+s$"; "s"))}]' \
     <<<"$own" >"$shared/decisions.json.tmp" && mv -f "$shared/decisions.json.tmp" "$shared/decisions.json"
 
-if printf 'get /crowdsec/decisions.json %s\n' "$state/peer-decisions.json" | peer_sftp >/dev/null 2>&1; then
-  tag="peer/$PEER:"
-  # The other node is trusted for bans, not for their shape: plain IPs only (no ranges), never a node.
-  cscli decisions list -o json --origin cscli |
-    jq -r --arg tag "$tag" --arg skip "$NODE_IP $PEER_IP" --slurpfile peer "$state/peer-decisions.json" '
-      ($skip | split(" ")) as $skip
-      | [$peer[0][]? | select((.value | type == "string" and test("^[0-9a-fA-F.:]{2,45}$")) and (.value | IN($skip[]) | not)
-          and (.scenario | type == "string" and test("^[A-Za-z0-9_./-]{1,100}$"))
-          and (.duration | type == "string" and test("^([0-9]+h)?([0-9]+m)?([0-9]+s)?$")))] as $want
-      | [.[]?.decisions[]? | select(.scenario | startswith($tag))] as $mine
-      | ($want | map({(.value + " " + $tag + .scenario): true}) | add // {}) as $wanted
-      | ($mine | map({(.value + " " + .scenario): true}) | add // {}) as $have
-      | ($want[] | select($have[.value + " " + $tag + .scenario] | not) | "add \(.value) \(.duration) \($tag + .scenario)"),
-        ($mine[] | select($wanted[.value + " " + .scenario] | not) | "del \(.id)")' |
-    while read -r op a b c; do
-      if [ "$op" = add ]; then cscli decisions add -i "$a" -d "$b" -R "$c" >/dev/null; else cscli decisions delete --id "$a" >/dev/null; fi
-    done
+if [ -f "$state/peer-decisions.json" ] && mine=$(cscli decisions list -o json --origin cscli) &&
+  for f in copies tombstones; do [ -s "$state/$f.json" ] || echo '[]' >"$state/$f.json"; done &&
+  plan=$(jq -r --arg tag "peer/$PEER:" --arg skip "$NODE_IP $PEER_IP" \
+    --slurpfile peer "$state/peer-decisions.json" --slurpfile copies "$state/copies.json" \
+    --slurpfile tomb "$state/tombstones.json" -f "$(dirname "${BASH_SOURCE[0]}")/copies.jq" <<<"$mine"); then
+  : >"$state/copies.new"
+  : >"$state/tombstones.new"
+  while read -r op a b c d; do
+    case $op in
+      tomb) echo "$a" >>"$state/tombstones.new" ;;
+      keep) echo "$a $b $c" >>"$state/copies.new" ;;
+      add) cscli decisions add -i "$b" -d "$c" -R "$d" >/dev/null && echo "$a $b $d" >>"$state/copies.new" ;;
+      del) cscli decisions delete --id "$a" >/dev/null ;;
+    esac
+  done <<<"$plan"
+  jq -R -s '[split("\n")[] | select(length > 0) | split(" ") | {ids: [.[0] | split(",")[] | tonumber?], value: .[1], scenario: .[2]}]' \
+    "$state/copies.new" >"$state/copies.json"
+  jq -R -s '[split("\n")[] | select(length > 0) | tonumber]' "$state/tombstones.new" >"$state/tombstones.json"
+  cp "$state/tombstones.json" "$shared/unbans.json.tmp" && mv -f "$shared/unbans.json.tmp" "$shared/unbans.json"
 fi
 
 # --- 2. Lease
