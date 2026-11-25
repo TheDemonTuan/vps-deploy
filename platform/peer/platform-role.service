@@ -1,0 +1,9 @@
+[Unit]
+Description=Match this node's mc-hub-api database role to the edge lease (platform/peer/role.sh)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/platform/peer/role.sh reconcile
+TimeoutStartSec=420

@@ -19,12 +19,14 @@ manifest:
   health: {path: /healthz, timeout_seconds: 60}
   route: {timeout_seconds: 30}
 runtime:
-  allowed_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET, MEDIA_S3_ENDPOINT, MEDIA_S3_BUCKET, MEDIA_S3_ACCESS_KEY_ID, MEDIA_S3_SECRET_ACCESS_KEY]
+  allowed_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET, MEDIA_S3_ENDPOINT, MEDIA_S3_BUCKET, MEDIA_S3_ACCESS_KEY_ID, MEDIA_S3_SECRET_ACCESS_KEY, EDGE_REPLAY_KEY]
   required_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET, MEDIA_S3_ENDPOINT, MEDIA_S3_BUCKET, MEDIA_S3_ACCESS_KEY_ID, MEDIA_S3_SECRET_ACCESS_KEY]
 route:
   generation_header: X-MC-Hub-API-Route-Generation
   required_middlewares: [deny-internal, tunnel-only, internal-only]
 image_access: private
 balance:
-  # The API host serves deploy probes and fallback reads; anything that writes goes to the primary.
+  # The API host serves deploy probes and fallback reads; anything that writes goes to the writer
+  # (the holder of the edge lease, see mc-hub.yml).
+  lease: mc-hub-api
   primary_paths: ['^/api/(admin|auth|push)/', '^/api/dl(/|$)']

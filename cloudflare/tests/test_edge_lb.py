@@ -26,6 +26,27 @@ class EdgeLb(unittest.TestCase):
             with self.assertRaisesRegex(Failure, 'EDGE_NODE_REQUIRED'):
                 edge_lb.plan(root)
 
+    def test_the_lease_object_migrates_once_and_secrets_survive_uploads(self):
+        edge = edge_lb.plan()
+        first = edge_lb.bindings(edge, None)
+        self.assertEqual(first['migrations'], {'new_tag': 'v1', 'new_sqlite_classes': ['Lease']})
+        self.assertEqual(first['keep_bindings'], ['secret_text'])
+        self.assertIn({'type': 'queue', 'name': 'WRITES', 'queue_name': 'edge-lb-writes'}, first['bindings'])
+        self.assertNotIn('migrations', edge_lb.bindings(edge, 'v1'))
+
+    def test_narrower_routes_on_a_balanced_host_are_removed_but_not_other_workers(self):
+        class Routes:
+            def get(self, path):
+                return [{'id': 'a', 'pattern': 'thedemontuan.dev/*', 'script': 'edge-lb', 'request_limit_fail_open': True},
+                        {'id': 'b', 'pattern': 'thedemontuan.dev/_astro/*', 'script': None},
+                        {'id': 'c', 'pattern': 'other.thedemontuan.dev/*', 'script': None}]
+        changes = edge_lb.route_changes(Routes(), {'z': 'zone'}, {'z': {'thedemontuan.dev/*': 'edge-lb'}})
+        self.assertEqual(changes, [('DELETE', '/zones/zone/workers/routes/b', {'pattern': 'thedemontuan.dev/_astro/*'})])
+        class Foreign(Routes):
+            def get(self, path):
+                return super().get(path) + [{'id': 'd', 'pattern': 'thedemontuan.dev/x/*', 'script': 'someone-else'}]
+        self.assertEqual(len(edge_lb.route_changes(Foreign(), {'z': 'zone'}, {'z': {'thedemontuan.dev/*': 'edge-lb'}})), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

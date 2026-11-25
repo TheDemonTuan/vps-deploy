@@ -8,8 +8,12 @@ registry). `survey` reports and `apply` makes Cloudflare match it:
   ingress for every balanced hostname the node serves;
 - the Worker `edge-lb` with its R2 bindings, routed on <hostname>/* for each balanced hostname
   (Workers Paid). Routes fail open: if the Worker cannot run, the hostname's own DNS record (the
-  primary node's tunnel) serves everything, as before balancing;
-- routes without a Worker for `bypass_paths` (immutable assets the edge cache already serves).
+  primary node's tunnel) serves everything, as before balancing. Other routes of those hostnames
+  that run no Worker or this one are removed;
+- with a `lease`: the Durable Object class Lease, the queue `edge-lb-writes` and its consumer,
+  and a cron trigger every minute; Analytics Engine dataset `edge_lb` always.
+Worker secrets (set once, kept across uploads): NODE_KEY, REPLAY_KEY, TELEGRAM_TOKEN,
+TELEGRAM_CHAT_ID; `survey` lists missing ones. `stats` sums the last hour per node.
 Adding a node: hosts/<node>.yml with `edge` and the apps it runs, the host in each app's
 `replica_hosts`, node bootstrap (platform/README.md); then render, commit, apply.
 """
@@ -30,11 +34,16 @@ from tunnel_api import Client, Failure, active_connectors, inventory_list  # noq
 WORKER = Path(__file__).with_name('edge-lb')
 SCRIPT = 'edge-lb'
 COMPATIBILITY_DATE = '2025-09-01'
+QUEUE = 'edge-lb-writes'
+DATASET = 'edge_lb'
+MIGRATION = 'v1'
+SECRETS = ('NODE_KEY', 'REPLAY_KEY', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
+CRON = '* * * * *'
 
 
 def plan(root=ROOT):
     hosts = {path.stem: host_registration(root, path.stem) for path in sorted((root / 'hosts').glob('*.yml'))}
-    nodes, sites, rules, buckets, tunnels, bypass = {}, {}, {}, {}, {}, []
+    nodes, sites, rules, buckets, tunnels = {}, {}, {}, {}, {}
     for path in sorted((root / 'registry').glob('*.yml')):
         registration = app_registration(root, path.stem)
         if 'balance' not in registration:
@@ -56,18 +65,18 @@ def plan(root=ROOT):
             raise Failure('EDGE_SITE_POLICY:' + app)
         # shortcut: zone = last two labels (thedemontuan.dev); apply checks it against the account's zones.
         zone = '.'.join(site.split('.')[-2:])
-        sites[site] = {'zone': zone, 'primary': ids[0], 'nodes': ids, 'rules': app}
+        sites[site] = {'zone': zone, 'primary': ids[0], 'nodes': ids, 'rules': app, 'lease': balance.get('lease')}
         rules[app] = {'primary_paths': balance['primary_paths'], 'primary_cookies': balance.get('primary_cookies', []),
                       'sticky_seconds': balance.get('sticky_seconds', 0), 'fanout': balance.get('fanout', []),
-                      'public_bucket': balance.get('public_bucket')}
+                      'public_bucket': balance.get('public_bucket'), 'queue_paths': balance.get('queue_paths', []),
+                      'immutable_paths': balance.get('immutable_paths', []), 'edge_cache': balance.get('edge_cache')}
         bucket = balance.get('public_bucket')
         if bucket and buckets.setdefault(bucket['binding'], bucket['bucket']) != bucket['bucket']:
             raise Failure('EDGE_BUCKET_BINDING_REUSED:' + bucket['binding'])
-        bypass += [site + pattern for pattern in balance.get('bypass_paths', [])]
         for node in ids:
             tunnels.setdefault(node, set()).add(site)
     worker = {'nodes': {node: {'weight': nodes[node]['weight'], 'ip': nodes[node]['ip']} for node in sorted(tunnels)}, 'sites': sites, 'rules': rules}
-    return {'worker': worker, 'buckets': buckets, 'bypass': bypass,
+    return {'worker': worker, 'buckets': buckets, 'leased': any(site['lease'] for site in sites.values()),
             'tunnels': {node: (nodes[node]['tunnel'], sorted(hostnames)) for node, hostnames in tunnels.items()}}
 
 
@@ -128,21 +137,41 @@ def route_changes(client, zone_ids, wanted):
             route = existing.get(pattern)
             if route and route.get('script') not in (None, '', SCRIPT):
                 raise Failure('ROUTE_OWNERSHIP_CONFLICT:' + pattern)
-            body = {'pattern': pattern, 'request_limit_fail_open': True, **({'script': script} if script else {})}
+            body = {'pattern': pattern, 'request_limit_fail_open': True, 'script': script}
             if not route:
                 changes.append(('POST', path, body))
-            elif (route.get('script') or None, route.get('request_limit_fail_open')) != (script, True):
+            elif (route.get('script'), route.get('request_limit_fail_open')) != (script, True):
                 changes.append(('PUT', path + '/' + route['id'], body))
+        # A narrower route on a balanced hostname would take its paths away from the Worker.
+        hosts = tuple(pattern[:-1] for pattern in patterns)
+        for pattern, route in existing.items():
+            if pattern not in patterns and pattern.startswith(hosts) and route.get('script') in (None, '', SCRIPT):
+                changes.append(('DELETE', path + '/' + route['id'], {'pattern': pattern}))
     return changes
 
 
-def upload(client, worker, buckets):
+def result(client, method, path, body=None):
+    """Whole `result` of endpoints outside tunnel_api's pagination policy (one page each)."""
+    return client._response(method, path, body)[0]['result']
+
+
+def bindings(edge, migration_tag):
+    metadata = {'main_module': 'index.mjs', 'compatibility_date': COMPATIBILITY_DATE, 'keep_bindings': ['secret_text'],
+                'bindings': [{'type': 'r2_bucket', 'name': name, 'bucket_name': bucket} for name, bucket in sorted(edge['buckets'].items())] +
+                [{'type': 'analytics_engine', 'name': 'METRICS', 'dataset': DATASET}]}
+    if edge['leased']:
+        metadata['bindings'] += [{'type': 'durable_object_namespace', 'name': 'LEASE', 'class_name': 'Lease'},
+                                 {'type': 'queue', 'name': 'WRITES', 'queue_name': QUEUE}]
+        if migration_tag != MIGRATION:
+            metadata['migrations'] = {'new_tag': MIGRATION, 'new_sqlite_classes': ['Lease']}
+    return metadata
+
+
+def upload(client, edge, metadata):
     """Multipart script upload (Workers API); routes stay as they are."""
-    metadata = {'main_module': 'index.mjs', 'compatibility_date': COMPATIBILITY_DATE,
-                'bindings': [{'type': 'r2_bucket', 'name': name, 'bucket_name': bucket} for name, bucket in sorted(buckets.items())]}
     parts = [('metadata', 'metadata.json', 'application/json', json.dumps(metadata).encode()),
              ('index.mjs', 'index.mjs', 'application/javascript+module', (WORKER / 'index.mjs').read_bytes()),
-             ('config.mjs', 'config.mjs', 'application/javascript+module', module(worker).encode())]
+             ('config.mjs', 'config.mjs', 'application/javascript+module', module(edge['worker']).encode())]
     boundary = uuid.uuid4().hex
     body = b''.join(b'--%s\r\nContent-Disposition: form-data; name="%s"; filename="%s"\r\nContent-Type: %s\r\n\r\n%s\r\n'
                     % (boundary.encode(), name.encode(), filename.encode(), kind.encode(), data)
@@ -174,13 +203,19 @@ def run(client, operation):
     routes = {}
     for host, site in sites.items():
         routes.setdefault(site['zone'], {})[host + '/*'] = SCRIPT
-    for pattern in edge['bypass']:
-        routes.setdefault(next(s['zone'] for h, s in sites.items() if pattern.startswith(h + '/')), {})[pattern] = None
     missing = dns_changes(client, zone_ids, records)
     route_plan = route_changes(client, zone_ids, routes)
+    account = '/accounts/' + client.account
+    script = account + '/workers/scripts/' + SCRIPT
+    deployed = next((s for s in result(client, 'GET', account + '/workers/scripts') if s.get('id') == SCRIPT), {})
+    queue = next((q for q in result(client, 'GET', account + '/queues') if q.get('queue_name') == QUEUE), None)
+    schedules = [s['cron'] for s in result(client, 'GET', script + '/schedules')['schedules']] if deployed else []
+    secrets = {s['name'] for s in result(client, 'GET', script + '/secrets')} if deployed else set()
     summary = {'operation': operation, 'nodes': edge['worker']['nodes'], 'sites': sorted(sites), 'missing_dns': missing,
                'tunnel_changes': sorted(node for node, (_, current, wanted) in tunnels.items() if current['config'] != wanted),
-               'route_changes': [(method, body['pattern']) for method, _, body in route_plan]}
+               'route_changes': [(method, body['pattern']) for method, _, body in route_plan],
+               'missing_secrets': sorted(set(SECRETS) - secrets) if edge['leased'] else [],
+               'queue': bool(queue), 'schedules': schedules}
     if operation == 'apply':
         for node, (path, current, wanted) in tunnels.items():
             if current['config'] != wanted:
@@ -191,24 +226,48 @@ def run(client, operation):
             zone, target = records[name]
             client.request('POST', '/zones/' + zone_ids[zone] + '/dns_records',
                            {'type': 'CNAME', 'name': name, 'content': target, 'proxied': True, 'ttl': 1})
-        upload(client, edge['worker'], edge['buckets'])
+        if edge['leased'] and not queue:
+            queue = result(client, 'POST', account + '/queues', {'queue_name': QUEUE})
+        upload(client, edge, bindings(edge, deployed.get('migration_tag')))
+        if edge['leased']:
+            consumers = result(client, 'GET', account + '/queues/' + queue['queue_id'] + '/consumers')
+            if not any(c.get('script') == SCRIPT or c.get('script_name') == SCRIPT for c in consumers):
+                result(client, 'POST', account + '/queues/' + queue['queue_id'] + '/consumers',
+                       {'script_name': SCRIPT, 'type': 'worker', 'settings': {'batch_size': 10, 'max_retries': 100, 'max_wait_time_ms': 5000}})
+        if schedules != ([CRON] if edge['leased'] else []):
+            result(client, 'PUT', script + '/schedules', [{'cron': CRON}] if edge['leased'] else [])
         # Routes last: traffic reaches the Worker only once every origin answers.
         for method, path, body in route_plan:
-            client.request(method, path, body)
+            client.request(method, path, None if method == 'DELETE' else body)
         if dns_changes(client, zone_ids, records) or route_changes(client, zone_ids, routes) or any(
                 client.get(path)['config'] != wanted for path, _, wanted in tunnels.values()):
             raise Failure('EDGE_VERIFY_FAILED')
     return summary
 
 
+def stats(client):
+    """Last hour per node and outcome from Analytics Engine (needs Account Analytics Read)."""
+    query = ('SELECT blob2 AS node, blob4 AS outcome, SUM(_sample_interval) AS requests, '
+             'SUM(IF(double1 >= 500 OR double1 = 0, _sample_interval, 0)) AS errors, '
+             'quantileExactWeighted(0.95)(double2, _sample_interval) AS p95_ms '
+             "FROM " + DATASET + " WHERE timestamp > NOW() - INTERVAL '1' HOUR GROUP BY node, outcome ORDER BY node, outcome FORMAT JSON")
+    request = urllib.request.Request('https://api.cloudflare.com/client/v4/accounts/' + client.account + '/analytics_engine/sql',
+                                     data=query.encode(), method='POST', headers={'Authorization': 'Bearer ' + client.token})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read(1 << 20))['data']
+    except urllib.error.HTTPError as error:
+        raise Failure('EDGE_STATS_FAILED: HTTP ' + str(error.code)) from None
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--operation', choices=('render', 'survey', 'apply'), required=True)
+    parser.add_argument('--operation', choices=('render', 'survey', 'apply', 'stats'), required=True)
     args = parser.parse_args()
     if args.operation == 'render':
         (WORKER / 'config.mjs').write_text(rendered())
         return
-    print(json.dumps(run(Client(), args.operation), sort_keys=True))
+    print(json.dumps(stats(Client()) if args.operation == 'stats' else run(Client(), args.operation), sort_keys=True))
 
 
 if __name__ == '__main__':

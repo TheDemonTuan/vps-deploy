@@ -5,6 +5,10 @@
 // Every node runs Traefik behind its own Cloudflare Tunnel; "<node>-origin.<zone>" is a proxied
 // CNAME to that tunnel, and fetch(..., {cf: {resolveOverride}}) sends the request there while
 // keeping the public Host, the cache key and the client's CF-Connecting-IP.
+//
+// Sites with a `lease` (one Durable Object per lease name) send writes to the lease's writer,
+// queue the `queue_paths` writes while it is down, are health-checked every minute (cron) with
+// Telegram alerts, and keep `edge_cache` reads in the Cache API (stale when every node fails).
 import config from "./config.mjs";
 
 const RETRY_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
@@ -12,62 +16,202 @@ const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 const DOWN_MS = 30_000;
 const STICKY = "__Host-edge-primary";
 // Deploy probes check one node: "X-Edge-Node: <id>", honoured only from a node's own address, so
-// nobody else can steer traffic onto one node.
+// nobody else can steer traffic onto one node, or with X-Edge-Pin (from NODE_KEY): the cron's
+// checks may come back through this Worker instead of straight to the node.
 const PIN = "x-edge-node";
-const NODE_IPS = new Set(Object.values(config.nodes).map((node) => node.ip));
-// A node that has not sent response headers by then is treated as down and the read moves on.
-const timing = { ttfbMs: 10_000 };
+const PIN_KEY = "x-edge-pin";
+const NODE_BY_IP = new Map(Object.entries(config.nodes).map(([id, node]) => [node.ip, id]));
+// Nodes renew the lease every minute; promotion without --force waits until the writer missed this.
+const LEASE_MS = 180_000;
+const LEASE_PATH = /^\/__edge\/lease\/([a-z0-9-]+)$/;
+const QUEUE_MAX_BYTES = 64 * 1024;
+const REPLAYED_HEADERS = ["content-type", "user-agent", "accept-language"];
+// Cache API copies carry the origin's Cache-Control and their store time in these headers.
+const ORIGIN_CC = "x-edge-origin-cache-control";
+const STORED = "x-edge-stored";
+// A node that has not sent response headers by then is treated as down and the read moves on;
+// the lease (writer, cache version) is re-read from its Durable Object at most this often.
+const timing = { ttfbMs: 10_000, leaseMs: 30_000 };
 
 // Isolate-local passive health: a node that just failed is tried last for DOWN_MS.
 const downUntil = new Map();
+const leases = new Map();
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const site = config.sites[url.hostname];
     if (!site) return fetch(request);
-    const rules = config.rules[site.rules];
-
-    const bucket = rules.public_bucket;
-    if (bucket && (request.method === "GET" || request.method === "HEAD") && new RegExp(bucket.path).test(url.pathname)) {
-      const served = await fromBucket(request, url, env[bucket.binding], ctx, bucket);
-      if (served) return served;
-    }
-
-    // Only reads may be pinned: a write must still reach the primary.
-    const client = request.headers.get("cf-connecting-ip") || "";
-    const pinned = request.headers.get(PIN);
-    if (pinned && SAFE.has(request.method) && site.nodes.includes(pinned) && NODE_IPS.has(client)) return send(request, pinned, site);
-
-    if (needsPrimary(request, url, rules)) {
-      const fanout = rules.fanout.find((f) => f.method === request.method && new RegExp(f.path).test(url.pathname));
-      const body = fanout ? await request.clone().arrayBuffer() : null;
-      const response = await send(request, site.primary, site);
-      if (fanout && response.ok) ctx.waitUntil(replay(request, body, fanout, site));
-      if (!SAFE.has(request.method) && response.status < 400 && rules.sticky_seconds > 0) {
-        const sticky = new Response(response.body, response);
-        sticky.headers.append("Set-Cookie", `${STICKY}=1; Max-Age=${rules.sticky_seconds}; Path=/; Secure; HttpOnly; SameSite=Lax`);
-        return sticky;
-      }
+    const started = Date.now();
+    const meta = { node: "", outcome: "origin" };
+    let status = 0;
+    try {
+      const response = await route(request, url, site, env, ctx, meta);
+      status = response.status;
       return response;
+    } finally {
+      // Workers Analytics Engine: per node requests, status and time to response headers.
+      env.METRICS?.writeDataPoint({
+        indexes: [meta.node || "edge"],
+        blobs: [url.hostname, meta.node || "edge", request.method, meta.outcome],
+        doubles: [status, Date.now() - started],
+      });
     }
+  },
 
-    const order = pickOrder(site.nodes, client);
-    for (let i = 0; i < order.length; i++) {
-      const last = i === order.length - 1;
-      try {
-        const response = await send(request, order[i], site, last ? 0 : timing.ttfbMs);
-        if (last || !SAFE.has(request.method) || !RETRY_STATUS.has(response.status)) return response;
-      } catch (error) {
-        if (last) throw error;
+  // Writes queued while the writer was down, replayed to the current writer.
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      const { url, method, headers, body, ip, at } = message.body;
+      const site = config.sites[new URL(url).hostname];
+      if (!site) {
+        message.ack();
+        continue;
       }
-      downUntil.set(order[i], Date.now() + DOWN_MS);
+      try {
+        const { writer } = await leaseState(site, env);
+        const replayed = new Headers(headers);
+        replayed.set("x-edge-replay", await sign(env.REPLAY_KEY, ip, Math.floor(at / 1000)));
+        const response = await send(new Request(url, { method, headers: replayed, body }), writer, site);
+        if (RETRY_STATUS.has(response.status)) throw new Error(`HTTP ${response.status}`);
+        // Anything else is final: a 4xx (an expired captcha, a removed post) will not improve.
+        message.ack();
+      } catch {
+        message.retry({ delaySeconds: Math.min(3600, 30 * 2 ** Math.min(message.attempts, 7)) });
+      }
     }
+  },
+
+  // Every minute: each leased site's /healthz on every node, reported to the lease's object.
+  async scheduled(event, env) {
+    const checks = {};
+    for (const [host, site] of Object.entries(config.sites)) {
+      if (!site.lease) continue;
+      const results = (checks[site.lease] ??= { site, results: {} }).results;
+      await Promise.all(
+        site.nodes.map(async (node) => {
+          let detail = "";
+          try {
+            const headers = { "user-agent": "edge-lb-health", [PIN]: node, ...(env.NODE_KEY && { [PIN_KEY]: await pinKey(env) }) };
+            const response = await send(new Request(`https://${host}/healthz`, { headers }), node, site, 15_000);
+            if (response.status !== 200) detail = `HTTP ${response.status}`;
+          } catch (error) {
+            detail = error?.name || String(error);
+          }
+          results[`${node} ${host}`] = detail;
+        }),
+      );
+    }
+    await Promise.all(Object.values(checks).map(({ site, results }) => lease(env, site, { op: "check", results })));
   },
 };
 
-async function send(request, node, site, ttfbMs = 0) {
-  const init = { cf: { resolveOverride: `${node}-origin.${site.zone}` } };
+async function route(request, url, site, env, ctx, meta) {
+  const rules = config.rules[site.rules];
+  const client = request.headers.get("cf-connecting-ip") || "";
+  const leaseCall = LEASE_PATH.exec(url.pathname);
+  if (leaseCall) return nodeLease(request, leaseCall[1], client, env);
+
+  const bucket = rules.public_bucket;
+  if (bucket && (request.method === "GET" || request.method === "HEAD") && new RegExp(bucket.path).test(url.pathname)) {
+    const served = await fromBucket(request, url, env[bucket.binding], ctx, bucket);
+    if (served) {
+      meta.outcome = "bucket";
+      return served;
+    }
+  }
+
+  // Only reads may be pinned: a write must still reach the writer.
+  const pinned = request.headers.get(PIN);
+  const pinKeyed = env.NODE_KEY && request.headers.has(PIN_KEY) && same(request.headers.get(PIN_KEY), await pinKey(env));
+  if (pinned && SAFE.has(request.method) && site.nodes.includes(pinned) && (NODE_BY_IP.has(client) || pinKeyed)) {
+    meta.node = pinned;
+    const forwarded = new Request(request);
+    forwarded.headers.delete(PIN_KEY);
+    return send(forwarded, pinned, site);
+  }
+
+  const state = await leaseState(site, env);
+  if (needsPrimary(request, url, rules)) {
+    meta.node = state.writer;
+    const fanout = rules.fanout.find((f) => f.method === request.method && new RegExp(f.path).test(url.pathname));
+    const cookie = request.headers.get("cookie") || "";
+    // A replay that reaches this handler again (it carries X-Edge-Replay) fails instead, so the
+    // consumer retries it rather than queueing a copy under the Worker's own address.
+    const queueable = env.WRITES && env.REPLAY_KEY && !SAFE.has(request.method) && rules.queue_paths.some((p) => new RegExp(p).test(url.pathname)) &&
+      !rules.primary_cookies.some((name) => cookie.includes(name + "=")) && !request.headers.has("x-edge-replay");
+    const body = fanout || queueable ? await request.clone().arrayBuffer() : null;
+    let response;
+    try {
+      response = await send(request, state.writer, site);
+    } catch (error) {
+      if (!queueable) throw error;
+    }
+    if (queueable && (!response || RETRY_STATUS.has(response.status)) && body.byteLength <= QUEUE_MAX_BYTES) {
+      const headers = {};
+      for (const name of REPLAYED_HEADERS) if (request.headers.has(name)) headers[name] = request.headers.get(name);
+      await env.WRITES.send({ url: request.url, method: request.method, headers, body: new TextDecoder().decode(body), ip: client, at: Date.now() });
+      meta.outcome = "queued";
+      return Response.json({ queued: true }, { status: 202 });
+    }
+    if (!response) throw new Error("writer unreachable");
+    if (fanout && response.ok) ctx.waitUntil(replay(request, body, fanout, site, state.writer).then(() => site.lease && lease(env, site, { op: "purge" })));
+    if (!SAFE.has(request.method) && response.status < 400 && rules.sticky_seconds > 0) {
+      const sticky = new Response(response.body, response);
+      sticky.headers.append("Set-Cookie", `${STICKY}=1; Max-Age=${rules.sticky_seconds}; Path=/; Secure; HttpOnly; SameSite=Lax`);
+      return sticky;
+    }
+    return response;
+  }
+
+  // Hashed assets: a node still on another build answers 404, so try the next node, and keep
+  // only successes in the edge cache (a cached 404 would hide the other node's copy).
+  const immutable = rules.immutable_paths.some((p) => new RegExp(p).test(url.pathname));
+  const cf = immutable ? { cacheTtlByStatus: { "200-299": 31536000, "300-599": -1 } } : {};
+  const cache = rules.edge_cache;
+  const cached = cache && request.method === "GET" && !request.headers.has("authorization") && cache.paths.some((p) => new RegExp(p).test(url.pathname));
+  let key, hit;
+  if (cached) {
+    // The lease's version is bumped after each fanout (the admin's cache purge) reached every node.
+    const keyUrl = new URL(url);
+    keyUrl.searchParams.set("__edge_v", String(state.version));
+    key = new Request(keyUrl, { method: "GET" });
+    hit = await caches.default.match(key);
+    if (hit && Date.now() - Number(hit.headers.get(STORED)) < cache.ttl_seconds * 1000) {
+      meta.outcome = "hit";
+      return fromCache(hit, "HIT");
+    }
+  }
+
+  const order = pickOrder(site.nodes, client);
+  let last;
+  for (let i = 0; i < order.length; i++) {
+    const final = i === order.length - 1;
+    let failed = true;
+    try {
+      const response = await send(request, order[i], site, final ? 0 : timing.ttfbMs, cf);
+      meta.node = order[i];
+      failed = RETRY_STATUS.has(response.status);
+      if (!failed && !(immutable && response.status === 404)) {
+        if (cached && storable(response)) store(ctx, key, response, cache.stale_seconds);
+        return response;
+      }
+      last = response;
+    } catch (error) {
+      last = error;
+    }
+    if (failed && !final) downUntil.set(order[i], Date.now() + DOWN_MS);
+  }
+  if (hit) {
+    meta.outcome = "stale";
+    return fromCache(hit, "STALE");
+  }
+  if (last instanceof Response) return last;
+  throw last;
+}
+
+async function send(request, node, site, ttfbMs = 0, cf = {}) {
+  const init = { cf: { ...cf, resolveOverride: `${node}-origin.${site.zone}` } };
   if (!ttfbMs) return fetch(request, init);
   // Aborts only while waiting for headers; a streaming body is not cut once they arrive.
   const controller = new AbortController();
@@ -110,15 +254,103 @@ function unit(text) {
   return ((h >>> 0) + 0.5) / 4294967296;
 }
 
-// After the primary handled a write that other nodes must see (a cache purge), repeat it on
+// After the writer handled a write that other nodes must see (a cache purge), repeat it on
 // every other node once replication has had time to deliver the change.
-async function replay(request, body, fanout, site) {
+async function replay(request, body, fanout, site, writer) {
   await new Promise((resolve) => setTimeout(resolve, fanout.delay_seconds * 1000));
   await Promise.allSettled(
     site.nodes
-      .filter((n) => n !== site.primary)
+      .filter((n) => n !== writer)
       .map((n) => send(new Request(request.url, { method: request.method, headers: request.headers, body }), n, site)),
   );
+}
+
+// The writer and cache version of a site's lease, cached per isolate; the registry's primary
+// without a lease, and the last known state while the object cannot be reached.
+async function leaseState(site, env) {
+  if (!site.lease) return { writer: site.primary, version: 0 };
+  const held = leases.get(site.lease);
+  if (held && Date.now() - held.at < timing.leaseMs) return held.state;
+  let state = held?.state ?? { writer: site.primary, version: 0 };
+  try {
+    const response = await lease(env, site, { op: "state" });
+    if (response.ok) state = await response.json();
+  } catch {
+    // keep the last known state
+  }
+  leases.set(site.lease, { at: Date.now(), state });
+  return state;
+}
+
+function lease(env, site, args) {
+  const stub = env.LEASE.get(env.LEASE.idFromName(site.lease));
+  return stub.fetch("https://lease/", { method: "POST", body: JSON.stringify({ ...args, primary: site.primary }) });
+}
+
+// POST /__edge/lease/<name> {"op": "beat" | "promote", "force"?: true}, only from a node's own
+// address with "Authorization: Bearer <NODE_KEY>"; the node is the one the address belongs to.
+async function nodeLease(request, name, client, env) {
+  const node = NODE_BY_IP.get(client);
+  const site = Object.values(config.sites).find((s) => s.lease === name && s.nodes.includes(node));
+  if (!site || request.method !== "POST" || !env.NODE_KEY || !same(request.headers.get("authorization") || "", `Bearer ${env.NODE_KEY}`)) {
+    return new Response("Not Found", { status: 404 });
+  }
+  const { op, force } = await request.json().catch(() => ({}));
+  if (op !== "beat" && op !== "promote") return new Response("Bad Request", { status: 400 });
+  leases.delete(name);
+  return lease(env, site, { op, node, force: force === true });
+}
+
+function same(a, b) {
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a.charCodeAt(i) | 0) ^ (b.charCodeAt(i) | 0);
+  return diff === 0;
+}
+
+// "<ip> <unix seconds> <hex HMAC-SHA256(key, ip + ' ' + seconds)>": mc-hub-api takes the reader's
+// address from it on a replayed write (its CF-Connecting-IP is then the Worker's).
+async function sign(secret, ip, at) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${ip} ${at}`)));
+  return `${ip} ${at} ${hex(mac)}`;
+}
+
+const hex = (bytes) => Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
+
+// What the cron sends as X-Edge-Pin: derived, so NODE_KEY itself (which can take the lease) never
+// travels to an origin.
+async function pinKey(env) {
+  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`pin:${env.NODE_KEY}`)));
+}
+
+// Only what the origin lets a shared cache store: public or no-cache (stored, revalidated after
+// ttl_seconds), never private, no-store, a Set-Cookie or a Vary beyond Accept-Encoding.
+function storable(response) {
+  const control = response.headers.get("cache-control") || "";
+  const vary = (response.headers.get("vary") || "").toLowerCase().replace(/\s/g, "");
+  return response.status === 200 && !response.headers.has("set-cookie") && /public|no-cache/i.test(control) && !/private|no-store/i.test(control) &&
+    (vary === "" || vary === "accept-encoding");
+}
+
+// The copy stays for stale_seconds (served fresh for ttl_seconds, then only when every node fails).
+function store(ctx, key, response, seconds) {
+  const copy = new Response(response.clone().body, response);
+  copy.headers.set(ORIGIN_CC, response.headers.get("cache-control") || "");
+  copy.headers.set(STORED, String(Date.now()));
+  copy.headers.set("Cache-Control", `public, max-age=${seconds}`);
+  ctx.waitUntil(caches.default.put(key, copy));
+}
+
+function fromCache(hit, outcome) {
+  const response = new Response(hit.body, hit);
+  const control = response.headers.get(ORIGIN_CC);
+  if (control) response.headers.set("Cache-Control", control);
+  else response.headers.delete("Cache-Control");
+  response.headers.delete(ORIGIN_CC);
+  response.headers.delete(STORED);
+  response.headers.set("X-Edge-Cache", outcome);
+  return response;
 }
 
 // Public immutable objects come straight from the bucket; whole-object GETs are cached at this colo.
@@ -151,4 +383,57 @@ async function fromBucket(request, url, bucket, ctx, r2) {
   return new Response(body, { status: 206, headers });
 }
 
-export const _test = { downUntil, timing };
+// One object per lease name: the writer, its epoch, the edge cache version, the nodes' last
+// renewal and the health checks' state. Telegram on promotion, on a node failing (or recovering
+// from) two checks in a row, and when the writer stopped renewing the lease.
+export class Lease {
+  constructor(state, env) {
+    this.storage = state.storage;
+    this.env = env;
+  }
+
+  async fetch(request) {
+    const { op, node, force, results, primary } = await request.json();
+    const s = (await this.storage.get("lease")) ?? { writer: primary, epoch: 0, version: 0, beats: {}, fails: {}, alerted: {} };
+    const now = Date.now();
+    const alerts = [];
+    if (op === "beat") s.beats[node] = now;
+    if (op === "purge") s.version++;
+    if (op === "promote" && s.writer !== node) {
+      const age = now - (s.beats[s.writer] ?? 0);
+      if (!force && age < LEASE_MS) {
+        return Response.json({ error: "WRITER_ALIVE", writer: s.writer, seconds: Math.round(age / 1000) }, { status: 409 });
+      }
+      alerts.push(`${node} is now the writer (was ${s.writer}${force ? ", forced" : ""}); ${s.writer} steps down to replica when it is back.`);
+      s.writer = node;
+      s.epoch++;
+      s.version++;
+      s.beats[node] = now;
+    }
+    if (op === "check") {
+      const age = now - (s.beats[s.writer] ?? 0);
+      results.lease = age < LEASE_MS ? "" : `writer ${s.writer} has not renewed the lease for ${Math.round(age / 60000)} min; if it stays down, run sudo /opt/platform/peer/role.sh promote on another node`;
+      for (const [check, detail] of Object.entries(results)) {
+        s.fails[check] = detail ? (s.fails[check] ?? 0) + 1 : 0;
+        if (detail && s.fails[check] >= 2 && !s.alerted[check]) {
+          s.alerted[check] = true;
+          alerts.push(`PROBLEM: ${check}: ${detail}`);
+        } else if (!detail && s.alerted[check]) {
+          delete s.alerted[check];
+          alerts.push(`OK again: ${check}`);
+        }
+      }
+    }
+    await this.storage.put("lease", s);
+    if (alerts.length && this.env.TELEGRAM_TOKEN) {
+      await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chat_id: this.env.TELEGRAM_CHAT_ID, text: `[edge] ${alerts.join("\n")}` }),
+      }).catch(() => {});
+    }
+    return Response.json({ writer: s.writer, epoch: s.epoch, version: s.version });
+  }
+}
+
+export const _test = { downUntil, leases, timing };

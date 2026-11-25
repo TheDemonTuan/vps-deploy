@@ -21,14 +21,36 @@ flowchart LR
   client always lands on the same node and nodes share clients by weight. A 5xx, a connect
   failure or no response headers within 10 s is retried once on the next node and marks the
   failed node last for 30 s. Writes (non-GET), `primary_paths`, `primary_cookies` and, for
-  `sticky_seconds` after a write, the same client go to the primary (registry `host`).
+  `sticky_seconds` after a write, the same client go to the writer: the registry `host`, or with
+  `lease` the node its Durable Object names (re-read every 30 s; see Failover).
   `fanout` repeats a request (the admin cache purge) on the other nodes after a delay.
   `X-Edge-Node: <id>` pins a read to one node, honoured only from a node's own IP (its
-  `ssh.address`): the deploy probe (`lib/route.py`) and `peer/` use it.
+  `ssh.address`): the deploy probe (`lib/route.py`) uses it.
+- **Edge features of leased sites** (mc-hub only):
+  - `queue_paths` (views, comments, compat and feedback votes, feedback): while the writer
+    answers 5xx or not at all, the write goes to Queue `edge-lb-writes` and the reader gets
+    202 `{"queued": true}`; the consumer replays it to the writer with backoff (30 s up to an
+    hour, 100 tries), signing the reader's address in `X-Edge-Replay` (mc-hub-api
+    `EDGE_REPLAY_KEY` = Worker `REPLAY_KEY`). Comments and feedback carry a Turnstile token
+    that expires after 5 minutes: those are dropped (a 4xx) if the writer stays down longer.
+  - `edge_cache`: GETs of the listed paths without the session cookie stay in the Cache API
+    for `ttl_seconds` and are served stale for `stale_seconds` when every node fails; only
+    responses marked `public` or `no-cache`. The key carries the lease's version, bumped after
+    each `fanout` reached every node, so an admin's purge reaches every colo.
+  - `immutable_paths` (`/_astro/`): served by the edge cache; a miss that a node answers 404
+    (a deploy reaches the nodes one after another) is tried on the next node, and only 2xx
+    is cached.
+  - Cron every minute: `/healthz` of every site on every node, and whether the writer renewed
+    the lease in the last 3 minutes; Telegram (Worker secrets `TELEGRAM_TOKEN`,
+    `TELEGRAM_CHAT_ID`) after two failures in a row and on recovery.
+  - Workers Analytics Engine dataset `edge_lb`, a point per request: node, method, outcome
+    (origin, hit, stale, queued, bucket), status, milliseconds.
+    `edge_lb.py --operation stats` sums the last hour (token: Account Analytics Read).
 - **Data**: SQLite stays single-writer on the primary. Litestream (`litestream/`) writes its WAL
   changes to a local directory; each replica follows it over read-only SFTP (`sync/`) into its
-  own file, and mc-hub-api opens that read-only (`DB_ROLE` = engine `NODE_ROLE`; writes there
-  return 503 `READ_ONLY`, but the Worker never sends them). The primary mirrors that directory
+  own file, and mc-hub-api opens that read-only (`DB_ROLE` = engine `NODE_ROLE`, or the volume's
+  `role` file after a failover; writes there return 503 `READ_ONLY`, but the Worker never sends
+  them). The primary mirrors that directory
   and `/data/backups` to R2 hourly. Replication makes no R2 requests: following R2 directly
   listed ~480 objects a minute (Class A, beyond the free tier). Uploads are written locally and
   to R2; a node missing a file fetches it from R2.
@@ -38,8 +60,8 @@ flowchart LR
   visitor's requests (except writes, which go to the primary) are seen by one node. `peer/`
   (`platform-peer.timer`, every minute) copies each node's HTTP bans to the other as
   `peer/<id>:<scenario>`, so the CrowdSec → Cloudflare controller on n1 puts them on the edge
-  list. It also checks the other node through the edge and, on a replica, that the follower keeps
-  up; Telegram after two bad runs and on recovery.
+  list. It also renews the node's lease and, on a replica, checks that the follower keeps up;
+  Telegram after two bad runs and on recovery.
 
 ## Change weights, rules or nodes
 
@@ -51,10 +73,14 @@ CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… python3 cloudflare/edge_lb.py
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… python3 cloudflare/edge_lb.py --operation apply
 ```
 
-`apply` adds `<id>-origin.<zone>` CNAMEs, each node's tunnel ingress, uploads the Worker with
-its R2 bindings and only then sets the routes (fail-open, Workers Paid). Token: Workers Scripts
-Edit, Workers Routes Edit, Cloudflare Tunnel Edit, DNS Edit, Zone Read. Drain a node with
-`weight: 0` (it still takes retries and pinned probes).
+`apply` adds `<id>-origin.<zone>` CNAMEs, each node's tunnel ingress, the queue, uploads the
+Worker with its bindings (R2, Durable Object, queue, Analytics Engine; secrets are kept), its
+queue consumer and cron, and only then sets the routes (fail-open, Workers Paid). Token:
+Workers Scripts Edit, Workers Routes Edit, Queues Edit, Cloudflare Tunnel Edit, DNS Edit, Zone
+Read. Worker secrets, once: `NODE_KEY` (also each node's `/etc/platform/edge-node-key`),
+`REPLAY_KEY` (also mc-hub-api's `EDGE_REPLAY_KEY` in each node's runtime.env),
+`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` (`PUT .../workers/scripts/edge-lb/secrets`). Drain a node
+with `weight: 0` (it still takes retries and pinned probes).
 
 ## Balance another app
 
@@ -115,16 +141,17 @@ Edit, Workers Routes Edit, Cloudflare Tunnel Edit, DNS Edit, Zone Read. Drain a 
    `restorecon -R /etc/ssh /srv/platform-sync /etc/platform`.
 7. **Data**: `docker volume create mc-hub-api-data`, then
    `chown 1000:1000 "$(docker volume inspect -f '{{.Mountpoint}}' mc-hub-api-data)"`; write
-   `/etc/platform/litestream.env` (root 0600) with `PRIMARY_SSH=<primary ip>:22` and
-   `PRIMARY_HOST_KEY=<primary's ecdsa-sha2-nistp256 host key>` (Litestream's SSH client
-   negotiates ECDSA first and accepts only the pinned key), copy `platform/litestream` to
-   `/opt/platform/litestream` and start the follower there (`--profile replica`). The first log
-   line is `entering follow mode`.
+   `/etc/platform/litestream.env` (root 0600) with `PRIMARY_SSH=<other node's ip>:22` and
+   `PRIMARY_HOST_KEY=<its ecdsa-sha2-nistp256 host key>` (Litestream's SSH client negotiates
+   ECDSA first and accepts only the pinned key; the primary has them too, for when it steps
+   down), copy `platform/litestream` to `/opt/platform/litestream` and start the follower there
+   (`--profile replica`). The first log line is `entering follow mode`.
 8. **Peer**: copy `platform/peer` to `/opt/platform/peer`, the units to `/etc/systemd/system`,
    write `/etc/platform/peer.env` (`NODE`, `NODE_IP`, `PEER`, `PEER_IP`, `ROLE`,
-   `CHECK_URLS="https://thedemontuan.dev/healthz https://api.thedemontuan.dev/healthz"`,
-   `TELEGRAM_CHAT_ID`) and `/etc/platform/telegram-token` (the CrowdSec controller's bot, root
-   0600), `systemctl enable --now platform-peer.timer`.
+   `LEASE_URL=https://api.thedemontuan.dev/__edge/lease/mc-hub-api`, `TELEGRAM_CHAT_ID`),
+   `/etc/platform/telegram-token` (the CrowdSec controller's bot) and
+   `/etc/platform/edge-node-key` (the Worker's `NODE_KEY`), both root 0600,
+   `systemctl enable --now platform-peer.timer`.
 9. **Apps** (`dnf install git-core`; GHCR login in `/root/.docker/config.json` as on n1): put
    `runtime.env` content in `/opt/<app>/.env` (root 0600; mc-hub-api: `TURNSTILE_*`,
    `MEDIA_S3_*`), start `<app>-blue` from the release's Compose profile with the primary's
@@ -136,18 +163,30 @@ Edit, Workers Routes Edit, Cloudflare Tunnel Edit, DNS Edit, Zone Read. Drain a 
    `systemctl enable --now vps-deploy-drain@<app>.timer`, and apply again with the real weight.
    Add the host to the app's caller workflow (after the primary host).
 
-## Promote a replica (the primary is gone for good)
+## Failover (the writer is down)
 
-Reads keep working without action (the Worker retries the other node); writes fail until this
-is done. In one platform release: swap `host` and `replica_hosts` in the balanced apps'
-registries, render. Stop Litestream on the old primary if it still runs. On the new primary:
-`--profile replica down`, empty `/srv/platform-sync/litestream` (keeping its ACLs), start
-`--profile primary` (a new lineage, from its own copy of the database), redeploy mc-hub-api
-(it now gets `NODE_ROLE=primary`), then `edge_lb.py --operation apply`. Within the hour the
-mirror replaces the R2 copy with the new lineage; `rclone copy` the old prefix aside first to
-keep it. On every replica: point `PRIMARY_SSH`/`PRIMARY_HOST_KEY` at the new primary, remove
-`mc-hub.db`, `mc-hub.db-wal`, `mc-hub.db-shm` and `mc-hub.db-txid` from the volume, start
-`--profile replica`. Swap `ROLE` in each node's `peer.env`.
+Reads keep working without action (the Worker retries the other node), readers' writes are
+queued at the edge, everything else that writes fails. The edge alerts once the writer has not
+renewed its lease for 3 minutes. If it stays down, on the other node:
+
+```sh
+sudo /opt/platform/peer/role.sh promote          # refused while the writer still renews
+sudo /opt/platform/peer/role.sh promote --force  # the writer is up but must stop writing
+```
+
+The lease names this node; within 30 s every colo sends writes here (and replays the queue
+here). The node starts Litestream as primary with a new lineage from its copy (writes the old
+primary had not replicated, normally about a second, are lost), writes `role` into the
+mc-hub-api volume and restarts mc-hub-api, which then opens the database writable. The mirror
+replaces the R2 copy with the new lineage within the hour. The old primary, once it renews again,
+sees it lost the lease: `platform-role.service` stops its Litestream and mc-hub-api, moves its
+database to `fenced-<time>/` in the volume, follows the new primary and starts mc-hub-api
+read-only. Promote it back the same way.
+
+The deploy engine still follows the registry: until `host` and `replica_hosts` are swapped in
+the balanced apps' registries (render, release, `edge_lb.py --operation apply`), mc-hub-api's
+pre-release backup on the old `host` fails and stops its deploys; the `role` file keeps each
+node's role across deploys either way.
 
 ## Restore from R2 (every node lost)
 
