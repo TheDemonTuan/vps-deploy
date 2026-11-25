@@ -93,11 +93,16 @@ Edit, Workers Routes Edit, Cloudflare Tunnel Edit, DNS Edit, Zone Read. Drain a 
    `/etc/platform/litestream.env` (root 0600), copy `platform/litestream` to
    `/opt/platform/litestream` and start the follower there (`--profile replica`). The first log
    line is `entering follow mode`; `follow: applied updates` follows every primary write.
-7. **Apps**: installer `--check`, then apply, for each balanced app with `--host <host>` and the
-   same deploy public key; `runtime.env` as on the primary (mc-hub-api: `TURNSTILE_*`,
-   `MEDIA_S3_*`). Stage `<app>-blue` from the release's Compose profile, publish the adapter
-   route, `deployctl adopt --app <app>`. Add the host to the app's caller workflow.
-8. `cloudflare/edge_lb.py --operation apply`.
+7. **Apps** (`dnf install git-core`; GHCR login in `/root/.docker/config.json` as on n1): put
+   `runtime.env` content in `/opt/<app>/.env` (root 0600; mc-hub-api: `TURNSTILE_*`,
+   `MEDIA_S3_*`), start `<app>-blue` from the release's Compose profile with the primary's
+   current image and `NODE_ROLE=replica`, publish the adapter-rendered route (slot `blue`, a new
+   generation). Installer `--check`, then apply, with `--host <host>` and the same deploy public
+   key; `restorecon -R` the release.
+8. `cloudflare/edge_lb.py --operation apply` with the new node's weight at 0 first (pinned probes
+   only), then `deployctl adopt --app <app>` on the node,
+   `systemctl enable --now vps-deploy-drain@<app>.timer`, and apply again with the real weight.
+   Add the host to the app's caller workflow (after the primary host).
 
 ## Promote a replica (the primary is gone for good)
 
