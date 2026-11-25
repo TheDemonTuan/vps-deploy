@@ -9,7 +9,7 @@ x-runtime: &runtime
     - /tmp:rw,noexec,nosuid,size=16m,mode=1777
   networks:
     edge: {}
-    # Outbound only for Cloudflare Turnstile siteverify (comment and login captcha).
+    # Outbound only: Cloudflare Turnstile siteverify (captcha) and the R2 media bucket (S3 API).
     egress: {gw_priority: 1}
   expose: ["8080"]
   # Blue and green share one SQLite (WAL) database and media store during cutover.
@@ -39,6 +39,14 @@ x-environment: &environment
   TRUST_CF_CONNECTING_IP: "1"
   TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY required}
   TURNSTILE_SECRET: ${TURNSTILE_SECRET:?TURNSTILE_SECRET required}
+  # primary on the registry's `host` (the single writer); replica on replica_hosts: a read-only
+  # copy that the node's Litestream follower (platform/litestream) keeps current.
+  DB_ROLE: ${NODE_ROLE:?NODE_ROLE is set by the deploy engine}
+  # Uploads are also kept in this R2 bucket (S3 API), so any node can serve them.
+  MEDIA_S3_ENDPOINT: ${MEDIA_S3_ENDPOINT:?MEDIA_S3_ENDPOINT required}
+  MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:?MEDIA_S3_BUCKET required}
+  MEDIA_S3_ACCESS_KEY_ID: ${MEDIA_S3_ACCESS_KEY_ID:?MEDIA_S3_ACCESS_KEY_ID required}
+  MEDIA_S3_SECRET_ACCESS_KEY: ${MEDIA_S3_SECRET_ACCESS_KEY:?MEDIA_S3_SECRET_ACCESS_KEY required}
 services:
   mc-hub-api-blue:
     <<: *runtime

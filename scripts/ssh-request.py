@@ -15,7 +15,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
-from core import Failure, app_registration, fixture_authorized, host_registration, manifest, parse_json, trusted_path
+from core import Failure, app_hosts, app_registration, fixture_authorized, host_registration, manifest, parse_json, trusted_path
 
 
 def require(pattern, value, name):
@@ -52,7 +52,7 @@ def main():
             raise ValueError("fixture release not allowed")
         root = pathlib.Path(__file__).resolve().parents[1]
     registration = app_registration(root, args.app)
-    if args.host != registration["host"]:
+    if args.host not in app_hosts(registration):
         raise ValueError("app-host binding mismatch")
     host_record = host_registration(root, args.host)
     if args.config != registration["caller"]["config"]:

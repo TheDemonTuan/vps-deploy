@@ -111,16 +111,50 @@ def hostname(value):
     require(type(value) is str and len(value) <= 253 and len(value.split('.')) >= 2 and all(0 < len(label) <= 63 and re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?', label) for label in value.split('.')), 'REGISTRY_POLICY')
 
 
+def app_hosts(registration):
+    """Every host that runs the app: its primary host first, then its replica hosts."""
+    return [registration['host']] + registration.get('replica_hosts', [])
+
+
+def balance_policy(value):
+    """Edge load-balancer rules of an app run on several hosts (cloudflare/edge_lb.py renders them)."""
+    fields(value, {'primary_paths', 'primary_cookies', 'sticky_seconds', 'fanout', 'bypass_paths', 'public_bucket'}, {'primary_paths'})
+    lists = [value['primary_paths'], value.get('primary_cookies', []), value.get('bypass_paths', []), value.get('fanout', [])]
+    require(all(type(items) is list for items in lists), 'REGISTRY_POLICY')
+    require(all(type(p) is str and p.startswith('^/') for p in value['primary_paths']), 'REGISTRY_POLICY')
+    require(all(type(c) is str and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', c) for c in value.get('primary_cookies', [])), 'REGISTRY_POLICY')
+    require(all(type(p) is str and re.fullmatch(r'/[A-Za-z0-9_./-]*\*', p) for p in value.get('bypass_paths', [])), 'REGISTRY_POLICY')
+    sticky = value.get('sticky_seconds', 0)
+    require(type(sticky) is int and 0 <= sticky <= 300, 'REGISTRY_POLICY')
+    for item in value.get('fanout', []):
+        fields(item, {'method', 'path', 'delay_seconds'}, {'method', 'path', 'delay_seconds'})
+        require(item['method'] in ('POST', 'PUT', 'PATCH', 'DELETE') and type(item['path']) is str and item['path'].startswith('^/') and type(item['delay_seconds']) is int and 1 <= item['delay_seconds'] <= 60, 'REGISTRY_POLICY')
+    if 'public_bucket' in value:
+        bucket = value['public_bucket']
+        keys = {'binding', 'bucket', 'path', 'strip', 'key_prefix', 'headers'}
+        fields(bucket, keys, keys)
+        require(all(type(bucket[key]) is str for key in keys - {'headers'}), 'REGISTRY_POLICY')
+        require(re.fullmatch(r'[A-Z][A-Z0-9_]{0,31}', bucket['binding']) and re.fullmatch(r'[a-z0-9][a-z0-9-]{2,62}', bucket['bucket']) and bucket['path'].startswith('^' + bucket['strip']) and re.fullmatch(r'/[A-Za-z0-9_-]+/', bucket['strip']) and re.fullmatch(r'[A-Za-z0-9_-]*/?', bucket['key_prefix']), 'REGISTRY_POLICY')
+        require(type(bucket['headers']) is dict and all(type(k) is str and HEADER.fullmatch(k) and type(v) is str for k, v in bucket['headers'].items()), 'REGISTRY_POLICY')
+
+
 def app_registration(release, app):
     registration_id(app)
     path = Path(release) / 'registry' / (app + '.yml')
     require(path.is_file() and not path.is_symlink(), 'APP_NOT_REGISTERED')
     value = parse_yaml(path.read_bytes())
-    fields(value, {'version', 'app', 'host', 'caller', 'manifest', 'runtime', 'route', 'image_access'}, {'version', 'app', 'host', 'caller', 'manifest', 'runtime', 'route'})
+    fields(value, {'version', 'app', 'host', 'replica_hosts', 'caller', 'manifest', 'runtime', 'route', 'image_access', 'balance'}, {'version', 'app', 'host', 'caller', 'manifest', 'runtime', 'route'})
     require(type(value['version']) is int and value['version'] == 1 and value['app'] == app, 'REGISTRY_POLICY')
     # Reviewed opt-in: app images stay private and root pulls them with its own `docker login ghcr.io`.
     require(value.get('image_access', 'public') in ('public', 'private'), 'REGISTRY_POLICY')
     registration_id(value['host'])
+    # `host` runs the app's single writer (database primary, singletons); replica_hosts run read copies.
+    replicas = value.get('replica_hosts', [])
+    require(type(replicas) is list and len(replicas) == len(set(replicas)) and value['host'] not in replicas, 'REGISTRY_POLICY')
+    for replica in replicas:
+        registration_id(replica)
+    if 'balance' in value:
+        balance_policy(value['balance'])
     caller = value['caller']
     fields(caller, {'repository', 'ref', 'refs', 'config', 'build_workflows', 'deploy_workflows', 'security_workflows'}, {'repository', 'ref', 'config', 'build_workflows', 'deploy_workflows'})
     require(type(caller['repository']) is str and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', caller['repository']) and type(caller['ref']) is str and re.fullmatch(r'refs/heads/[A-Za-z0-9_./-]+', caller['ref']) and type(caller['config']) is str and re.fullmatch(r'\.[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+\.yml', caller['config']), 'REGISTRY_POLICY')
@@ -175,8 +209,13 @@ def host_registration(release, host_id):
     path = Path(release) / 'hosts' / (host_id + '.yml')
     require(path.is_file() and not path.is_symlink(), 'HOST_NOT_REGISTERED')
     value = parse_yaml(path.read_bytes())
-    fields(value, {'version', 'host', 'ssh', 'traefik', 'apps'}, {'version', 'host', 'ssh', 'traefik', 'apps'})
+    fields(value, {'version', 'host', 'ssh', 'traefik', 'edge', 'apps'}, {'version', 'host', 'ssh', 'traefik', 'apps'})
     require(type(value['version']) is int and value['version'] == 1 and value['host'] == host_id, 'REGISTRY_POLICY')
+    if 'edge' in value:
+        # Load-balancer identity: <id>-origin.<zone> is a proxied CNAME to this node's tunnel.
+        edge = value['edge']
+        fields(edge, {'id', 'tunnel', 'weight'}, {'id', 'tunnel', 'weight'})
+        require(type(edge['id']) is str and re.fullmatch(r'[a-z][a-z0-9]{0,15}', edge['id']) and type(edge['tunnel']) is str and re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', edge['tunnel']) and type(edge['weight']) is int and 0 <= edge['weight'] <= 100, 'REGISTRY_POLICY')
     ssh = value['ssh']
     fields(ssh, {'address', 'port', 'host_key', 'fingerprint'}, {'port', 'fingerprint'})
     if 'address' in ssh:
@@ -418,7 +457,9 @@ def host(config, registration, host_record):
     trusted_path(config / 'host.json')
     value = load(config / 'host.json')
     app = registration['app']
-    require(registration['host'] == host_record['host'] and app in host_record['apps'], 'APP_BINDING_MISMATCH')
+    # host.json names its node; installs from before replica hosts lack it and run on the primary host.
+    node = value.get('host', registration['host'])
+    require(node == host_record['host'] and node in app_hosts(registration) and app in host_record['apps'], 'APP_BINDING_MISMATCH')
     binding = host_record['apps'][app]
     required = {'platform_ref', 'dynamic_dir', 'api_host', 'dashboard_host', 'dashboard_alias_host', 'work_dir', 'compose_project', 'edge_network', 'route_name'}
     if 'rtk' in registration['manifest']:
@@ -434,7 +475,7 @@ def host(config, registration, host_record):
     extras = {'fixture_ci', 'image_repository', 'architecture', 'ca_bundle'} | ({'rtk_image_repository'} if 'rtk_network' in required else set()) if fixture else set()
     if fixture and 'fault_file' in value:
         extras.add('fault_file')
-    fields(value, required | extras, required | (extras - {'fault_file'}))
+    fields(value, required | extras | {'host'}, required | (extras - {'fault_file'}))
     require(type(value['platform_ref']) is str and SHA.fullmatch(value['platform_ref']), 'PLATFORM_MISMATCH')
     release = Path('/opt/vps-deploy/releases') / value['platform_ref']
     trusted_path(release, directory=True)
@@ -444,7 +485,7 @@ def host(config, registration, host_record):
     trusted_path(release / 'hosts' / (host_record['host'] + '.yml'))
     require(app_registration(release, app) == registration and host_registration(release, host_record['host']) == host_record, 'REGISTRY_POLICY')
     require(all(type(value[key]) is str and value[key] == expected for key, expected in binding.items()) and type(value['dynamic_dir']) is str and value['dynamic_dir'] == host_record['traefik']['dynamic_dir'], 'APP_BINDING_MISMATCH')
-    require(set(value) - extras - {'platform_ref', 'dynamic_dir'} == set(binding), 'APP_BINDING_MISMATCH')
+    require(set(value) - extras - {'platform_ref', 'dynamic_dir', 'host'} == set(binding), 'APP_BINDING_MISMATCH')
     trusted_path(value['work_dir'], directory=True)
     if fixture:
         require(Path(value['work_dir']).stat().st_mode & 0o777 == 0o700, 'FIXTURE_POLICY')

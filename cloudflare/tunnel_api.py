@@ -68,7 +68,8 @@ class Client:
         if pages not in ([], ['1']) or len(per_pages) > 1:
             raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
         if 'result_info' not in data:
-            if re.fullmatch(r'/accounts/[0-9a-f]{32}/cfd_tunnel/[^/]+/connections', endpoint):
+            # Both endpoints return their complete list without pagination metadata.
+            if re.fullmatch(r'/accounts/[0-9a-f]{32}/cfd_tunnel/[^/]+/connections|/zones/[0-9a-f]{32}/workers/routes', endpoint):
                 return data['result']
             raise Failure('CLOUDFLARE_PAGINATION_REQUIRED:' + endpoint)
 

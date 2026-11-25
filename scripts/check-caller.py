@@ -9,7 +9,7 @@ import sys
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
-from core import Failure, app_registration, host_registration, manifest, parse_json
+from core import Failure, app_hosts, app_registration, host_registration, manifest, parse_json
 
 
 class UniqueBaseLoader(yaml.BaseLoader):
@@ -49,10 +49,10 @@ def main():
         raise ValueError("caller revision or action pin mismatch")
     platform = pathlib.Path("platform")
     registration = app_registration(platform, env["APP"])
-    registered_host = registration["host"]
-    host_registration(platform, registered_host)
+    for registered_host in app_hosts(registration):
+        host_registration(platform, registered_host)
     allowed_refs = registration["caller"].get("refs") or [registration["caller"]["ref"]]
-    if (workflow == "deploy/action.yml" and registered_host != env.get("HOST")) or registration["caller"]["repository"] != env["CALLER_REPO"] or env["CALLER_REF"] not in allowed_refs or registration["caller"]["config"] != env["CONFIG"]:
+    if (workflow == "deploy/action.yml" and env.get("HOST") not in app_hosts(registration)) or registration["caller"]["repository"] != env["CALLER_REPO"] or env["CALLER_REF"] not in allowed_refs or registration["caller"]["config"] != env["CONFIG"]:
         raise ValueError("caller binding mismatch")
     policy = registration["manifest"]
     if workflow == 'build-docker.yml':

@@ -1,6 +1,8 @@
 version: 1
 app: mc-hub-api
 host: oracle-main
+# The SQLite writer stays on `host`; replica hosts open the Litestream copy read-only.
+replica_hosts: [oracle-sg2]
 caller:
   repository: TheDemonTuan/mc-hub-api
   ref: refs/heads/main
@@ -17,9 +19,12 @@ manifest:
   health: {path: /healthz, timeout_seconds: 60}
   route: {timeout_seconds: 30}
 runtime:
-  allowed_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET]
-  required_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET]
+  allowed_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET, MEDIA_S3_ENDPOINT, MEDIA_S3_BUCKET, MEDIA_S3_ACCESS_KEY_ID, MEDIA_S3_SECRET_ACCESS_KEY]
+  required_env: [TURNSTILE_SITE_KEY, TURNSTILE_SECRET, MEDIA_S3_ENDPOINT, MEDIA_S3_BUCKET, MEDIA_S3_ACCESS_KEY_ID, MEDIA_S3_SECRET_ACCESS_KEY]
 route:
   generation_header: X-MC-Hub-API-Route-Generation
-  required_middlewares: [deny-internal, tunnel-only]
+  required_middlewares: [deny-internal, tunnel-only, internal-only]
 image_access: private
+balance:
+  # The API host serves deploy probes and fallback reads; anything that writes goes to the primary.
+  primary_paths: ['^/api/(admin|auth|push)/', '^/api/dl(/|$)']

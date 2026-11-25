@@ -1,0 +1,46 @@
+# Litestream for mc-hub-api's SQLite: one per node, outside blue/green (the engine starts only
+# slot services). Run with the node's role as the profile, from this directory:
+#   docker compose --env-file /etc/platform/litestream.env --profile <primary|replica> up -d
+# primary (registry `host`): ships every WAL change of /data/mc-hub.db to R2 within ~1 s.
+# replica (registry `replica_hosts`): follows R2 into this node's own /data/mc-hub.db, which
+# mc-hub-api opens read-only (DB_ROLE=replica). A restart resumes from the last applied txid.
+# /etc/platform/litestream.env (root, 0600): LITESTREAM_ACCESS_KEY_ID,
+# LITESTREAM_SECRET_ACCESS_KEY (R2 token scoped to bucket mc-hub-db and the nodes' IPs), R2_ACCOUNT_ID.
+name: litestream
+x-litestream: &litestream
+  image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
+  container_name: litestream
+  restart: unless-stopped
+  # mc-hub-api runs as 1000:1000 and owns the volume.
+  user: "1000:1000"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m
+  env_file: [/etc/platform/litestream.env]
+  mem_limit: 256m
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+services:
+  primary:
+    <<: *litestream
+    profiles: [primary]
+    command: [replicate, -config, /etc/litestream.yml]
+    volumes:
+      - mc-hub-api-data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro,z
+  replica:
+    <<: *litestream
+    profiles: [replica]
+    command: [restore, -f, -follow-interval, 1s, -o, /data/mc-hub.db,
+              "s3://mc-hub-db/mc-hub-api/mc-hub.db?endpoint=https://${R2_ACCOUNT_ID:?}.r2.cloudflarestorage.com&region=auto"]
+    volumes:
+      - mc-hub-api-data:/data
+volumes:
+  # Created by mc-hub-api's Compose project (or `docker volume create` on a new node).
+  mc-hub-api-data:
+    external: true

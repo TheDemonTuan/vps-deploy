@@ -8,6 +8,13 @@ traefik:
   container: edge-traefik
   dynamic_dir: /opt/platform/edge/dynamic
   mount: /etc/traefik/dynamic
+# Edge load balancer (cloudflare/edge_lb.py): n1-origin.<zone> is a proxied CNAME to this tunnel.
+# Weight is this node's share of balanced reads; it is lower here because this node also runs
+# the services that are not balanced (OmniRoute, ACB, TTS, Beszel).
+edge:
+  id: n1
+  tunnel: 09575df7-5465-4201-94c0-130e16472dce
+  weight: 30
 apps:
   9router:
     api_host: 9router-api.tuannguyenviet.site

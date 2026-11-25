@@ -86,7 +86,7 @@ def load_profile(cfg, app):
     require(Path(__file__).absolute() == release / 'bin/deployctl', 'PLATFORM_MISMATCH')
     trusted_path(release / 'bin/deployctl')
     registration = app_registration(release, app)
-    record = host_registration(release, registration['host'])
+    record = host_registration(release, selected.get('host', registration['host']))
     profile = host(cfg, registration, record)
     registered(cfg, registration)
     environment(profile, cfg, '')

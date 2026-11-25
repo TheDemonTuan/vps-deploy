@@ -375,15 +375,18 @@ UID 1000 with a read-only root, and deploy independently.
 - `mc-hub-api` blue and green share the named volume `mc-hub-api-data` (SQLite + media +
   daily `VACUUM INTO` backups under `/data/backups`); its migrations must stay additive.
   `edge-mc-hub-api` is internal (inbound from Traefik only); outbound goes through
-  `mc-hub-api-egress`, used solely for Cloudflare Turnstile siteverify.
-- `edge-mc-hub` is **not** internal: frontend SSR reads published content from
-  `https://api.thedemontuan.dev` (`API_URL` in its Compose profile).
+  `mc-hub-api-egress`, used for Cloudflare Turnstile siteverify and the R2 media bucket.
+- Both run on every host in `replica_hosts` too, behind the `edge-lb` Worker; the registry
+  `host` keeps the SQLite writer. See [platform/README.md](platform/README.md) (routing,
+  Litestream, node bootstrap, promotion).
+- Frontend SSR reads published content from the same node's mc-hub-api at
+  `http://edge-traefik:8082` (`API_URL`, entrypoint `internal`, router `mc-hub-api-internal`).
 - Domains live in `hosts/oracle-main.yml`: each app's `api_host` is its domain and
   `dashboard_alias_host` the previous one, kept routed by Traefik as a **fallback**
   (`tuannguyenviet.site`, `minecraft-api.tuannguyenviet.site`). The adapters, the deploy probe
   (`api_host`) and the Cloudflare scripts (`cloudflare/mc_hub_hosts.py`) read them from there;
   `tests/test_mc_hub_api.py` fails until the few literal copies agree (mc-hub-api's site hosts,
-  `SITE_URL`, `API_URL`, the CrowdSec scope). Cloudflare Single Redirects (dashboard, zone
+  `SITE_URL`, the CrowdSec scope). Cloudflare Single Redirects (dashboard, zone
   `tuannguyenviet.site`) send `tuannguyenviet.site` and `minecraft.tuannguyenviet.site` to
   `https://thedemontuan.dev` with HTTP 301, preserving path and query; keep those hostnames
   proxied in DNS. **Fallback**: disable the apex redirect rule and the old domain serves the
@@ -457,13 +460,13 @@ installed binding, so the API side goes first.
    `Edge IP bans` rule, Search Console (DNS TXT) and AdSense site.
 2. **Release A, API side**: `mc-hub-api` gets `api_host: api.<new>` and
    `dashboard_alias_host: <its current api_host>`; add `<new>` to mc-hub-api's `site_hosts`
-   and the CrowdSec scope; `SITE_URL` and `API_URL` name the new hosts. After merge, on the VPS:
+   and the CrowdSec scope; `SITE_URL` names the new site host. After merge, on the VPS:
    publish the mc-hub-api route re-rendered with the new binding at its current slot and
    generation (`lib/route.py publish`), run `mc-hub-ingress.yml` apply, recreate the running
    mc-hub-api slot (Compose parity, see above), installer `--check` then apply, `restorecon -R`
    the release, bump the API repository's pin.
 3. **Release B, site side**: `mc-hub` gets `api_host: <new>` and `dashboard_alias_host: <old>`.
-   Same VPS steps for mc-hub (its slot recreate picks up `API_URL`), reinstall mc-hub-api at B,
+   Same VPS steps for mc-hub, reinstall mc-hub-api at B, also run `cloudflare/edge_lb.py` apply,
    then `mc-hub-access.yml` and `mc-hub-cache.yml` apply. In the website set `SITE` in
    `astro.config.mjs` (canonical, sitemap, hreflang, RSS, JSON-LD) and bump its pin.
 4. **Cut over**: Single Redirects in the old zone (apex and older hostnames) to `https://<new>`,

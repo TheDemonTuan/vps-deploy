@@ -46,6 +46,12 @@ class McHubApi(unittest.TestCase):
             self.assertTrue(routers['mc-hub-api-site-router']['rule'].startswith(sites + ' && '))
             # SSR reads all come from the VPS: a per-IP limit there would throttle every reader at once.
             self.assertFalse({'mc-hub-api-rate-limit', 'mc-hub-api-inflight'} & set(allowed['middlewares']))
+            # SSR on the same node: plain HTTP on "internal", the same reads, loopback/mc-hub only.
+            internal = routers['mc-hub-api-internal']
+            self.assertEqual((internal['entryPoints'], internal['middlewares'][0]), (['internal'], 'internal-only'))
+            self.assertEqual(set(re.findall(r'Path(?:Prefix)?\(`([^`]*)`\)', internal['rule'])),
+                             set(re.findall(r'Path(?:Prefix)?\(`([^`]*)`\)', allowed['rule'])) - {'/healthz'})
+            self.assertNotIn('Host(', internal['rule'])
             reads, writes = routers['mc-hub-api-site-router'], routers['mc-hub-api-site-write']
             self.assertIn('mc-hub-api-rate-limit', reads['middlewares'])
             self.assertEqual(writes['rule'], sites + ' && Method(`POST`) && PathPrefix(`/api/`) && !PathPrefix(`/api/admin/`)')
@@ -87,7 +93,7 @@ class McHubApi(unittest.TestCase):
         def env(app, key):
             return re.search(r'^  ' + key + r': (\S+)$', (ROOT / 'apps' / app / 'docker-compose.prod.yml').read_text(), re.M).group(1)
         self.assertIn(env('mc-hub-api', 'SITE_URL').removeprefix('https://'), api_site_hosts)
-        self.assertEqual(env('mc-hub', 'API_URL'), 'https://' + apps['mc-hub-api']['api_host'])
+        self.assertEqual(env('mc-hub', 'API_URL'), 'http://edge-traefik:8082')
 
 
 if __name__ == '__main__':

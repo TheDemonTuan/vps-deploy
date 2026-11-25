@@ -26,9 +26,9 @@ x-runtime: &runtime
       max-file: "3"
 x-environment: &environment
   NODE_ENV: production
-  # Server-side rendering reads published content from mc-hub-api through Cloudflare, at
-  # mc-hub-api's api_host in hosts/oracle-main.yml (a test keeps them equal).
-  API_URL: https://api.thedemontuan.dev
+  # Server-side rendering reads published content from this node's mc-hub-api through Traefik's
+  # plain-HTTP "internal" entrypoint (router mc-hub-api-internal), never leaving the VPS.
+  API_URL: http://edge-traefik:8082
 services:
   mc-hub-blue:
     <<: *runtime
@@ -43,7 +43,7 @@ services:
       <<: *environment
       DEPLOY_SLOT: green
 networks:
-  # Not internal: SSR fetches content from the public mc-hub-api hostname.
+  # Not internal: this network is where SSR reaches edge-traefik; outbound stays as before.
   edge:
     external: true
     name: ${EDGE_NETWORK:-edge-mc-hub}
