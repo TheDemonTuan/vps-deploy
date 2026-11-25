@@ -5,11 +5,14 @@
 #    `peer/<id>:<scenario>`, so each node blocks what the other detected and the CrowdSec →
 #    Cloudflare controller on n1 puts both on the edge list (it skips `cscli decisions import`).
 #    SSH bans stay per node, as the controller keeps them off the edge list.
-# 2. Checks the other node's sites through the edge (pinned with X-Edge-Node, honoured only from a
-#    node's address) and, on a replica, that the Litestream follower keeps up with the primary.
-#    Telegram after two bad runs in a row, and again when it recovers.
-# /etc/platform/peer.env: NODE, NODE_IP, PEER, PEER_IP, ROLE (primary|replica), CHECK_URLS,
-# TELEGRAM_CHAT_ID. /etc/platform/telegram-token: bot token (root 0600).
+# 2. Renews this node's edge lease (cloudflare/edge-lb) and, when the lease's writer no longer
+#    matches this node's database role, starts platform-role.service (role.sh) to switch it.
+#    The edge checks every node's sites itself (cron) and alerts.
+# 3. On a replica, checks that the Litestream follower keeps up with the primary. Telegram after
+#    two bad runs in a row, and again when it recovers.
+# /etc/platform/peer.env: NODE, NODE_IP, PEER, PEER_IP, ROLE (primary|replica before any
+# failover), LEASE_URL, TELEGRAM_CHAT_ID. /etc/platform/telegram-token: bot token,
+# /etc/platform/edge-node-key: the Worker's NODE_KEY (both root 0600).
 # shortcut: one peer (two nodes); with a third node, loop the exchange and checks over the peers.
 set -uo pipefail
 export LC_ALL=C
@@ -70,13 +73,22 @@ if printf 'get /crowdsec/decisions.json %s\n' "$state/peer-decisions.json" | pee
     done
 fi
 
-# --- 2. Checks
-for url in $CHECK_URLS; do
-  code=$(curl -s -o /dev/null -m 20 -w '%{http_code}' -H "X-Edge-Node: $PEER" "$url")
-  if [ "$code" = 200 ]; then report "$PEER $url" ok "HTTP $code"; else report "$PEER $url" fail "HTTP $code"; fi
-done
+# --- 2. Lease
+role=$(cat /var/lib/docker/volumes/mc-hub-api-data/_data/role 2>/dev/null || echo "$ROLE")
+if lease=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/platform/edge-node-key)" |
+  curl -fsS -m 20 -K - -H 'content-type: application/json' -d '{"op":"beat"}' "$LEASE_URL") &&
+  writer=$(jq -er '.writer' <<<"$lease"); then
+  echo "$writer" >"$state/writer"
+  if { [ "$writer" = "$NODE" ] && [ "$role" != primary ]; } || { [ "$writer" != "$NODE" ] && [ "$role" = primary ]; }; then
+    echo "lease writer $writer, this node $role: switching" >&2
+    systemctl start --no-block platform-role.service
+  fi
+else
+  echo "lease renewal failed" >&2
+fi
 
-if [ "$ROLE" = replica ]; then
+# --- 3. Follower
+if [ "$role" = replica ]; then
   # The primary's replica position is the highest LTX end txid on any level; ours is the follower's
   # -txid file. Behind what the primary had a minute ago means the follower is stuck; ahead means
   # the primary started a new lineage (reset or promotion) and this node needs a fresh restore.

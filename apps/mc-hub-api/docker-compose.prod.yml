@@ -40,8 +40,11 @@ x-environment: &environment
   TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY required}
   TURNSTILE_SECRET: ${TURNSTILE_SECRET:?TURNSTILE_SECRET required}
   # primary on the registry's `host` (the single writer); replica on replica_hosts: a read-only
-  # copy that the node's Litestream follower (platform/litestream) keeps current.
+  # copy that the node's Litestream follower (platform/litestream) keeps current. After a
+  # failover the volume's `role` file (platform/peer/role.sh) takes precedence.
   DB_ROLE: ${NODE_ROLE:?NODE_ROLE is set by the deploy engine}
+  # Verifies the reader's address on writes the edge queued and replays (cloudflare/edge-lb).
+  EDGE_REPLAY_KEY: ${EDGE_REPLAY_KEY:-}
   # Uploads are also kept in this R2 bucket (S3 API), so any node can serve them.
   MEDIA_S3_ENDPOINT: ${MEDIA_S3_ENDPOINT:?MEDIA_S3_ENDPOINT required}
   MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:?MEDIA_S3_BUCKET required}

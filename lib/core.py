@@ -118,12 +118,20 @@ def app_hosts(registration):
 
 def balance_policy(value):
     """Edge load-balancer rules of an app run on several hosts (cloudflare/edge_lb.py renders them)."""
-    fields(value, {'primary_paths', 'primary_cookies', 'sticky_seconds', 'fanout', 'bypass_paths', 'public_bucket'}, {'primary_paths'})
-    lists = [value['primary_paths'], value.get('primary_cookies', []), value.get('bypass_paths', []), value.get('fanout', [])]
+    fields(value, {'primary_paths', 'primary_cookies', 'sticky_seconds', 'fanout', 'public_bucket', 'lease', 'queue_paths', 'immutable_paths', 'edge_cache'}, {'primary_paths'})
+    lists = [value['primary_paths'], value.get('primary_cookies', []), value.get('fanout', []), value.get('queue_paths', []), value.get('immutable_paths', [])]
     require(all(type(items) is list for items in lists), 'REGISTRY_POLICY')
-    require(all(type(p) is str and p.startswith('^/') for p in value['primary_paths']), 'REGISTRY_POLICY')
+    require(all(type(p) is str and p.startswith('^/') for p in value['primary_paths'] + value.get('queue_paths', []) + value.get('immutable_paths', [])), 'REGISTRY_POLICY')
     require(all(type(c) is str and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', c) for c in value.get('primary_cookies', [])), 'REGISTRY_POLICY')
-    require(all(type(p) is str and re.fullmatch(r'/[A-Za-z0-9_./-]*\*', p) for p in value.get('bypass_paths', [])), 'REGISTRY_POLICY')
+    # lease: the edge's Durable Object that names the writer (shared by apps on one database);
+    # queue_paths and edge_cache rely on it (cloudflare/edge-lb).
+    require(type(value.get('lease', '')) is str and re.fullmatch(r'[a-z0-9-]{0,32}', value.get('lease', '')), 'REGISTRY_POLICY')
+    require(value.get('lease') or not (value.get('queue_paths') or 'edge_cache' in value), 'REGISTRY_POLICY')
+    if 'edge_cache' in value:
+        cache = value['edge_cache']
+        fields(cache, {'paths', 'ttl_seconds', 'stale_seconds'}, {'paths', 'ttl_seconds', 'stale_seconds'})
+        require(type(cache['paths']) is list and cache['paths'] and all(type(p) is str and p.startswith('^/') for p in cache['paths']), 'REGISTRY_POLICY')
+        require(type(cache['ttl_seconds']) is int and 1 <= cache['ttl_seconds'] <= 300 and type(cache['stale_seconds']) is int and cache['ttl_seconds'] <= cache['stale_seconds'] <= 604800, 'REGISTRY_POLICY')
     sticky = value.get('sticky_seconds', 0)
     require(type(sticky) is int and 0 <= sticky <= 300, 'REGISTRY_POLICY')
     for item in value.get('fanout', []):
