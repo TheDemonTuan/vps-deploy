@@ -54,7 +54,7 @@ jobs:
         run: |
           python3 -m unittest discover -s cloudflare/tests -p 'test_*.py' -v
           python3 -m unittest discover -s cloudflare/acb/tests -p 'test_*.py' -v
-          bun test ./cloudflare/tests/test_uptimeflare_wrappers.mjs
+          bun test ./cloudflare/tests/test_uptimeflare_wrappers.mjs ./cloudflare/tests/test_edge_lb.mjs
   resolve:
     needs: verify
     runs-on: ubuntu-latest

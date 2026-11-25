@@ -1,0 +1,9 @@
+dbs:
+  - path: /data/mc-hub.db
+    replica:
+      type: s3
+      bucket: mc-hub-db
+      path: mc-hub-api/mc-hub.db
+      endpoint: https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      sync-interval: 1s
