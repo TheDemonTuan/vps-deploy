@@ -117,6 +117,36 @@ printf 200
                 result = subprocess.run(['bash', str(helper), 'probe', 'demo.fixture.test', path, header], capture_output=True)
                 self.assertEqual(result.returncode, 2)
 
+    def test_cutover_acknowledges_through_this_node_only(self):
+        # Behind the edge load balancer an unpinned probe may reach another node and its generation.
+        helper = ROOT / 'lib/traefik.sh'
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            (base / 'curl').write_text('''#!/usr/bin/env bash
+generation=ffffffffffffffffffffffffffffffff
+while (( $# )); do
+  case "$1" in
+    --dump-header) headers="$2"; shift 2 ;;
+    --output) body="$2"; shift 2 ;;
+    -H) [[ $2 == "X-Edge-Node: n1" ]] && generation=0123456789abcdef0123456789abcdef; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf 'HTTP/2 200\\r\\ncache-control: no-store\\r\\nX-Demo-Route-Generation: %s\\r\\n\\r\\n' "$generation" > "$headers"
+printf '{"ok":true,"deployment_slot":"green"}' > "$body"
+printf 200
+''')
+            (base / 'curl').chmod(0o755)
+            (base / 'publish.py').write_text('')
+            route_file = base / 'route.yml'
+            route_file.write_text('new')
+            args = ['bash', str(helper), 'cutover', 'demo.fixture.test', str(route_file), str(route_file), str(route_file),
+                    'a' * 64, 'b' * 64, 'blue', 'c' * 32, 'green', GENERATION, str(base / 'publish.py'),
+                    '/healthz', 'X-Demo-Route-Generation', '3']
+            env = dict(os.environ, PATH=root + os.pathsep + os.environ['PATH'])
+            self.assertEqual(subprocess.run(args, env=dict(env, EDGE_NODE='n1'), capture_output=True).returncode, 0)
+            self.assertNotEqual(subprocess.run(args, env=env, capture_output=True).returncode, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

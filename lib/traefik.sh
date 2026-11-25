@@ -54,7 +54,7 @@ PY
 wait_route_slot() {
   local api="$1" slot="$2" generation="$3" health="$4" header="$5" timeout="$6" deadline=$((SECONDS+timeout)) seen streak=0
   while (( SECONDS < deadline )); do
-    seen="$(bash "${BASH_SOURCE[0]}" probe "$api" "$health" "$header" 2>/dev/null || true)"
+    seen="$(bash "${BASH_SOURCE[0]}" probe "$api" "$health" "$header" ${EDGE_NODE:+"$EDGE_NODE"} 2>/dev/null || true)"
     if [[ $seen == "$slot $generation" ]]; then
       streak=$((streak+1))
       if (( streak == 2 )); then return 0; fi
