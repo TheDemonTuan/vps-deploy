@@ -43,9 +43,20 @@ flowchart LR
   - Cron every minute: `/healthz` of every site on every node, and whether the writer renewed
     the lease in the last 3 minutes; Telegram (Worker secrets `TELEGRAM_TOKEN`,
     `TELEGRAM_CHAT_ID`) after two failures in a row and on recovery.
+  - `WRITE_LIMIT` (Workers rate limit, every site): a reader address gets 60 writes a minute per
+    Cloudflare location, then 429 `RATE_LIMITED` with `Retry-After: 60` from the edge (readers
+    peaked at 28). Node addresses are not limited; the API's per-endpoint throttles stay the
+    real limits. Approximate, and addresses behind one carrier NAT share it.
   - Workers Analytics Engine dataset `edge_lb`, a point per request: node, method, outcome
-    (origin, hit, stale, queued, bucket), status, milliseconds.
+    (origin, hit, stale, queued, bucket, limited), status, milliseconds.
     `edge_lb.py --operation stats` sums the last hour (token: Account Analytics Read).
+- **Edge WAF** (`cloudflare/edge_waf.py --operation survey|apply`, token `edge-waf`: Zone Read and
+  Zone WAF Edit, in `~/.config/cloudflare/edge-waf.token`): `edge-probe-paths` on both zones
+  blocks dotfiles (not `/.well-known/`), `*.php` and WordPress paths before the tunnel; on
+  thedemontuan.dev `edge-free-managed` runs Cloudflare's Free Managed Ruleset except on
+  monitor./metrics. tuannguyenviet.site keeps its hand-made Free ruleset rule (OmniRoute hosts
+  only). The script appends and patches only its own rules; the controller's `Edge IP bans`
+  and omniroute's API path rule (first) are left alone. Blocks show in Security → Events.
 - **Data**: SQLite stays single-writer on the primary. Litestream (`litestream/`) writes its WAL
   changes to a local directory; each replica follows it over read-only SFTP (`sync/`) into its
   own file, and mc-hub-api opens that read-only (`DB_ROLE` = engine `NODE_ROLE`, or the volume's

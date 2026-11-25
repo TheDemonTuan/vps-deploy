@@ -109,6 +109,26 @@ test('writes, admin, sessions and downloads go to the writer; a write sets the s
   assert.equal(points[0].doubles[0], 200);
 });
 
+test('writes over a reader address budget are refused at the edge; reads, nodes, other addresses and a failing limiter pass', async () => {
+  const counts = new Map();
+  env.WRITE_LIMIT = { limit: async ({ key }) => ({ success: counts.set(key, (counts.get(key) ?? 0) + 1).get(key) <= 2 }) };
+  const write = (client) => call('/api/feedback', { method: 'POST', body: '{}' }, client);
+  assert.deepEqual([(await write()).status, (await write()).status], [200, 200]);
+  const refused = await write();
+  assert.equal(refused.status, 429);
+  assert.equal(refused.headers.get('retry-after'), '60');
+  assert.equal((await refused.json()).error.code, 'RATE_LIMITED');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(points.at(-1).blobs, ['thedemontuan.dev', 'edge', 'POST', 'limited']);
+  assert.equal((await call('/')).status, 200);
+  assert.equal((await write('203.0.113.10')).status, 200);
+  assert.equal((await write(config.nodes.n2.ip)).status, 200);
+  env.WRITE_LIMIT = { limit: async () => { throw new Error('limiter down'); } };
+  assert.equal((await write()).status, 200);
+  assert.equal(calls.length, 6);
+  assert.equal(counts.has(config.nodes.n2.ip), false);
+});
+
 test('only a node (or the cron, with the derived pin key) may pin a read; a pinned write still reaches the writer', async () => {
   await call('/healthz', { headers: { 'X-Edge-Node': 'n2' } }, config.nodes.n1.ip);
   await call('/api/comments', { method: 'POST', body: '{}', headers: { 'X-Edge-Node': 'n2' } }, config.nodes.n1.ip);

@@ -11,7 +11,8 @@ registry). `survey` reports and `apply` makes Cloudflare match it:
   primary node's tunnel) serves everything, as before balancing. Other routes of those hostnames
   that run no Worker or this one are removed;
 - with a `lease`: the Durable Object class Lease, the queue `edge-lb-writes` and its consumer,
-  and a cron trigger every minute; Analytics Engine dataset `edge_lb` always.
+  and a cron trigger every minute; Analytics Engine dataset `edge_lb` always, and the rate limit
+  WRITE_LIMIT (every write from one address: 60 a minute per Cloudflare location).
 Worker secrets (set once, kept across uploads): NODE_KEY, REPLAY_KEY, TELEGRAM_TOKEN,
 TELEGRAM_CHAT_ID; `survey` lists missing ones. `stats` sums the last hour per node.
 Adding a node: hosts/<node>.yml with `edge` and the apps it runs, the host in each app's
@@ -39,6 +40,8 @@ DATASET = 'edge_lb'
 MIGRATION = 'v1'
 SECRETS = ('NODE_KEY', 'REPLAY_KEY', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
 CRON = '* * * * *'
+# Namespace ids are account-wide integers; readers' writes peaked at 28 a minute per address.
+WRITE_LIMIT = {'type': 'ratelimit', 'name': 'WRITE_LIMIT', 'namespace_id': '1101', 'simple': {'limit': 60, 'period': 60}}
 
 
 def plan(root=ROOT):
@@ -158,7 +161,7 @@ def result(client, method, path, body=None):
 def bindings(edge, migration_tag):
     metadata = {'main_module': 'index.mjs', 'compatibility_date': COMPATIBILITY_DATE, 'keep_bindings': ['secret_text'],
                 'bindings': [{'type': 'r2_bucket', 'name': name, 'bucket_name': bucket} for name, bucket in sorted(edge['buckets'].items())] +
-                [{'type': 'analytics_engine', 'name': 'METRICS', 'dataset': DATASET}]}
+                [{'type': 'analytics_engine', 'name': 'METRICS', 'dataset': DATASET}, WRITE_LIMIT]}
     if edge['leased']:
         metadata['bindings'] += [{'type': 'durable_object_namespace', 'name': 'LEASE', 'class_name': 'Lease'},
                                  {'type': 'queue', 'name': 'WRITES', 'queue_name': QUEUE}]
