@@ -11,12 +11,23 @@ export default {
   },
   "rules": {
     "mc-hub": {
+      "edge_cache": {
+        "paths": [
+          "^/api/posts(/[^/]+)?$",
+          "^/(?!api/|admin|_astro/|media/)"
+        ],
+        "stale_seconds": 86400,
+        "ttl_seconds": 30
+      },
       "fanout": [
         {
           "delay_seconds": 8,
           "method": "POST",
           "path": "^/admin/revalidate$"
         }
+      ],
+      "immutable_paths": [
+        "^/_astro/"
       ],
       "primary_cookies": [
         "__Host-mch_session"
@@ -39,21 +50,30 @@ export default {
         "path": "^/media/[0-9a-f]{32}(-sm)?\\.jpg$",
         "strip": "/media/"
       },
+      "queue_paths": [
+        "^/api/posts/[^/]+/(views|comments|compat)$",
+        "^/api/feedback$",
+        "^/api/feedback/[0-9]+/vote$"
+      ],
       "sticky_seconds": 15
     },
     "mc-hub-api": {
+      "edge_cache": null,
       "fanout": [],
+      "immutable_paths": [],
       "primary_cookies": [],
       "primary_paths": [
         "^/api/(admin|auth|push)/",
         "^/api/dl(/|$)"
       ],
       "public_bucket": null,
+      "queue_paths": [],
       "sticky_seconds": 0
     }
   },
   "sites": {
     "api.thedemontuan.dev": {
+      "lease": "mc-hub-api",
       "nodes": [
         "n1",
         "n2"
@@ -63,6 +83,7 @@ export default {
       "zone": "thedemontuan.dev"
     },
     "thedemontuan.dev": {
+      "lease": "mc-hub-api",
       "nodes": [
         "n1",
         "n2"
