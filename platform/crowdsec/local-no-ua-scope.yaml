@@ -1,0 +1,10 @@
+name: local/no-ua-scope
+# A missing User-Agent is not an attack. The hub's crowdsecurity/experimental-no-user-agent
+# (out-of-band, confidence 0) made six header-less API reads in 15 ms a 16 h ban: the owner's own
+# network (every WAN address, so the edge list too), and it would do the same to Cloudflare
+# Workers' shared egress address. Installed as /etc/crowdsec/appsec-configs/local-no-ua-scope.yaml
+# on every node and listed in /etc/crowdsec/acquis.d/appsec.yaml.
+pre_eval:
+  - filter: IsOutBand == true
+    apply:
+      - RemoveOutBandRuleByName("crowdsecurity/experimental-no-user-agent")

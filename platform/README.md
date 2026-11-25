@@ -80,6 +80,10 @@ flowchart LR
 - **No self-renewing bans**: `crowdsec/platform-already-banned.yaml` (postoverflow whitelist) keeps
   an IP this node already bans from earning a new ban; the bouncer's own 403s used to re-ban it
   through `http-generic-403-bf`, and the peer copied that back.
+- **No ban for a missing User-Agent**: `crowdsec/local-no-ua-scope.yaml` (AppSec config, listed in
+  `acquis.d/appsec.yaml`) drops the hub's out-of-band `crowdsecurity/experimental-no-user-agent`:
+  six header-less API reads banned the owner's network for 16 h. That network leaves through
+  three ISPs, each address banned on its own, so the site failed for some connections only.
 - **Controller** (`/opt/crowdsec-telegram-controller` on n1, no source repository: its releases
   are the source; change one with `deploy/install.py --check/--install --source <copy>`): it
   tracks LAPI decisions by id, so it pulls the stream with `dedup=false` (release
@@ -128,7 +132,8 @@ with `weight: 0` (it still takes retries and pinned probes).
    looks like `ssh-bf`), bouncers `cs-firewall-bouncer-<node>` and `traefik`
    (key in `/opt/platform/edge/secrets/crowdsec-bouncer-key`, root 0600),
    `crowdsec-endpoint-guard.service` enabled. `crowdsec/platform-already-banned.yaml` into
-   `postoverflows/s01-whitelist/` (part of n1's `/etc/crowdsec` already).
+   `postoverflows/s01-whitelist/` and `crowdsec/local-no-ua-scope.yaml` into `appsec-configs/`
+   (part of n1's `/etc/crowdsec` already).
 3. **Networks** (same addressing as n1): `edge-crowdsec` 172.31.254.0/28 internal,
    `edge-cf-ingress` 172.31.250.0/28 internal, `edge-egress` 172.31.252.0/28, and each balanced
    app's edge network (`edge-mc-hub` 172.25.0.0/16, `edge-mc-hub-api` 172.27.0.0/16 internal).
