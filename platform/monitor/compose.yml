@@ -3,9 +3,9 @@
 #   docker compose --env-file /etc/platform/monitor.env --profile agent [--profile hub] up -d
 # agent: node-exporter (host), cAdvisor (containers) and Traefik's metrics, scraped every 30 s by
 #   vmagent and pushed to the hub with the label node=<id>: the hub's own agent writes to it
-#   directly, the others through https://metrics.tuannguyenviet.site (tunnel B, Access service
+#   directly, the others through https://metrics.thedemontuan.dev (tunnel B, Access service
 #   token). vmagent buffers on disk (up to 1 GB) while the hub is unreachable.
-# hub: VictoriaMetrics (90 days) and Grafana at https://monitor.tuannguyenviet.site (Access login;
+# hub: VictoriaMetrics (90 days) and Grafana at https://monitor.thedemontuan.dev (Access login;
 #   Grafana trusts the Access JWT, no second password). Grafana also reads edge-lb's Workers
 #   Analytics Engine dataset (routing per node) from the Cloudflare API.
 # /etc/platform/monitor.env (root 0600): NODE, METRICS_URL (hub: http://127.0.0.1:8428/api/v1/write),
@@ -102,7 +102,8 @@ services:
     user: "472:0"
     env_file: [/etc/platform/monitor.env]
     environment:
-      GF_SERVER_ROOT_URL: https://monitor.tuannguyenviet.site
+      GF_SERVER_ROOT_URL: https://monitor.thedemontuan.dev
+      GF_SECURITY_CONTENT_SECURITY_POLICY: "true"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
@@ -115,7 +116,8 @@ services:
       GF_AUTH_JWT_EMAIL_CLAIM: email
       GF_AUTH_JWT_USERNAME_CLAIM: email
       GF_AUTH_JWT_JWK_SET_URL: https://thedemontuan.cloudflareaccess.com/cdn-cgi/access/certs
-      GF_AUTH_JWT_EXPECT_CLAIMS: '{"aud": ["${ACCESS_AUD:?}"], "iss": "https://thedemontuan.cloudflareaccess.com"}'
+      # Empty on agent-only nodes (Compose reads every profile); an empty AUD matches no JWT.
+      GF_AUTH_JWT_EXPECT_CLAIMS: '{"aud": ["${ACCESS_AUD:-}"], "iss": "https://thedemontuan.cloudflareaccess.com"}'
       GF_AUTH_JWT_AUTO_SIGN_UP: "true"
       # Only the Access app's allow list reaches Grafana, so everyone it lets in is an admin.
       GF_AUTH_JWT_ROLE_ATTRIBUTE_PATH: "'Admin'"

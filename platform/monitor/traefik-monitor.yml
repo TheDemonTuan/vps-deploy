@@ -4,15 +4,24 @@
 http:
   routers:
     monitor-grafana:
-      rule: "Host(`monitor.tuannguyenviet.site`)"
+      rule: "Host(`monitor.thedemontuan.dev`)"
       entryPoints: [web]
-      middlewares: [tunnel-only, security-headers]
+      # Not the shared security-headers: its CSP (base-uri 'none', no inline scripts) breaks
+      # Grafana, which sends its own nonce-based CSP (GF_SECURITY_CONTENT_SECURITY_POLICY).
+      middlewares: [tunnel-only, monitor-headers]
       service: monitor-grafana
     monitor-ingest:
-      rule: "Host(`metrics.tuannguyenviet.site`) && Path(`/api/v1/write`) && Method(`POST`)"
+      rule: "Host(`metrics.thedemontuan.dev`) && Path(`/api/v1/write`) && Method(`POST`)"
       entryPoints: [web]
       middlewares: [tunnel-only]
       service: monitor-victoriametrics
+  middlewares:
+    monitor-headers:
+      headers:
+        customResponseHeaders:
+          X-Content-Type-Options: "nosniff"
+          X-Frame-Options: "DENY"
+          Referrer-Policy: "strict-origin-when-cross-origin"
   services:
     monitor-grafana:
       loadBalancer:

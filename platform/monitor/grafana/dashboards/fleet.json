@@ -1,0 +1,11 @@
+     "displayName": "${__field.labels.node}",
+     "displayName": "${__field.labels.node}",
+     "displayName": "${__field.labels.node}",
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "indexByName": {"node": 0, "outcome": 1, "host": 2, "requests": 3, "errors": 4, "p95_ms": 5}
+     }
+    }
+   ],

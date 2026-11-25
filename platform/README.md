@@ -152,7 +152,8 @@ with `weight: 0` (it still takes retries and pinned probes).
    `LEASE_URL=https://api.thedemontuan.dev/__edge/lease/mc-hub-api`, `TELEGRAM_CHAT_ID`),
    `/etc/platform/telegram-token` (the CrowdSec controller's bot) and
    `/etc/platform/edge-node-key` (the Worker's `NODE_KEY`), both root 0600,
-   `systemctl enable --now platform-peer.timer`.
+   `systemctl enable --now platform-peer.timer`. Create `/var/lib/node-exporter` (root 0755):
+   each run writes the lease, role and replica lag there for the monitoring agent (step 11).
 9. **Apps** (`dnf install git-core`; GHCR login in `/root/.docker/config.json` as on n1;
    `install/vps-deploy.conf` in `/etc/tmpfiles.d/`, else the engine's lock directory is gone
    after a reboot and every deploy and drain fails `UNTRUSTED_PATH`): put
@@ -165,6 +166,52 @@ with `weight: 0` (it still takes retries and pinned probes).
    only), then `deployctl adopt --app <app>` on the node,
    `systemctl enable --now vps-deploy-drain@<app>.timer`, and apply again with the real weight.
    Add the host to the app's caller workflow (after the primary host).
+11. **Monitoring agent**: Traefik metrics (below), copy `platform/monitor` to
+   `/opt/platform/monitor`, write `/etc/platform/monitor.env` (root 0600: `NODE`,
+   `METRICS_URL=https://metrics.thedemontuan.dev/api/v1/write` and `remoteWrite_headers` with the
+   `monitor-vmagent` service token), `docker compose --env-file /etc/platform/monitor.env
+   --profile agent up -d`, then `chown 65534:65534` the `monitor_vmagent-buffer` volume's
+   mountpoint (vmagent runs as nobody; Docker creates volumes root-owned) and restart
+   `monitor-vmagent`. `restorecon -R /opt/platform/monitor /etc/platform`.
+
+## Fleet monitoring (replaced Beszel)
+
+<https://monitor.thedemontuan.dev> (Cloudflare Access email login; Grafana trusts the Access JWT,
+no second password), dashboard **Fleet**:
+
+- **Edge routing**: requests, p95 and errors per node from edge-lb's Analytics Engine dataset,
+  and a node × outcome × host table (`origin`, `hit`, `stale`, `queued`, `bucket`).
+- **Lease and roles**: the lease writer as each node last saw it, primary/replica per node,
+  whether the last lease renewal worked, replica lag in transactions (from `peer.sh`).
+- **Nodes**: CPU, memory, disk, network, load, which scrape targets are up.
+- **Containers**: memory and CPU per container (cAdvisor).
+- **Traefik**: requests, 5xx and p95 per service on each node: what actually reached the node.
+
+How it fits together (`platform/monitor/compose.yml`):
+
+- Every node runs the `agent` profile: node-exporter, cAdvisor and vmagent, which scrapes them
+  and Traefik every 30 s, labels everything `node=<NODE>` and pushes it to the hub, buffering up
+  to 1 GB on disk while the hub is unreachable.
+- The hub (n2) also runs `hub`: VictoriaMetrics (90 days) and Grafana. Its own vmagent writes to
+  `127.0.0.1:8428`; the others push to `metrics.thedemontuan.dev` (tunnel B, Access app
+  "Fleet Metrics Ingest": service token `monitor-vmagent` only, expires 2027-11-25), whose
+  Traefik route only accepts `POST /api/v1/write`. The hub's `/etc/platform/monitor.env` also
+  holds `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` (user token `grafana-analytics-read`: Account
+  Analytics Read, IP-filtered to the hub) and `ACCESS_AUD` (the Grafana Access app's AUD).
+- Traefik on each node: a `metrics` entrypoint `:8899` with `metrics.prometheus` (entryPoint
+  `metrics`, `addServicesLabels`), published only on `127.0.0.1:18082`. On the hub Traefik also
+  joins `edge-monitor`, and `platform/monitor/traefik-monitor.yml` is
+  `/opt/platform/edge/dynamic/monitor.yml`. Drain the node (weight 0) before recreating Traefik.
+- CrowdSec: `dynamic/crowdsec.yml` on every node has `excludedHosts: [monitor.thedemontuan.dev,
+  metrics.thedemontuan.dev]`. AppSec reads Grafana's query bodies (Analytics Engine SQL) and
+  vmagent's binary remote-write bodies as SQL injection / HTTP violations and banned the owner's
+  IP; both hosts only take requests Access already let through.
+- Another node: step 11 above; it shows up in every panel by its `NODE`. Moving the hub: a new
+  `grafana-analytics-read` token for the new hub's IP, tunnel ingress for both hostnames on the
+  new hub's tunnel, the other nodes' `METRICS_URL` unchanged.
+
+Not covered: logs (still `docker logs` on each node) and alert rules (alerts stay with the edge
+cron, `peer.sh` and CrowdSec on Telegram; UptimeFlare checks Grafana's `/api/health`).
 
 ## Publish content (mc-hub `import`)
 

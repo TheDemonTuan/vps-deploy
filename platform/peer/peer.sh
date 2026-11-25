@@ -75,9 +75,11 @@ fi
 
 # --- 2. Lease
 role=$(cat /var/lib/docker/volumes/mc-hub-api-data/_data/role 2>/dev/null || echo "$ROLE")
+renewed=0 writer=$(cat "$state/writer" 2>/dev/null || echo unknown)
 if lease=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/platform/edge-node-key)" |
   curl -fsS -m 20 -K - -H 'content-type: application/json' -d '{"op":"beat"}' "$LEASE_URL") &&
   writer=$(jq -er '.writer' <<<"$lease"); then
+  renewed=1
   echo "$writer" >"$state/writer"
   if { [ "$writer" = "$NODE" ] && [ "$role" != primary ]; } || { [ "$writer" != "$NODE" ] && [ "$role" = primary ]; }; then
     echo "lease writer $writer, this node $role: switching" >&2
@@ -86,6 +88,7 @@ if lease=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/platform/e
 else
   echo "lease renewal failed" >&2
 fi
+lag=0
 
 # --- 3. Follower
 if [ "$role" = replica ]; then
@@ -98,6 +101,7 @@ if [ "$role" = replica ]; then
   before=$(cat "$state/primary-txid" 2>/dev/null)
   if [ -n "$primary" ]; then
     echo "$primary" >"$state/primary-txid"
+    [ -n "$replica" ] && lag=$((16#$primary - 16#$replica))
     if [ -z "$replica" ] || [[ $replica > $primary ]]; then
       report "litestream follower" fail "replica txid ${replica:-none}, primary $primary"
     elif [ -n "$before" ] && [[ $replica < $before ]]; then
@@ -107,4 +111,18 @@ if [ "$role" = replica ]; then
     fi
   fi
 fi
+
+# Metrics for the monitoring agent's node-exporter (platform/monitor), written atomically.
+metrics=/var/lib/node-exporter/platform.prom
+cat >"$metrics.tmp" <<EOF
+# HELP platform_lease_renewed 1 when this run renewed the edge lease.
+platform_lease_renewed $renewed
+# HELP platform_lease_writer The writer the edge lease named, as this node last saw it.
+platform_lease_writer{writer="$writer"} 1
+# HELP platform_role_primary 1 when this node's mc-hub-api database is the primary.
+platform_role_primary $([ "$role" = primary ] && echo 1 || echo 0)
+# HELP platform_replica_lag_txids Transactions the replica is behind the primary (0 on the primary).
+platform_replica_lag_txids $lag
+EOF
+mv -f "$metrics.tmp" "$metrics"
 exit 0
