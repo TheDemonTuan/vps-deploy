@@ -89,9 +89,10 @@ Edit, Workers Routes Edit, Cloudflare Tunnel Edit, DNS Edit, Zone Read. Drain a 
 5. **Registry**: `hosts/<host>.yml` (ssh pin, traefik, `edge`, apps), the host in each app's
    `replica_hosts`, render; release.
 6. **Data**: `docker volume create mc-hub-api-data`, then
-   `docker run --rm -v mc-hub-api-data:/data busybox chown 1000:1000 /data`; write
-   `/etc/platform/litestream.env` (root 0600) and start the follower from `platform/litestream`
-   (`--profile replica`). Wait for `follow: applied updates` in `docker logs litestream`.
+   `chown 1000:1000 "$(docker volume inspect -f '{{.Mountpoint}}' mc-hub-api-data)"`; write
+   `/etc/platform/litestream.env` (root 0600), copy `platform/litestream` to
+   `/opt/platform/litestream` and start the follower there (`--profile replica`). The first log
+   line is `entering follow mode`; `follow: applied updates` follows every primary write.
 7. **Apps**: installer `--check`, then apply, for each balanced app with `--host <host>` and the
    same deploy public key; `runtime.env` as on the primary (mc-hub-api: `TURNSTILE_*`,
    `MEDIA_S3_*`). Stage `<app>-blue` from the release's Compose profile, publish the adapter
