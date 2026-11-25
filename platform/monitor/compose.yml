@@ -1,0 +1,143 @@
+# Fleet monitoring (replaces Beszel): every node runs the `agent` profile, one node (the hub,
+# oracle-sg2) also runs `hub`. From /opt/platform/monitor:
+#   docker compose --env-file /etc/platform/monitor.env --profile agent [--profile hub] up -d
+# agent: node-exporter (host), cAdvisor (containers) and Traefik's metrics, scraped every 30 s by
+#   vmagent and pushed to the hub with the label node=<id>: the hub's own agent writes to it
+#   directly, the others through https://metrics.tuannguyenviet.site (tunnel B, Access service
+#   token). vmagent buffers on disk (up to 1 GB) while the hub is unreachable.
+# hub: VictoriaMetrics (90 days) and Grafana at https://monitor.tuannguyenviet.site (Access login;
+#   Grafana trusts the Access JWT, no second password). Grafana also reads edge-lb's Workers
+#   Analytics Engine dataset (routing per node) from the Cloudflare API.
+# /etc/platform/monitor.env (root 0600): NODE, METRICS_URL (hub: http://127.0.0.1:8428/api/v1/write),
+# remoteWrite_headers (others: "CF-Access-Client-Id: …^^CF-Access-Client-Secret: …"); on the hub
+# also CF_ACCOUNT_ID, CF_ANALYTICS_TOKEN (Account Analytics Read), ACCESS_AUD (the Grafana Access
+# app's AUD tag).
+name: monitor
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+services:
+  node-exporter:
+    <<: *hardening
+    profiles: [agent]
+    image: prom/node-exporter:v1.13.1@sha256:7296504d4ada44b7d7ab4431e27e9f9900d8488f8d55842f4b12ae2704e16dfe
+    container_name: monitor-node-exporter
+    network_mode: host
+    pid: host
+    user: "65534:65534"
+    # The host's whole filesystem, read-only; SELinux would deny it to a confined container.
+    security_opt: [no-new-privileges:true, label=disable]
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=127.0.0.1:9100
+      # peer.sh writes the lease writer, this node's role and the replica lag here.
+      - --collector.textfile.directory=/host/var/lib/node-exporter
+    volumes:
+      - /:/host:ro,rslave
+    mem_limit: 64m
+  cadvisor:
+    <<: *hardening
+    profiles: [agent]
+    image: ghcr.io/google/cadvisor:v0.61.1@sha256:4929b70e82079d001d0028b85d6a4dd25ad4666b719455c9542b983489963916
+    container_name: monitor-cadvisor
+    # Every container's cgroup and Docker's state, read-only; port on loopback only.
+    security_opt: [no-new-privileges:true, label=disable]
+    command: [--docker_only=true, --housekeeping_interval=30s, --store_container_labels=false,
+              "--whitelisted_container_labels=com.docker.compose.project",
+              "--disable_metrics=percpu,sched,tcp,udp,advtcp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process,perf_event,memory_numa"]
+    ports: ["127.0.0.1:18081:8080"]
+    tmpfs: [/tmp]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    mem_limit: 192m
+    cpus: 0.25
+  vmagent:
+    <<: *hardening
+    profiles: [agent]
+    image: victoriametrics/vmagent:v1.157.0@sha256:cd0b125ac86821cbd6a020fc048908b2fc138d2ac121485c621a40ee63c93070
+    container_name: monitor-vmagent
+    network_mode: host
+    user: "65534:65534"
+    env_file: [/etc/platform/monitor.env]
+    command:
+      - -envflag.enable
+      - -promscrape.config=/etc/vmagent.yml
+      - -remoteWrite.url=${METRICS_URL:?}
+      - -remoteWrite.label=node=${NODE:?}
+      - -remoteWrite.tmpDataPath=/buffer
+      - -remoteWrite.maxDiskUsagePerURL=1GB
+      - -httpListenAddr=127.0.0.1:8429
+    volumes:
+      - ./vmagent.yml:/etc/vmagent.yml:ro,z
+      - vmagent-buffer:/buffer
+    mem_limit: 128m
+  victoriametrics:
+    <<: *hardening
+    profiles: [hub]
+    image: victoriametrics/victoria-metrics:v1.157.0@sha256:322a7a92fdcc269280e9c38af94c83bc76827a31b792acbc60e44394e7f29c20
+    container_name: monitor-victoriametrics
+    user: "65534:65534"
+    command: [-storageDataPath=/storage, -retentionPeriod=90d, -httpListenAddr=:8428]
+    # Loopback for this node's vmagent (a published port needs a non-internal network:
+    # monitor-local); Traefik reaches it on edge-monitor (its route opens only /api/v1/write).
+    ports: ["127.0.0.1:8428:8428"]
+    volumes: [victoriametrics:/storage]
+    networks: [edge-monitor, monitor-local]
+    mem_limit: 512m
+  grafana:
+    <<: *hardening
+    profiles: [hub]
+    image: grafana/grafana:13.3.2@sha256:81556409ba48b2b922e0adb69a2511337d8ba7578f11962eefa6149a2d815101
+    container_name: monitor-grafana
+    user: "472:0"
+    env_file: [/etc/platform/monitor.env]
+    environment:
+      GF_SERVER_ROOT_URL: https://monitor.tuannguyenviet.site
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_SYNC: yesoreyeram-infinity-datasource@4.1.8
+      # Cloudflare Access is the login: Grafana accepts only its signed JWT for this app.
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_AUTH_JWT_ENABLED: "true"
+      GF_AUTH_JWT_HEADER_NAME: Cf-Access-Jwt-Assertion
+      GF_AUTH_JWT_EMAIL_CLAIM: email
+      GF_AUTH_JWT_USERNAME_CLAIM: email
+      GF_AUTH_JWT_JWK_SET_URL: https://thedemontuan.cloudflareaccess.com/cdn-cgi/access/certs
+      GF_AUTH_JWT_EXPECT_CLAIMS: '{"aud": ["${ACCESS_AUD:?}"], "iss": "https://thedemontuan.cloudflareaccess.com"}'
+      GF_AUTH_JWT_AUTO_SIGN_UP: "true"
+      # Only the Access app's allow list reaches Grafana, so everyone it lets in is an admin.
+      GF_AUTH_JWT_ROLE_ATTRIBUTE_PATH: "'Admin'"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    tmpfs: [/tmp]
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ./grafana/dashboards:/var/lib/grafana-dashboards:ro,z
+    # edge-monitor: Traefik and VictoriaMetrics; monitor-egress: grafana.com (plugin) and the
+    # Cloudflare API (Analytics Engine).
+    networks: [edge-monitor, monitor-egress]
+    mem_limit: 384m
+volumes:
+  vmagent-buffer:
+  victoriametrics:
+  grafana:
+networks:
+  edge-monitor:
+    name: edge-monitor
+    internal: true
+  monitor-local:
+    name: monitor-local
+  monitor-egress:
+    name: monitor-egress

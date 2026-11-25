@@ -30,8 +30,8 @@ flowchart LR
   - `queue_paths` (views, comments, compat and feedback votes, feedback): while the writer
     answers 5xx or not at all, the write goes to Queue `edge-lb-writes` and the reader gets
     202 `{"queued": true}`; the consumer replays it to the writer with backoff (30 s up to an
-    hour, 100 tries), signing the reader's address in `X-Edge-Replay` (mc-hub-api
-    `EDGE_REPLAY_KEY` = Worker `REPLAY_KEY`). Comments and feedback carry a Turnstile token
+    hour, 100 tries), signing the reader's address in `X-Edge-Replay` (Worker `REPLAY_KEY` =
+    `edge-replay-key` in the mc-hub-api volume). Comments and feedback carry a Turnstile token
     that expires after 5 minutes: those are dropped (a 4xx) if the writer stays down longer.
   - `edge_cache`: GETs of the listed paths without the session cookie stay in the Cache API
     for `ttl_seconds` and are served stale for `stale_seconds` when every node fails; only
@@ -78,7 +78,8 @@ Worker with its bindings (R2, Durable Object, queue, Analytics Engine; secrets a
 queue consumer and cron, and only then sets the routes (fail-open, Workers Paid). Token:
 Workers Scripts Edit, Workers Routes Edit, Queues Edit, Cloudflare Tunnel Edit, DNS Edit, Zone
 Read. Worker secrets, once: `NODE_KEY` (also each node's `/etc/platform/edge-node-key`),
-`REPLAY_KEY` (also mc-hub-api's `EDGE_REPLAY_KEY` in each node's runtime.env),
+`REPLAY_KEY` (also `edge-replay-key` in each node's mc-hub-api volume, owner 1000, 0600: a
+runtime.env key would change the containers' environment, which a release upgrade refuses),
 `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` (`PUT .../workers/scripts/edge-lb/secrets`). Drain a node
 with `weight: 0` (it still takes retries and pinned probes).
 
@@ -152,7 +153,9 @@ with `weight: 0` (it still takes retries and pinned probes).
    `/etc/platform/telegram-token` (the CrowdSec controller's bot) and
    `/etc/platform/edge-node-key` (the Worker's `NODE_KEY`), both root 0600,
    `systemctl enable --now platform-peer.timer`.
-9. **Apps** (`dnf install git-core`; GHCR login in `/root/.docker/config.json` as on n1): put
+9. **Apps** (`dnf install git-core`; GHCR login in `/root/.docker/config.json` as on n1;
+   `install/vps-deploy.conf` in `/etc/tmpfiles.d/`, else the engine's lock directory is gone
+   after a reboot and every deploy and drain fails `UNTRUSTED_PATH`): put
    `runtime.env` content in `/opt/<app>/.env` (root 0600; mc-hub-api: `TURNSTILE_*`,
    `MEDIA_S3_*`), start `<app>-blue` from the release's Compose profile with the primary's
    current image and `NODE_ROLE=replica`, publish the adapter-rendered route (slot `blue`, a new
