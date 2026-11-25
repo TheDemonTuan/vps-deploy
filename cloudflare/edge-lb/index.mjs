@@ -11,7 +11,12 @@ const RETRY_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 
 const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 const DOWN_MS = 30_000;
 const STICKY = "__Host-edge-primary";
-const PIN = "x-edge-node"; // deploy probes check one node: "X-Edge-Node: <id>"
+// Deploy probes check one node: "X-Edge-Node: <id>", honoured only from a node's own address, so
+// nobody else can steer traffic onto one node.
+const PIN = "x-edge-node";
+const NODE_IPS = new Set(Object.values(config.nodes).map((node) => node.ip));
+// A node that has not sent response headers by then is treated as down and the read moves on.
+const timing = { ttfbMs: 10_000 };
 
 // Isolate-local passive health: a node that just failed is tried last for DOWN_MS.
 const downUntil = new Map();
@@ -30,8 +35,9 @@ export default {
     }
 
     // Only reads may be pinned: a write must still reach the primary.
+    const client = request.headers.get("cf-connecting-ip") || "";
     const pinned = request.headers.get(PIN);
-    if (pinned && SAFE.has(request.method) && site.nodes.includes(pinned)) return send(request, pinned, site);
+    if (pinned && SAFE.has(request.method) && site.nodes.includes(pinned) && NODE_IPS.has(client)) return send(request, pinned, site);
 
     if (needsPrimary(request, url, rules)) {
       const fanout = rules.fanout.find((f) => f.method === request.method && new RegExp(f.path).test(url.pathname));
@@ -46,11 +52,11 @@ export default {
       return response;
     }
 
-    const order = pickOrder(site.nodes);
+    const order = pickOrder(site.nodes, client);
     for (let i = 0; i < order.length; i++) {
       const last = i === order.length - 1;
       try {
-        const response = await send(request, order[i], site);
+        const response = await send(request, order[i], site, last ? 0 : timing.ttfbMs);
         if (last || !SAFE.has(request.method) || !RETRY_STATUS.has(response.status)) return response;
       } catch (error) {
         if (last) throw error;
@@ -60,8 +66,17 @@ export default {
   },
 };
 
-function send(request, node, site) {
-  return fetch(request, { cf: { resolveOverride: `${node}-origin.${site.zone}` } });
+async function send(request, node, site, ttfbMs = 0) {
+  const init = { cf: { resolveOverride: `${node}-origin.${site.zone}` } };
+  if (!ttfbMs) return fetch(request, init);
+  // Aborts only while waiting for headers; a streaming body is not cut once they arrive.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ttfbMs);
+  try {
+    return await fetch(request, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function needsPrimary(request, url, rules) {
@@ -71,22 +86,28 @@ function needsPrimary(request, url, rules) {
   return [STICKY, ...rules.primary_cookies].some((name) => cookie.includes(name + "="));
 }
 
-// Weighted random first choice among nodes not marked down; the rest follow as fallbacks.
-export function pickOrder(nodes, now = Date.now(), random = Math.random) {
-  const healthy = nodes.filter((n) => !(downUntil.get(n) > now));
-  const pool = healthy.length ? healthy : nodes;
-  const total = pool.reduce((sum, n) => sum + config.nodes[n].weight, 0);
-  let roll = random() * total;
-  let first = pool[pool.length - 1];
-  for (const n of pool) {
-    roll -= config.nodes[n].weight;
-    if (roll < 0) {
-      first = n;
-      break;
-    }
-  }
-  const rest = nodes.filter((n) => n !== first).sort((a, b) => (downUntil.get(a) > now) - (downUntil.get(b) > now) || config.nodes[b].weight - config.nodes[a].weight);
-  return [first, ...rest];
+// Weighted rendezvous hashing on the client address: a client always lands on the same node, so
+// that node's Traefik rate limits and CrowdSec scenarios see all of its requests (not a share) and
+// its reads come from one replica; nodes get clients in proportion to weight, and a node leaving
+// moves only its own clients. Nodes marked down go last; weight 0 is last too (retries only).
+export function pickOrder(nodes, client, now = Date.now()) {
+  const score = (n) => (config.nodes[n].weight > 0 ? -config.nodes[n].weight / Math.log(unit(n + "|" + client)) : 0);
+  return nodes
+    .map((n) => [n, score(n), downUntil.get(n) > now])
+    .sort((a, b) => a[2] - b[2] || b[1] - a[1])
+    .map(([n]) => n);
+}
+
+// FNV-1a with the murmur3 finalizer, mapped into (0, 1); independent per node.
+function unit(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return ((h >>> 0) + 0.5) / 4294967296;
 }
 
 // After the primary handled a write that other nodes must see (a cache purge), repeat it on
@@ -130,4 +151,4 @@ async function fromBucket(request, url, bucket, ctx, r2) {
   return new Response(body, { status: 206, headers });
 }
 
-export const _test = { downUntil };
+export const _test = { downUntil, timing };
