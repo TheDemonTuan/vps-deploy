@@ -1,6 +1,335 @@
+{
+ "uid": "fleet",
+ "title": "Fleet",
+ "tags": [
+  "platform"
+ ],
+ "timezone": "browser",
+ "refresh": "1m",
+ "schemaVersion": 41,
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "editable": false,
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "Edge routing (Cloudflare Worker edge-lb)",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "Requests per node (5 min)",
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "edge"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "edge"
+     },
+     "type": "json",
+     "source": "url",
+     "parser": "backend",
+     "format": "table",
+     "url": "/analytics_engine/sql",
+     "url_options": {
+      "method": "POST",
+      "body_type": "raw",
+      "body_content_type": "text/plain",
+      "data": "SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '300' SECOND)) * 1000 AS t, blob2 AS node, SUM(_sample_interval) AS v FROM edge_lb WHERE timestamp >= toDateTime(${__from:date:seconds}) AND timestamp <= toDateTime(${__to:date:seconds}) GROUP BY t, node ORDER BY t FORMAT JSON"
+     },
+     "root_selector": "data",
+     "columns": [
+      {
+       "selector": "t",
+       "text": "time",
+       "type": "timestamp_epoch"
+      },
+      {
+       "selector": "node",
+       "text": "node",
+       "type": "string"
+      },
+      {
+       "selector": "v",
+       "text": "value",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "prepareTimeSeries",
+     "options": {
+      "format": "multi"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
      "displayName": "${__field.labels.node}",
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "description": "Where edge-lb sent each request. 'edge' = answered at the edge (Cache API hit, R2 image, queued write) without a node.",
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 8,
+    "h": 8
+   },
+   "id": 2
+  },
+  {
+   "type": "timeseries",
+   "title": "p95 time to response per node (ms)",
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "edge"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "edge"
+     },
+     "type": "json",
+     "source": "url",
+     "parser": "backend",
+     "format": "table",
+     "url": "/analytics_engine/sql",
+     "url_options": {
+      "method": "POST",
+      "body_type": "raw",
+      "body_content_type": "text/plain",
+      "data": "SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '300' SECOND)) * 1000 AS t, blob2 AS node, quantileWeighted(0.95)(double2, _sample_interval) AS v FROM edge_lb WHERE timestamp >= toDateTime(${__from:date:seconds}) AND timestamp <= toDateTime(${__to:date:seconds}) GROUP BY t, node ORDER BY t FORMAT JSON"
+     },
+     "root_selector": "data",
+     "columns": [
+      {
+       "selector": "t",
+       "text": "time",
+       "type": "timestamp_epoch"
+      },
+      {
+       "selector": "node",
+       "text": "node",
+       "type": "string"
+      },
+      {
+       "selector": "v",
+       "text": "value",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "prepareTimeSeries",
+     "options": {
+      "format": "multi"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
      "displayName": "${__field.labels.node}",
+     "unit": "ms",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 1,
+    "w": 8,
+    "h": 8
+   },
+   "id": 3
+  },
+  {
+   "type": "timeseries",
+   "title": "Errors per node (5xx or no response)",
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "edge"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "edge"
+     },
+     "type": "json",
+     "source": "url",
+     "parser": "backend",
+     "format": "table",
+     "url": "/analytics_engine/sql",
+     "url_options": {
+      "method": "POST",
+      "body_type": "raw",
+      "body_content_type": "text/plain",
+      "data": "SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '300' SECOND)) * 1000 AS t, blob2 AS node, SUM(IF(double1 >= 500 OR double1 = 0, _sample_interval, 0)) AS v FROM edge_lb WHERE timestamp >= toDateTime(${__from:date:seconds}) AND timestamp <= toDateTime(${__to:date:seconds}) GROUP BY t, node ORDER BY t FORMAT JSON"
+     },
+     "root_selector": "data",
+     "columns": [
+      {
+       "selector": "t",
+       "text": "time",
+       "type": "timestamp_epoch"
+      },
+      {
+       "selector": "node",
+       "text": "node",
+       "type": "string"
+      },
+      {
+       "selector": "v",
+       "text": "value",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "prepareTimeSeries",
+     "options": {
+      "format": "multi"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
      "displayName": "${__field.labels.node}",
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 1,
+    "w": 8,
+    "h": 8
+   },
+   "id": 4
+  },
+  {
+   "type": "table",
+   "title": "By node, outcome and host (time range)",
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "edge"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "edge"
+     },
+     "type": "json",
+     "source": "url",
+     "parser": "backend",
+     "format": "table",
+     "url": "/analytics_engine/sql",
+     "url_options": {
+      "method": "POST",
+      "body_type": "raw",
+      "body_content_type": "text/plain",
+      "data": "SELECT blob2 AS node, blob4 AS outcome, blob1 AS host, SUM(_sample_interval) AS requests, SUM(IF(double1 >= 500 OR double1 = 0, _sample_interval, 0)) AS errors, quantileWeighted(0.95)(double2, _sample_interval) AS p95_ms FROM edge_lb WHERE timestamp >= toDateTime(${__from:date:seconds}) AND timestamp <= toDateTime(${__to:date:seconds}) GROUP BY node, outcome, host ORDER BY requests DESC FORMAT JSON"
+     },
+     "root_selector": "data",
+     "columns": [
+      {
+       "selector": "node",
+       "text": "node",
+       "type": "string"
+      },
+      {
+       "selector": "outcome",
+       "text": "outcome",
+       "type": "string"
+      },
+      {
+       "selector": "host",
+       "text": "host",
+       "type": "string"
+      },
+      {
+       "selector": "requests",
+       "text": "requests",
+       "type": "number"
+      },
+      {
+       "selector": "errors",
+       "text": "errors",
+       "type": "number"
+      },
+      {
+       "selector": "p95_ms",
+       "text": "p95_ms",
+       "type": "number"
+      }
+     ]
+    }
+   ],
    "transformations": [
     {
      "id": "organize",
@@ -9,3 +338,827 @@
      }
     }
    ],
+   "description": "outcome: origin = sent to the node, hit = edge Cache API, stale = cache served because every node failed, queued = reader write held in the Queue, bucket = image from R2.",
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 9,
+    "w": 12,
+    "h": 8
+   },
+   "id": 5
+  },
+  {
+   "type": "stat",
+   "title": "Edge lease: writer (as each node last saw it)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "max by (writer) (platform_lease_writer)",
+     "legendFormat": "{{writer}}",
+     "instant": true
+    }
+   ],
+   "options": {
+    "textMode": "name",
+    "colorMode": "background",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "green"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 9,
+    "w": 4,
+    "h": 4
+   },
+   "id": 6
+  },
+  {
+   "type": "stat",
+   "title": "Database role per node",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "platform_role_primary",
+     "legendFormat": "{{node}}",
+     "instant": true
+    }
+   ],
+   "options": {
+    "textMode": "value_and_name",
+    "colorMode": "background",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "primary",
+         "color": "green"
+        },
+        "0": {
+         "text": "replica",
+         "color": "blue"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 9,
+    "w": 4,
+    "h": 4
+   },
+   "id": 7
+  },
+  {
+   "type": "stat",
+   "title": "Lease renewed (last run)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "platform_lease_renewed",
+     "legendFormat": "{{node}}",
+     "instant": true
+    }
+   ],
+   "options": {
+    "textMode": "value_and_name",
+    "colorMode": "background",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "ok",
+         "color": "green"
+        },
+        "0": {
+         "text": "failed",
+         "color": "red"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 20,
+    "y": 9,
+    "w": 4,
+    "h": 4
+   },
+   "id": 8
+  },
+  {
+   "type": "timeseries",
+   "title": "Replica lag (transactions behind the primary)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "platform_replica_lag_txids",
+     "legendFormat": "{{node}}"
+    }
+   ],
+   "gridPos": {
+    "x": 12,
+    "y": 13,
+    "w": 12,
+    "h": 4
+   },
+   "id": 9
+  },
+  {
+   "id": 10,
+   "type": "row",
+   "title": "Nodes",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 17,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "CPU used",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "100 * (1 - avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))",
+     "legendFormat": "{{node}}"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 18,
+    "w": 8,
+    "h": 7
+   },
+   "id": 11
+  },
+  {
+   "type": "timeseries",
+   "title": "Memory used",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+     "legendFormat": "{{node}}"
+    }
+   ],
+   "gridPos": {
+    "x": 8,
+    "y": 18,
+    "w": 8,
+    "h": 7
+   },
+   "id": 12
+  },
+  {
+   "type": "timeseries",
+   "title": "Disk used (/)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "100 * (1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})",
+     "legendFormat": "{{node}}"
+    }
+   ],
+   "gridPos": {
+    "x": 16,
+    "y": 18,
+    "w": 8,
+    "h": 7
+   },
+   "id": 13
+  },
+  {
+   "type": "timeseries",
+   "title": "Network",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "sum by (node) (rate(node_network_receive_bytes_total{device!~\"lo|veth.*|br-.*|docker.*\"}[5m]))",
+     "legendFormat": "{{node}} in"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "-sum by (node) (rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|br-.*|docker.*\"}[5m]))",
+     "legendFormat": "{{node}} out"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 25,
+    "w": 8,
+    "h": 7
+   },
+   "id": 14
+  },
+  {
+   "type": "timeseries",
+   "title": "Load (1 min)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "node_load1",
+     "legendFormat": "{{node}}"
+    }
+   ],
+   "gridPos": {
+    "x": 8,
+    "y": 25,
+    "w": 8,
+    "h": 7
+   },
+   "id": 15
+  },
+  {
+   "type": "timeseries",
+   "title": "Scrape targets up",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "sum by (node, job) (up)",
+     "legendFormat": "{{node}} {{job}}"
+    }
+   ],
+   "description": "1 per target; a missing line means the node's agent stopped pushing.",
+   "gridPos": {
+    "x": 16,
+    "y": 25,
+    "w": 8,
+    "h": 7
+   },
+   "id": 16
+  },
+  {
+   "id": 17,
+   "type": "row",
+   "title": "Containers",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 32,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "Memory per container",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "container_memory_working_set_bytes{name!=\"\"}",
+     "legendFormat": "{{node}} {{name}}"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 33,
+    "w": 12,
+    "h": 9
+   },
+   "id": 18
+  },
+  {
+   "type": "timeseries",
+   "title": "CPU per container (cores)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "rate(container_cpu_usage_seconds_total{name!=\"\"}[5m])",
+     "legendFormat": "{{node}} {{name}}"
+    }
+   ],
+   "gridPos": {
+    "x": 12,
+    "y": 33,
+    "w": 12,
+    "h": 9
+   },
+   "id": 19
+  },
+  {
+   "id": 20,
+   "type": "row",
+   "title": "Traefik on each node (what reached the node)",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 42,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "Requests/s per service",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "sum by (node, service) (rate(traefik_service_requests_total[5m]))",
+     "legendFormat": "{{node}} {{service}}"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 43,
+    "w": 8,
+    "h": 8
+   },
+   "id": 21
+  },
+  {
+   "type": "timeseries",
+   "title": "5xx/s per service",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "sum by (node, service) (rate(traefik_service_requests_total{code=~\"5..\"}[5m]))",
+     "legendFormat": "{{node}} {{service}}"
+    }
+   ],
+   "gridPos": {
+    "x": 8,
+    "y": 43,
+    "w": 8,
+    "h": 8
+   },
+   "id": 22
+  },
+  {
+   "type": "timeseries",
+   "title": "p95 latency per service",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "vm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "fillOpacity": 10,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "vm"
+     },
+     "expr": "histogram_quantile(0.95, sum by (le, node, service) (rate(traefik_service_request_duration_seconds_bucket[5m])))",
+     "legendFormat": "{{node}} {{service}}"
+    }
+   ],
+   "gridPos": {
+    "x": 16,
+    "y": 43,
+    "w": 8,
+    "h": 8
+   },
+   "id": 23
+  }
+ ]
+}
