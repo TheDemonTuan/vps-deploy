@@ -68,9 +68,10 @@ Edit, Workers Routes Edit, Cloudflare Tunnel Edit, DNS Edit, Zone Read. Drain a 
 
 1. **Instance**: Oracle Linux, ingress only SSH 22 (security list and firewalld). Grow the boot
    volume (`oci-growfs -y`). Record the host key fingerprint from the OCI console serial log,
-   not from a first connection. Upgrade the tenancy to Pay As You Go (Always Free resources stay
-   free): Oracle reclaims idle Always Free instances (95th-percentile CPU, network and A1 memory
-   all under 20 % over 7 days), which a lightly loaded replica is.
+   not from a first connection. Oracle reclaims idle Always Free instances (over 7 days,
+   95th-percentile CPU, network and A1 memory all under 20 %), which a lightly loaded replica is:
+   install `keepalive/` (`platform-keepalive.service`, holds 1.5 GB resident) on a node under
+   20 % memory, or upgrade its tenancy to Pay As You Go (Always Free resources stay free).
 2. **Docker + CrowdSec**: Docker CE, CrowdSec and `crowdsec-firewall-bouncer-nftables` with
    `/etc/crowdsec` copied from n1 (standalone LAPI on `172.31.254.1:8080`, AppSec `:7422`; add
    every node's IP to `parsers/s02-enrich/03-self-whitelist.yaml` on every node: SFTP polling
