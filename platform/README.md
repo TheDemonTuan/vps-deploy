@@ -163,6 +163,20 @@ with `weight: 0` (it still takes retries and pinned probes).
    `systemctl enable --now vps-deploy-drain@<app>.timer`, and apply again with the real weight.
    Add the host to the app's caller workflow (after the primary host).
 
+## Publish content (mc-hub `import`)
+
+From the operator's machine, with the `vps-node-*` ssh aliases:
+
+```sh
+platform/mchub-import.sh path/to/bundle   # content.json + the files it names
+```
+
+It imports once, on the node that is both the lease writer and a running primary (refusing
+while nodes disagree, mid-failover), then waits until every reachable replica's Litestream copy
+has it. Nothing else is copied by hand: the files go to R2 during the import and the other nodes
+read them from there. A replica refuses `import` by itself (read-only database). Pages show the
+change within about 5 minutes (each node's page cache).
+
 ## Failover (the writer is down)
 
 Reads keep working without action (the Worker retries the other node), readers' writes are
