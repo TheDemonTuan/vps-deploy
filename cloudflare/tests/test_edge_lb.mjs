@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { beforeEach, test } from 'node:test';
 import worker, { Lease, pickOrder, _test } from '../edge-lb/index.mjs';
 import config from '../edge-lb/config.mjs';
@@ -109,11 +109,15 @@ test('writes, admin, sessions and downloads go to the writer; a write sets the s
   assert.equal(points[0].doubles[0], 200);
 });
 
-test('only a node may pin a read; a pinned write still reaches the writer', async () => {
+test('only a node (or the cron, with the derived pin key) may pin a read; a pinned write still reaches the writer', async () => {
   await call('/healthz', { headers: { 'X-Edge-Node': 'n2' } }, config.nodes.n1.ip);
   await call('/api/comments', { method: 'POST', body: '{}', headers: { 'X-Edge-Node': 'n2' } }, config.nodes.n1.ip);
   await call('/healthz', { headers: { 'X-Edge-Node': 'n2' } }, clientOn('n1'));
-  assert.deepEqual(calls.map((c) => c.node), ['n2', 'n1', 'n1']);
+  const pin = createHash('sha256').update('pin:node-key').digest('hex');
+  await call('/healthz', { headers: { 'X-Edge-Node': 'n2', 'X-Edge-Pin': pin } }, clientOn('n1'));
+  await call('/healthz', { headers: { 'X-Edge-Node': 'n2', 'X-Edge-Pin': 'node-key' } }, clientOn('n1'));
+  assert.deepEqual(calls.map((c) => c.node), ['n2', 'n1', 'n1', 'n2', 'n1']);
+  assert.equal(calls[3].headers.has('x-edge-pin'), false);
 });
 
 test('a failing node is retried once on the other and then tried last', async () => {
@@ -182,6 +186,7 @@ test("a reader's write is queued while the writer is down and replayed with a si
   // Not queued: other writes, admin writes (their session would not survive the replay).
   assert.equal((await call('/api/comments', { method: 'POST', body: '{}' })).status, 530);
   assert.equal((await call('/api/posts/a/comments', { method: 'POST', body: '{}', headers: { cookie: '__Host-mch_session=t' } })).status, 530);
+  assert.equal((await call('/api/posts/a/views', { method: 'POST', body: '{}', headers: { 'x-edge-replay': '1.2.3.4 1 ab' } })).status, 530);
   replies = { n1: new TypeError('connect') };
   assert.equal((await call('/api/feedback/7/vote', { method: 'POST', body: '{"vote":true}' })).status, 202);
   assert.equal(queued.length, 2);

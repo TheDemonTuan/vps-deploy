@@ -16,8 +16,10 @@ const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 const DOWN_MS = 30_000;
 const STICKY = "__Host-edge-primary";
 // Deploy probes check one node: "X-Edge-Node: <id>", honoured only from a node's own address, so
-// nobody else can steer traffic onto one node.
+// nobody else can steer traffic onto one node, or with X-Edge-Pin (from NODE_KEY): the cron's
+// checks may come back through this Worker instead of straight to the node.
 const PIN = "x-edge-node";
+const PIN_KEY = "x-edge-pin";
 const NODE_BY_IP = new Map(Object.entries(config.nodes).map(([id, node]) => [node.ip, id]));
 // Nodes renew the lease every minute; promotion without --force waits until the writer missed this.
 const LEASE_MS = 180_000;
@@ -90,7 +92,8 @@ export default {
         site.nodes.map(async (node) => {
           let detail = "";
           try {
-            const response = await send(new Request(`https://${host}/healthz`, { headers: { "user-agent": "edge-lb-health" } }), node, site, 15_000);
+            const headers = { "user-agent": "edge-lb-health", [PIN]: node, ...(env.NODE_KEY && { [PIN_KEY]: await pinKey(env) }) };
+            const response = await send(new Request(`https://${host}/healthz`, { headers }), node, site, 15_000);
             if (response.status !== 200) detail = `HTTP ${response.status}`;
           } catch (error) {
             detail = error?.name || String(error);
@@ -120,9 +123,12 @@ async function route(request, url, site, env, ctx, meta) {
 
   // Only reads may be pinned: a write must still reach the writer.
   const pinned = request.headers.get(PIN);
-  if (pinned && SAFE.has(request.method) && site.nodes.includes(pinned) && NODE_BY_IP.has(client)) {
+  const pinKeyed = env.NODE_KEY && request.headers.has(PIN_KEY) && same(request.headers.get(PIN_KEY), await pinKey(env));
+  if (pinned && SAFE.has(request.method) && site.nodes.includes(pinned) && (NODE_BY_IP.has(client) || pinKeyed)) {
     meta.node = pinned;
-    return send(request, pinned, site);
+    const forwarded = new Request(request);
+    forwarded.headers.delete(PIN_KEY);
+    return send(forwarded, pinned, site);
   }
 
   const state = await leaseState(site, env);
@@ -130,8 +136,10 @@ async function route(request, url, site, env, ctx, meta) {
     meta.node = state.writer;
     const fanout = rules.fanout.find((f) => f.method === request.method && new RegExp(f.path).test(url.pathname));
     const cookie = request.headers.get("cookie") || "";
+    // A replay that reaches this handler again (it carries X-Edge-Replay) fails instead, so the
+    // consumer retries it rather than queueing a copy under the Worker's own address.
     const queueable = env.WRITES && env.REPLAY_KEY && !SAFE.has(request.method) && rules.queue_paths.some((p) => new RegExp(p).test(url.pathname)) &&
-      !rules.primary_cookies.some((name) => cookie.includes(name + "="));
+      !rules.primary_cookies.some((name) => cookie.includes(name + "=")) && !request.headers.has("x-edge-replay");
     const body = fanout || queueable ? await request.clone().arrayBuffer() : null;
     let response;
     try {
@@ -305,7 +313,15 @@ async function sign(secret, ip, at) {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${ip} ${at}`)));
-  return `${ip} ${at} ${Array.from(mac, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  return `${ip} ${at} ${hex(mac)}`;
+}
+
+const hex = (bytes) => Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
+
+// What the cron sends as X-Edge-Pin: derived, so NODE_KEY itself (which can take the lease) never
+// travels to an origin.
+async function pinKey(env) {
+  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`pin:${env.NODE_KEY}`)));
 }
 
 // Only what the origin lets a shared cache store: public or no-cache (stored, revalidated after
