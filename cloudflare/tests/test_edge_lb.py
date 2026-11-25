@@ -11,8 +11,8 @@ from tunnel_api import Failure  # noqa: E402
 
 class EdgeLb(unittest.TestCase):
     def test_committed_worker_config_matches_the_registry(self):
-        # Weights, nodes and rules live in hosts/ and registry/; config.json is only their rendering.
-        self.assertEqual((edge_lb.WORKER / 'config.json').read_text(), edge_lb.rendered())
+        # Weights, nodes and rules live in hosts/ and registry/; config.mjs is only their rendering.
+        self.assertEqual((edge_lb.WORKER / 'config.mjs').read_text(), edge_lb.rendered())
 
     def test_a_replica_host_without_an_edge_identity_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -35,7 +35,7 @@ flowchart LR
 Edit `hosts/*.yml` / `registry/*.yml`, then:
 
 ```sh
-python3 cloudflare/edge_lb.py --operation render   # rewrites edge-lb/config.json; commit it
+python3 cloudflare/edge_lb.py --operation render   # rewrites edge-lb/config.mjs; commit it
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… python3 cloudflare/edge_lb.py --operation survey
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… python3 cloudflare/edge_lb.py --operation apply
 ```

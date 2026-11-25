@@ -1,4 +1,4 @@
-{
+export default {
   "nodes": {
     "n1": {
       "weight": 30
@@ -70,4 +70,4 @@
       "zone": "thedemontuan.dev"
     }
   }
-}
+};

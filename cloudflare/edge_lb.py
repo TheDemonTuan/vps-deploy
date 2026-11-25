@@ -2,7 +2,7 @@
 """Edge load balancer for apps that run on several nodes (registry `replica_hosts`).
 
 Source of truth: hosts/<node>.yml `edge` (id, tunnel, weight) and registry/<app>.yml `balance`.
-`--operation render` writes edge-lb/config.json (committed; a test keeps it equal to the
+`--operation render` writes edge-lb/config.mjs (committed; a test keeps it equal to the
 registry). `survey` reports and `apply` makes Cloudflare match it:
 - per node and zone, a proxied CNAME <id>-origin.<zone> to the node's tunnel, and the tunnel's
   ingress for every balanced hostname the node serves;
@@ -69,8 +69,13 @@ def plan(root=ROOT):
             'tunnels': {node: (nodes[node]['tunnel'], sorted(hostnames)) for node, hostnames in tunnels.items()}}
 
 
+def module(worker):
+    # A JS module: the Workers upload API takes no JSON modules.
+    return 'export default ' + json.dumps(worker, indent=2, sort_keys=True) + ';\n'
+
+
 def rendered(root=ROOT):
-    return json.dumps(plan(root)['worker'], indent=2, sort_keys=True) + '\n'
+    return module(plan(root)['worker'])
 
 
 def zones(client, wanted):
@@ -135,7 +140,7 @@ def upload(client, worker, buckets):
                 'bindings': [{'type': 'r2_bucket', 'name': name, 'bucket_name': bucket} for name, bucket in sorted(buckets.items())]}
     parts = [('metadata', 'metadata.json', 'application/json', json.dumps(metadata).encode()),
              ('index.mjs', 'index.mjs', 'application/javascript+module', (WORKER / 'index.mjs').read_bytes()),
-             ('config.json', 'config.json', 'application/json', json.dumps(worker).encode())]
+             ('config.mjs', 'config.mjs', 'application/javascript+module', module(worker).encode())]
     boundary = uuid.uuid4().hex
     body = b''.join(b'--%s\r\nContent-Disposition: form-data; name="%s"; filename="%s"\r\nContent-Type: %s\r\n\r\n%s\r\n'
                     % (boundary.encode(), name.encode(), filename.encode(), kind.encode(), data)
@@ -154,7 +159,7 @@ def upload(client, worker, buckets):
 
 def run(client, operation):
     edge = plan()
-    if (WORKER / 'config.json').read_text() != rendered():
+    if (WORKER / 'config.mjs').read_text() != rendered():
         raise Failure('EDGE_CONFIG_STALE: run --operation render and commit')
     sites = edge['worker']['sites']
     zone_ids = zones(client, {site['zone'] for site in sites.values()})
@@ -199,7 +204,7 @@ def main():
     parser.add_argument('--operation', choices=('render', 'survey', 'apply'), required=True)
     args = parser.parse_args()
     if args.operation == 'render':
-        (WORKER / 'config.json').write_text(rendered())
+        (WORKER / 'config.mjs').write_text(rendered())
         return
     print(json.dumps(run(Client(), args.operation), sort_keys=True))
 
