@@ -16,7 +16,7 @@ import time
 sys.dont_write_bytecode = True
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-from core import (Failure, SHA, app_registration, atomic, fixture_authorized,
+from core import (Failure, SHA, app_hosts, app_registration, atomic, fixture_authorized,
                   host, host_registration, lock, manifest, registration_id,
                   require, trusted_path)
 from preflight import adopt_cgw, check as preflight
@@ -176,7 +176,7 @@ def put(path, data, mode):
 
 
 def profile_data(app, release, binding, host_record, previous):
-    profile = dict(binding, platform_ref=release, dynamic_dir=host_record['traefik']['dynamic_dir'])
+    profile = dict(binding, platform_ref=release, dynamic_dir=host_record['traefik']['dynamic_dir'], host=host_record['host'])
     if previous:
         previous = dict(previous)
         for name in ('fixture_ci', 'image_repository', 'image_repositories', 'rtk_image_repository',
@@ -406,7 +406,7 @@ def main():
     require(git(args.app_source, 'cat-file', '-t', args.app_ref) == b'commit', 'INVALID_APP_REF')
     registration = app_registration(root, args.app)
     host_record = host_registration(root, args.host)
-    require(registration['host'] == args.host and args.app in host_record['apps'], 'APP_BINDING_MISMATCH')
+    require(args.host in app_hosts(registration) and args.app in host_record['apps'], 'APP_BINDING_MISMATCH')
     valid_key(args.public_key)
     manifest_path = registration['caller']['config']
     # Keep commit bytes: manifest SHA must not hash a normalized YAML representation.
@@ -424,7 +424,8 @@ def main():
         trusted_path(installed, directory=True)
         if (installed / 'registry').exists():
             old_registration = app_registration(installed, args.app)
-            old_host = host_registration(installed, old_registration['host'])
+            old_host = host_registration(installed, previous.get('host', old_registration['host']))
+            require(old_host['host'] == args.host, 'APP_BINDING_MISMATCH')
             host(cfg, old_registration, old_host)
             cgw_transition = 'cgw' in registration['manifest'] and 'cgw' not in old_registration['manifest']
             cgw_suspension = 'cgw' not in registration['manifest'] and 'cgw' in old_registration['manifest']
@@ -445,7 +446,7 @@ def main():
         require(source_env.stat().st_uid in (0, source_env.parent.stat().st_uid) and not source_env.parent.stat().st_mode & 0o022, 'UNSAFE_RUNTIME_ENV')
     require(stat.S_IMODE(source_env.stat().st_mode) == 0o600, 'UNSAFE_RUNTIME_ENV')
     composed = preflight(root, args.app, registration, binding, source_env, previous,
-                         cgw_transition=cgw_transition, cgw_suspension=cgw_suspension)
+                         cgw_transition=cgw_transition, cgw_suspension=cgw_suspension, node=args.host)
     selected_volumes = {composed['volumes'][mount['source']]['name'] for service in composed['services'].values() for mount in service.get('volumes', []) if mount.get('type') == 'volume'}
     from core import container
     for enrolled in CONFIG.iterdir() if CONFIG.exists() else ():

@@ -7,7 +7,7 @@ from core import Failure, container, container_digest, require
 
 
 def check(root, app, registration, binding, runtime, previous, *, cgw_transition=False,
-          cgw_suspension=False, source_sha=None, platform_ref=None):
+          cgw_suspension=False, source_sha=None, platform_ref=None, node=None):
     names = registration['runtime']
     raw = runtime.read_text()
     present = {line.split('=', 1)[0] for line in raw.splitlines() if '=' in line and not line.startswith('#')}
@@ -51,7 +51,8 @@ def check(root, app, registration, binding, runtime, previous, *, cgw_transition
            'COMPOSE_PROJECT': binding['compose_project'],
            'IMAGE_REF': container_digest(next(iter(slots.values())), image),
            'DASHBOARD_HOST': binding['dashboard_host'], 'DASHBOARD_ALIAS_HOST': binding['dashboard_alias_host'],
-           'API_HOST': binding['api_host'], 'EDGE_NETWORK': binding['edge_network']}
+           'API_HOST': binding['api_host'], 'EDGE_NETWORK': binding['edge_network'],
+           'NODE_ROLE': 'replica' if node and node != registration['host'] else 'primary'}
     if 'rtk' in registration['manifest']:
         env['RTK_NETWORK'] = binding['rtk_network']
     argv = ['/usr/bin/docker', 'compose', '--env-file', str(runtime), '-p', binding['compose_project'],

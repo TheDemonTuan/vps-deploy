@@ -24,7 +24,9 @@ def environment(profile, config, image, rtk=False):
             values[key] = value
         require(all(values.get(key) for key in profile['registration']['runtime']['required_env']), 'MISSING_RUNTIME_ENV')
     policy = profile['registration']['manifest']
-    values.update(IMAGE_REF=image, APP_ID=profile['app'], APP_PORT=str(policy['runtime']['port']), HEALTH_PATH=policy['health']['path'], HEALTH_TIMEOUT=str(policy['health']['timeout_seconds']), COMPOSE_PROJECT=profile['compose_project'], DASHBOARD_HOST=profile['dashboard_host'], API_HOST=profile['api_host'], EDGE_NETWORK=profile['edge_network'], RTK_IMAGE=image if rtk else (profile['rtk_image_repository'] or ''), RTK_NETWORK=profile.get('rtk_network', ''), RTK_PROJECT=profile['app'] + '-rtk', CGW_NETWORK=profile.get('cgw_network', ''), CGW_CONFIG_DIR=str(config) if config else '')
+    # The registry's `host` runs the single writer; every replica host gets a read-only role.
+    node = profile.get('host_registration', {}).get('host', profile['registration']['host'])
+    values.update(IMAGE_REF=image, APP_ID=profile['app'], APP_PORT=str(policy['runtime']['port']), HEALTH_PATH=policy['health']['path'], HEALTH_TIMEOUT=str(policy['health']['timeout_seconds']), COMPOSE_PROJECT=profile['compose_project'], DASHBOARD_HOST=profile['dashboard_host'], API_HOST=profile['api_host'], EDGE_NETWORK=profile['edge_network'], RTK_IMAGE=image if rtk else (profile['rtk_image_repository'] or ''), RTK_NETWORK=profile.get('rtk_network', ''), RTK_PROJECT=profile['app'] + '-rtk', CGW_NETWORK=profile.get('cgw_network', ''), CGW_CONFIG_DIR=str(config) if config else '', NODE_ROLE='primary' if node == profile['registration']['host'] else 'replica')
     return dict(PATH='/usr/bin:/bin', HOME='/root', LANG='C', **values)
 
 

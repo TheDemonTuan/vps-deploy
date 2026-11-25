@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 probe_observed_slot() {
-  local status probe
+  local status probe pin=()
   tmp="$(mktemp -d /tmp/vps-deploy-probe.XXXXXXXX)" || return 1
   trap 'rm -rf -- "$tmp"' EXIT
   probe="$(python3 -c 'import uuid;print(uuid.uuid4().hex)')"
+  # A balanced site: the edge load balancer sends this probe to this node only.
+  [[ -z ${EDGE_NODE:-} ]] || pin=(-H "X-Edge-Node: $EDGE_NODE")
   status="$(curl --silent --show-error --connect-timeout 2 --max-time 5 \
-    -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+    -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "${pin[@]}" \
     --dump-header "$tmp/headers" --output "$tmp/body" --write-out '%{http_code}' \
     "https://${API_HOST}${HEALTH_PATH}?deploy_probe=${probe}")" || return 1
   python3 - "$status" "$tmp/headers" "$tmp/body" "$GENERATION_HEADER" <<'PY'
@@ -97,8 +99,8 @@ valid_probe() {
 }
 case "${1:-}" in
   probe)
-    [[ $# == 4 ]] && valid_probe "$2" "$3" "$4" || exit 2
-    API_HOST="$2"; HEALTH_PATH="$3"; GENERATION_HEADER="$4"; probe_observed_slot ;;
+    [[ $# == 4 || ( $# == 5 && $5 =~ ^[a-z][a-z0-9]{0,15}$ ) ]] && valid_probe "$2" "$3" "$4" || exit 2
+    API_HOST="$2"; HEALTH_PATH="$3"; GENERATION_HEADER="$4"; EDGE_NODE="${5:-}"; probe_observed_slot ;;
   cutover)
     shift; cutover "$@" ;;
   *) exit 2 ;;

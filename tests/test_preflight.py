@@ -209,7 +209,7 @@ class RuntimeAdoption(unittest.TestCase):
             stack.enter_context(mock.patch('core.trusted_path', side_effect=lambda path, **kw: path))
             stack.enter_context(mock.patch('installer.run', side_effect=run))
             with self.assertRaisesRegex(Failure, 'KEY_INSTALL_FAILED'):
-                installer.activation(args, ROOT, b'new-manifest', {}, {'traefik': {'dynamic_dir': '/fixture'}},
+                installer.activation(args, ROOT, b'new-manifest', {}, {'host': 'oracle-main', 'traefik': {'dynamic_dir': '/fixture'}},
                                      {'platform_ref': 'old'}, cfg / 'runtime.env', {}, cgw_transition=True)
         self.assertEqual((state_dir / 'state.json').read_bytes(), initial)
         self.assertEqual((cfg / 'host.json').read_bytes(), b'{"platform_ref":"old"}')

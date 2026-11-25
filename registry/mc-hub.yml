@@ -1,6 +1,8 @@
 version: 1
 app: mc-hub
 host: oracle-main
+# Read copies behind the edge load balancer (cloudflare/edge-lb); `host` keeps the writes.
+replica_hosts: [oracle-sg2]
 caller:
   repository: TheDemonTuan/mc-hub
   ref: refs/heads/main
@@ -23,3 +25,26 @@ route:
   generation_header: X-MC-Hub-Route-Generation
   required_middlewares: [deny-internal, tunnel-only]
 image_access: private
+balance:
+  # Writes, admin, login and single-use downloads go to the primary (mc-hub-api owns /api and
+  # /media on this host). After a write the client reads from the primary for sticky_seconds.
+  primary_paths: ['^/admin(/|$)', '^/api/(admin|auth|push)/', '^/api/dl(/|$)']
+  primary_cookies: [__Host-mch_session]
+  sticky_seconds: 15
+  # The admin's cache purge reaches the other nodes once replication has caught up.
+  fanout:
+    - {method: POST, path: '^/admin/revalidate$', delay_seconds: 8}
+  # Hashed build assets skip the Worker: the edge cache serves them.
+  bypass_paths: ['/_astro/*']
+  # Public images come from R2 (mc-hub-api mirrors every upload there), as mc-hub-api serves them.
+  public_bucket:
+    binding: MEDIA
+    bucket: mc-hub-media
+    path: '^/media/[0-9a-f]{32}(-sm)?\.jpg$'
+    strip: /media/
+    key_prefix: media/
+    headers:
+      Cache-Control: 'public, max-age=31536000, immutable'
+      Content-Type: image/jpeg
+      X-Content-Type-Options: nosniff
+      Content-Security-Policy: "default-src 'none'; sandbox"
