@@ -27,6 +27,15 @@
   loop: [platform-peer.service, platform-peer.timer, platform-role.service]
   notify: Reload systemd
 
+# platform-peer.service may write only this file of the volume, and systemd binds it only if it
+# exists. touch, like role.sh, so it gets the volume's label. Fresh is no laxer than no file (no
+# fence); peer.sh ages it on its next renewal when another node holds the lease.
+- name: Writer-lease file in the mc-hub-api volume (peer.sh keeps it)
+  ansible.builtin.command: touch /var/lib/docker/volumes/mc-hub-api-data/_data/writer-lease  # noqa: command-instead-of-module
+  args:
+    creates: /var/lib/docker/volumes/mc-hub-api-data/_data/writer-lease
+    removes: /var/lib/docker/volumes/mc-hub-api-data/_data
+
 - name: Peer SELinux module (docker under NoNewPrivileges)
   ansible.builtin.copy:
     src: "{{ platform_src }}/peer/platform-peer.cil"
