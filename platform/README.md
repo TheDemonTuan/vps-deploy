@@ -53,13 +53,12 @@ flowchart LR
   - Workers Analytics Engine dataset `edge_lb`, a point per request: node, method, outcome
     (origin, hit, stale, queued, bucket, limited), status, milliseconds.
     `edge_lb.py --operation stats` sums the last hour (token: Account Analytics Read).
-- **Edge WAF** (`cloudflare/edge_waf.py --operation survey|apply`, token `edge-waf`: Zone Read and
-  Zone WAF Edit, in `~/.config/cloudflare/edge-waf.token`): `edge-probe-paths` on both zones
+- **Edge WAF & Rulesets** (`cloudflare/tofu/rulesets.tf`): `edge-probe-paths` on both zones
   blocks dotfiles (not `/.well-known/`), `*.php` and WordPress paths before the tunnel; on
   thedemontuan.dev `edge-free-managed` runs Cloudflare's Free Managed Ruleset except on
-  monitor./metrics. tuannguyenviet.site keeps its hand-made Free ruleset rule (OmniRoute hosts
-  only). The script appends and patches only its own rules; the controller's `Edge IP bans`
-  and omniroute's API path rule (first) are left alone. Blocks show in Security → Events.
+  monitor./metrics. tuannguyenviet.site keeps its Free ruleset rule (OmniRoute hosts only)
+  and API path rules. Managed declaratively via OpenTofu in `cloudflare/tofu/`. Blocks show in
+  Security → Events.
 - **Data**: SQLite stays single-writer on the primary. Litestream (`litestream/`) writes its WAL
   changes to a local directory; each replica follows it over read-only SFTP (`sync/`) into its
   own file, and mc-hub-api opens that read-only (`DB_ROLE` = engine `NODE_ROLE`, or the volume's
