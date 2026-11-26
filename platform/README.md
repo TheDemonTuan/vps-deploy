@@ -148,9 +148,9 @@ the nodes' `opc` keys); CI only lints it.
    days, 95th-percentile CPU, network and A1 memory all under 20 %), which a lightly loaded
    replica is: `keepalive: true` in `ansible/host_vars/<host>.yml` on a node under 20 % memory, or
    upgrade its tenancy to Pay As You Go (Always Free resources stay free).
-2. **Cloudflare** (dashboard): the node's IP in the IP filter of the R2 token in
-   `litestream.env` (else the mirror and uploads fail there), and a tunnel
-   `shared-edge-<host>` (remotely managed).
+2. **Cloudflare** (dashboard): the node's IP in the IP filter of the account tokens
+   `litestream-mc-hub-db` and `mc-hub-media-nodes` (R2 backups and media; the litestream role
+   fails on a node they refuse). Its tunnel `shared-edge-<host>` comes from `cloudflare/tofu`.
 3. **Registry**: `hosts/<host>.yml` with `ssh` (address, port, fingerprint and `host_key`),
    `traefik`, `edge` (`id`, `tunnel`, `weight: 0`) and the balanced apps' bindings as on the
    other nodes; the host in each balanced app's `replica_hosts`; render.
