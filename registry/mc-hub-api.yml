@@ -26,7 +26,7 @@ route:
   required_middlewares: [deny-internal, tunnel-only, internal-only]
 image_access: private
 balance:
-  # The API host serves deploy probes and fallback reads; anything that writes goes to the writer
-  # (the holder of the edge lease, see mc-hub.yml).
+  # The API host serves only the platform's /healthz (deploy probes, the edge's checks) and the
+  # nodes' lease renewals; readers reach the API on the site's /api/ (mc-hub.yml).
   lease: mc-hub-api
-  primary_paths: ['^/api/(admin|auth|push)/', '^/api/dl(/|$)']
+  primary_paths: []

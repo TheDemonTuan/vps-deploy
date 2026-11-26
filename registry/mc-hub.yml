@@ -27,7 +27,7 @@ route:
 image_access: private
 balance:
   # Writes, admin, login and single-use downloads go to the writer: the node holding mc-hub-api's
-  # edge lease (registry `host` until a node runs platform/peer/role.sh promote). After a write the
+  # edge lease (registry `host` until the edge or role.sh promotes another). After a write the
   # client reads from it for sticky_seconds.
   lease: mc-hub-api
   primary_paths: ['^/admin(/|$)', '^/api/(admin|auth|push)/', '^/api/dl(/|$)']
@@ -36,8 +36,11 @@ balance:
   # The admin's cache purge reaches the other nodes once replication has caught up.
   fanout:
     - {method: POST, path: '^/admin/revalidate$', delay_seconds: 8}
-  # Readers' writes queued at the edge while the writer is down, replayed when it is back.
-  queue_paths: ['^/api/posts/[^/]+/(views|comments|compat)$', '^/api/feedback$', '^/api/feedback/[0-9]+/vote$']
+  # Readers' counters, queued at the edge while the writer is down and replayed when it is back:
+  # each counts once per reader (ON CONFLICT), so a replay delivered twice changes nothing.
+  # Comments and feedback are not queued (a captcha token lasts 5 minutes, a copy would post
+  # twice): the edge answers 503 WRITER_UNAVAILABLE and the reader keeps the text to send again.
+  queue_paths: ['^/api/posts/[^/]+/(views|compat)$', '^/api/feedback/[0-9]+/vote$']
   # Public pages and post reads stay 30 s in the edge's Cache API (only responses marked public or
   # no-cache), and up to a day for when every node fails.
   edge_cache:

@@ -361,8 +361,9 @@ The portfolio is no longer routed. The apex serves mc-hub; the portfolio source 
 
 `mc-hub` registers `TheDemonTuan/mc-hub` on `main`, image `ghcr.io/thedemontuan/mc-hub`
 (Astro SSR on Bun), public host `thedemontuan.dev`. `mc-hub-api` registers
-`TheDemonTuan/mc-hub-api`, image `ghcr.io/thedemontuan/mc-hub-api` (Go, SQLite WAL), public
-host `api.thedemontuan.dev`. Both expose JSON `/healthz` on port `8080`, run
+`TheDemonTuan/mc-hub-api`, image `ghcr.io/thedemontuan/mc-hub-api` (Go, SQLite WAL), platform
+host `api.thedemontuan.dev` (only `/healthz` and the edge lease: readers reach the API on
+`thedemontuan.dev/api/`, SSR on the node's internal entrypoint). Both expose JSON `/healthz` on port `8080`, run
 UID 1000 with a read-only root, and deploy independently.
 
 - Both register `image_access: private`: their repositories and GHCR images are private, so
@@ -416,9 +417,8 @@ UID 1000 with a read-only root, and deploy independently.
 - Admin is two layers: `mc-hub-access.yml` (survey, then apply) creates the Cloudflare Access
   app "MC Hub Admin" over `/admin`, `/api/admin` and `/api/auth` on every site domain, with its own
   allow policy "MC Hub admins" (exact emails; first copied from the OmniRoute admin app, then
-  edited only in the dashboard). The API host routes only SSR reads
-  (`/api/posts*`, `/api/pages/*`, `/api/settings`, `/api/stats`, `/api/auth/me`, `/healthz`); everything else
-  there hits `deny-internal`.
+  edited only in the dashboard). The API host routes only `/healthz` (deploy probes, the
+  edge's checks); everything else there hits `deny-internal`, and Cloudflare blocks it first.
 - Edge cache: `mc-hub-cache.yml` (survey, then apply) keeps one rule
   (`mc-hub-public-edge-cache`) on the cache-settings entrypoint of the site domain's zone.
   It covers the site host except `/api/`, `/admin` and requests with `__Host-mch_session`;

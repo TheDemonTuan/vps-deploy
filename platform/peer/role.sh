@@ -55,6 +55,8 @@ become() {
   rm -rf "$volume/.mc-hub.db-litestream"
   if [ "$want" = primary ]; then
     echo primary >"$volume/role"
+    # mc-hub-api takes writes while this is under 150 s old; peer.sh keeps it from now on.
+    touch "$volume/writer-lease"
     rm -f "$follows"
     litestream --profile primary up -d
     # Also the apps an unfinished step-down left stopped (docker restart starts them).

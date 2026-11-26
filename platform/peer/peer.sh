@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # platform-peer: runs every minute on each edge node (platform-peer.timer). It reaches the other
 # nodes only through their read-only SFTP (platform/sync) and through the edge.
-# 1. Renews this node's edge lease (cloudflare/edge-lb) and, when the lease's writer no longer
-#    matches this node's database role (or a replica follows another node), starts
-#    platform-role.service (role.sh) to switch it. First, so a slow check cannot starve it.
-#    The edge checks every node's sites itself (cron) and alerts; this node alerts after two
-#    failed renewals.
+# 1. Renews this node's edge lease (cloudflare/edge-lb) with its replication position and, when
+#    the lease's writer no longer matches this node's database role (or a replica follows another
+#    node), starts platform-role.service (role.sh) to switch it. First, so a slow check cannot
+#    starve it. It also keeps mc-hub-api's writer-lease file: touched while the lease names this
+#    node as the primary, aged at once when another node holds it; a primary takes no writes once
+#    the file is 150 s old, so a writer cut off from the lease stops before the edge (3 minutes)
+#    may give it to another node. The edge checks every node's sites itself (cron) and alerts;
+#    this node alerts after two failed renewals.
 # 2. On the writer: the R2 mirror runs only while the lease confirms this node, and the day's
 #    database backup goes to /data/backups (the mirror copies it to R2) and to OCI Object Storage.
 # 3. On a replica, checks that the Litestream follower keeps up with the writer. Telegram after
@@ -61,9 +64,17 @@ role=$(cat "$volume/role" 2>/dev/null || echo "$ROLE")
 # replica that was current when the writer was last seen healthy.
 synced=$(date +%s)
 [ "$role" = primary ] || synced=$(cat "$state/synced" 2>/dev/null || echo 0)
+# Litestream position (16 hex digits): the primary's newest LTX, a replica's follower. The edge
+# promotes only a replica (nearly) as far as the writer's last report.
+if [ "$role" = primary ]; then
+  txid=$(ls -1 /srv/platform-sync/litestream/mc-hub-api/ltx/*/*.ltx 2>/dev/null | sed -n 's/.*-\([0-9a-f]\{16\}\)\.ltx$/\1/p' | sort | tail -1)
+else
+  txid=$(tr -d '\n' <"$volume/mc-hub.db-txid" 2>/dev/null)
+fi
+[[ $txid =~ ^[0-9a-f]{16}$ ]] || txid=""
 renewed=0 writer=$(cat "$state/writer" 2>/dev/null || echo unknown)
 if lease=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/platform/edge-node-key)" |
-  curl -fsS -m 20 -K - -H 'content-type: application/json' -d "{\"op\":\"beat\",\"synced\":$synced}" "$LEASE_URL") &&
+  curl -fsS -m 20 -K - -H 'content-type: application/json' -d "{\"op\":\"beat\",\"synced\":$synced${txid:+,\"txid\":\"$txid\"}}" "$LEASE_URL") &&
   writer=$(jq -er '.writer' <<<"$lease"); then
   renewed=1
   echo "$writer" >"$state/writer"
@@ -72,6 +83,13 @@ fi
 writer_ip=$(awk -v n="$writer" '$1 == n {print $2}' /etc/platform/nodes)
 followed=$(sed -n 's/^PRIMARY_SSH=\(.*\):22$/\1/p' /etc/platform/litestream-primary.env 2>/dev/null)
 if [ "$renewed" = 1 ]; then
+  # A failed renewal leaves the file to age. A node the lease just named becomes primary through
+  # role.sh, which touches the file itself.
+  if [ "$writer" = "$NODE" ]; then
+    [ "$role" != primary ] || touch "$volume/writer-lease"
+  elif [ "$role" = primary ] || [ -e "$volume/writer-lease" ]; then
+    touch -d @0 "$volume/writer-lease"
+  fi
   # role.sh leaves stopped-apps behind when a step-down did not finish: run it again.
   if { [ "$writer" = "$NODE" ] && [ "$role" != primary ]; } || { [ "$writer" != "$NODE" ] && [ "$role" = primary ]; } ||
     { [ "$writer" != "$NODE" ] && [ "$writer_ip" != "$followed" ]; } || [ -e "$state/stopped-apps" ]; then
