@@ -1,0 +1,13 @@
+name: local/mc-hub-crs-scope
+# CRS 930120 (OS file names from lfi-os-files.data) matches readers' random Turnstile tokens: a
+# POST /api/posts/<slug>/downloads scored as an attack on ARGS.json.token (2026-11-25, two readers
+# in 30 h), and a few of those from one address within minutes become a ban on every node and at
+# the edge. Only that rule, only on the site's /api/; every other CRS rule and virtual patch stays
+# (same pattern as local/transactions-crs-scope). Installed as
+# /etc/crowdsec/appsec-configs/local-mc-hub-crs-scope.yaml on every node and listed in
+# /etc/crowdsec/acquis.d/appsec.yaml.
+pre_eval:
+  - filter: |-
+      IsOutBand && req.Host in ["thedemontuan.dev", "tuannguyenviet.site"] && req.URL.Path startsWith "/api/"
+    apply:
+      - RemoveOutBandRuleByID(930120)

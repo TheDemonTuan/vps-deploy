@@ -130,7 +130,8 @@ services:
     # edge-monitor: Traefik and VictoriaMetrics; monitor-egress: grafana.com (plugin) and the
     # Cloudflare API (Analytics Engine).
     networks: [edge-monitor, monitor-egress]
-    mem_limit: 384m
+    # Peaked at 95 % of 384m (2026-11-25).
+    mem_limit: 512m
 volumes:
   vmagent-buffer:
   victoriametrics:

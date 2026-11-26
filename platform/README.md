@@ -21,8 +21,9 @@ flowchart LR
   client always lands on the same node and nodes share clients by weight. A 5xx, a connect
   failure or no response headers within 10 s is retried once on the next node and marks the
   failed node last for 30 s. Writes (non-GET), `primary_paths`, `primary_cookies` and, for
-  `sticky_seconds` after a write, the same client go to the writer: the registry `host`, or with
-  `lease` the node its Durable Object names (re-read every 30 s; see Failover).
+  `sticky_seconds` after a write that returns content (not a 204 such as a view count), the same
+  client go to the writer: the registry `host`, or with `lease` the node its Durable Object names
+  (re-read every 30 s; see Failover).
   `fanout` repeats a request (the admin cache purge) on the other nodes after a delay.
   `X-Edge-Node: <id>` pins a read to one node, honoured only from a node's own IP (its
   `ssh.address`): the deploy probe (`lib/route.py`) uses it.
@@ -62,17 +63,22 @@ flowchart LR
   own file, and mc-hub-api opens that read-only (`DB_ROLE` = engine `NODE_ROLE`, or the volume's
   `role` file after a failover; writes there return 503 `READ_ONLY`, but the Worker never sends
   them). The primary mirrors that directory
-  and `/data/backups` to R2 hourly. Replication makes no R2 requests: following R2 directly
+  and `/data/backups` to R2 hourly; the mirror container never restarts by itself: `peer/` starts
+  it only while the lease confirms the node as writer and stops it after three failed renewals,
+  so an old primary back from a reboot cannot replace the new primary's R2 copy. `peer/` also
+  writes `/data/backups/daily-<UTC date>.db` on the confirmed writer (VACUUM INTO, 14 kept on the
+  node, every one in R2). Replication makes no R2 requests: following R2 directly
   listed ~480 objects a minute (Class A, beyond the free tier). Uploads are written locally and
   to R2; a node missing a file fetches it from R2.
 - **SSR** stays on the node: mc-hub calls `http://edge-traefik:8082` (entrypoint `internal`,
   router `mc-hub-api-internal`).
 - **Per-node limits**: Traefik rate limits and CrowdSec run per node; with client affinity a
   visitor's requests (except writes, which go to the primary) are seen by one node. `peer/`
-  (`platform-peer.timer`, every minute) copies each node's HTTP bans to the other as
-  `peer/<id>:<scenario>`, so the CrowdSec → Cloudflare controller on n1 puts them on the edge
-  list. It also renews the node's lease and, on a replica, checks that the follower keeps up;
-  Telegram after two bad runs and on recovery.
+  (`platform-peer.timer`, every minute) renews the node's lease first (Telegram after two failed
+  renewals), then copies each node's HTTP bans to the other as `peer/<id>:<scenario>`, so the
+  CrowdSec → Cloudflare controller on n1 puts them on the edge list. On a replica it checks that
+  the follower keeps up, including when the primary's SFTP cannot be read at all (the follower
+  uses the same link); Telegram after two bad runs and on recovery.
 - **Unban once**: `cscli decisions delete -i <ip>` on either node, or the Telegram bot's unban
   on n1. The node that removed a copy names the peer's ban in its `unbans.json` (`copies.jq`;
   check with `bash platform/peer/copies.test.sh`), the peer drops it within about two minutes,
@@ -132,8 +138,13 @@ with `weight: 0` (it still takes retries and pinned probes).
    looks like `ssh-bf`), bouncers `cs-firewall-bouncer-<node>` and `traefik`
    (key in `/opt/platform/edge/secrets/crowdsec-bouncer-key`, root 0600),
    `crowdsec-endpoint-guard.service` enabled. `crowdsec/platform-already-banned.yaml` into
-   `postoverflows/s01-whitelist/` and `crowdsec/local-no-ua-scope.yaml` into `appsec-configs/`
-   (part of n1's `/etc/crowdsec` already).
+   `postoverflows/s01-whitelist/`, `crowdsec/local-no-ua-scope.yaml` and
+   `crowdsec/local-mc-hub-crs-scope.yaml` into `appsec-configs/` and listed in
+   `acquis.d/appsec.yaml` (part of n1's `/etc/crowdsec` already). Allowlists
+   (`cscli allowlists list`) must match on every node: a ban the other node refuses to copy leaves
+   an address blocked on one node only. Security updates: `dnf install dnf-automatic`,
+   `upgrade_type = security` and `apply_updates = yes` in `/etc/dnf/automatic.conf`, the timer at
+   a different hour per node (`systemctl edit dnf-automatic.timer`), `systemctl enable --now dnf-automatic.timer`.
 3. **Networks** (same addressing as n1): `edge-crowdsec` 172.31.254.0/28 internal,
    `edge-cf-ingress` 172.31.250.0/28 internal, `edge-egress` 172.31.252.0/28, and each balanced
    app's edge network (`edge-mc-hub` 172.25.0.0/16, `edge-mc-hub-api` 172.27.0.0/16 internal).
@@ -267,14 +278,18 @@ sudo /opt/platform/peer/role.sh promote          # refused while the writer stil
 sudo /opt/platform/peer/role.sh promote --force  # the writer is up but must stop writing
 ```
 
-The lease names this node; within 30 s every colo sends writes here (and replays the queue
-here). The node starts Litestream as primary with a new lineage from its copy (writes the old
-primary had not replicated, normally about a second, are lost), writes `role` into the
-mc-hub-api volume and restarts mc-hub-api, which then opens the database writable. The mirror
-replaces the R2 copy with the new lineage within the hour. The old primary, once it renews again,
-sees it lost the lease: `platform-role.service` stops its Litestream and mc-hub-api, moves its
-database to `fenced-<time>/` in the volume, follows the new primary and starts mc-hub-api
-read-only. Promote it back the same way.
+The lease names this node; every colo sends writes here within 30 s, and the node keeps following
+the old primary for 35 s first, so writes a still-running old writer accepted in that window are
+kept (writes here return 503 `READ_ONLY` meanwhile; readers' writes are queued). The node then
+starts Litestream as primary with a new lineage from its copy (writes the old primary had not
+replicated, normally about a second, are lost), writes `role` into the mc-hub-api volume and
+restarts mc-hub-api, which then opens the database writable. The mirror replaces the R2 copy with
+the new lineage within the hour. The old primary, once it renews again, sees it lost the lease:
+`platform-role.service` stops its Litestream, mirror and mc-hub-api, moves its database to
+`fenced-<time>/` in the volume, follows the new primary and starts mc-hub-api read-only. If that
+restore does not finish within 5 minutes, mc-hub-api stays stopped and the next `peer/` run tries
+again (`/var/lib/platform-peer/stopped-apps` lists what to start). Switches never overlap
+(`/run/platform-role.lock`). Promote it back the same way.
 
 The deploy engine still follows the registry: until `host` and `replica_hosts` are swapped in
 the balanced apps' registries (render, release, `edge_lb.py --operation apply`), mc-hub-api's

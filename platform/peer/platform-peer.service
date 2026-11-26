@@ -13,5 +13,6 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-# node-exporter's textfile directory (platform/monitor); "-": the unit still starts without it.
-ReadWritePaths=/srv/platform-sync/crowdsec -/var/lib/node-exporter
+# node-exporter's textfile directory (platform/monitor) and the writer's daily backups; "-": the
+# unit still starts without them.
+ReadWritePaths=/srv/platform-sync/crowdsec -/var/lib/node-exporter -/var/lib/docker/volumes/mc-hub-api-data/_data/backups

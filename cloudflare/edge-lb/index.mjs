@@ -169,7 +169,9 @@ async function route(request, url, site, env, ctx, meta) {
     }
     if (!response) throw new Error("writer unreachable");
     if (fanout && response.ok) ctx.waitUntil(replay(request, body, fanout, site, state.writer).then(() => site.lease && lease(env, site, { op: "purge" })));
-    if (!SAFE.has(request.method) && response.status < 400 && rules.sticky_seconds > 0) {
+    // A 204 (a view count, a boost) has nothing to read back: no sticky cookie, so the reader keeps
+    // the edge cache and failover to the other node for the next pages.
+    if (!SAFE.has(request.method) && response.status < 400 && response.status !== 204 && rules.sticky_seconds > 0) {
       const sticky = new Response(response.body, response);
       sticky.headers.append("Set-Cookie", `${STICKY}=1; Max-Age=${rules.sticky_seconds}; Path=/; Secure; HttpOnly; SameSite=Lax`);
       return sticky;
