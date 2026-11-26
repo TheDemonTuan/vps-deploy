@@ -50,8 +50,9 @@ become() {
   litestream --profile primary --profile replica down
   # Any switch ends this node's lineage. Its served copy must go, or a replica pointed here before
   # this node's new snapshot restores the old one and stays stuck on it; its local LTX state
-  # (.mc-hub.db-litestream) must go, or a new primary tries to continue the old lineage.
-  find /srv/platform-sync/litestream -mindepth 1 -delete
+  # (.mc-hub.db-litestream) must go, or a new primary tries to continue the old lineage. The
+  # CrowdSec LAPI's copy beside it is lapi.sh's.
+  rm -rf /srv/platform-sync/litestream/mc-hub-api
   rm -rf "$volume/.mc-hub.db-litestream"
   if [ "$want" = primary ]; then
     echo primary >"$volume/role"

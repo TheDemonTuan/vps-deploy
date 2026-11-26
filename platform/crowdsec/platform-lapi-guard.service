@@ -1,0 +1,6 @@
+[Unit]
+Description=Stop CrowdSec writers after the edge grant expires
+
+[Service]
+Type=oneshot
+ExecStart=/opt/platform/crowdsec/lapi.sh guard

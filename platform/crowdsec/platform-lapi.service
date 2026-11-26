@@ -1,0 +1,9 @@
+[Unit]
+Description=Hold or follow the fleet's CrowdSec LAPI as the edge lease says (platform/crowdsec/lapi.sh)
+After=docker.service crowdsec.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/platform/crowdsec/lapi.sh reconcile
+TimeoutStartSec=300

@@ -9,6 +9,8 @@ log_max_backups: 3
 log_max_age: 30
 api_url: http://172.31.254.1:8080/
 api_key: {{ crowdsec_firewall_key }}
+# While the LAPI moves or is unreachable at start: wait for it rather than exit (and flush the set).
+retry_initial_connect: true
 ## TLS Authentication
 # cert_path: /etc/crowdsec/tls/cert.pem
 # key_path: /etc/crowdsec/tls/key.pem

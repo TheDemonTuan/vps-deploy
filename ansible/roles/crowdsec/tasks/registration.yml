@@ -1,53 +1,7 @@
-# A node without LAPI: crowdsec-lapi.service forwards 172.31.254.1:8080 to the LAPI node, so the
-# agent, cscli and both bouncers keep the same address as there. Registrations are made on the
-# LAPI node and checked against it on every run. The tunnel user and key come from main.yml.
-
-- name: Tunnel unit
-  ansible.builtin.template:
-    src: "{{ platform_src }}/crowdsec/crowdsec-lapi.service.j2"
-    dest: /etc/systemd/system/crowdsec-lapi.service
-    owner: root
-    group: root
-    mode: "0644"
-  register: crowdsec_tunnel_unit
-
-- name: Agent and firewall bouncer start after the tunnel
-  ansible.builtin.copy:
-    dest: "/etc/systemd/system/{{ item }}.service.d/20-lapi.conf"
-    content: |
-      [Unit]
-      After=crowdsec-lapi.service
-      Wants=crowdsec-lapi.service
-    owner: root
-    group: root
-    mode: "0644"
-  loop: [crowdsec, crowdsec-firewall-bouncer]
-
-# A LAPI that ran here before held 172.31.254.1:8080; the agent starts again in main.yml. Not a
-# handler: the tunnel needs the address now.
-- name: Stop a local LAPI
-  when: crowdsec_local_config.changed  # noqa: no-handler
-  ansible.builtin.systemd_service:
-    name: crowdsec
-    state: stopped
-    daemon_reload: true
-
-- name: Tunnel
-  ansible.builtin.systemd_service:
-    name: crowdsec-lapi.service
-    enabled: true
-    state: "{{ 'restarted' if crowdsec_tunnel_unit.changed else 'started' }}"
-    daemon_reload: true
-  ignore_errors: "{{ ansible_check_mode }}"  # the unit file is not written in check mode
-
-- name: Wait for the LAPI through the tunnel
-  ansible.builtin.uri:
-    url: http://172.31.254.1:8080/health
-  register: crowdsec_lapi_health
-  until: crowdsec_lapi_health.status == 200
-  retries: 12
-  delay: 5
-  check_mode: false
+# Every node's agent (machine <edge_id>) and bouncers (traefik-<edge_id>, cs-firewall-bouncer-<edge_id>)
+# are registered on the LAPI node and checked against it on every run, here or through the
+# tunnel; the registrations travel with the LAPI's database. Entries made under other names (n1's
+# from before the fleet: its machine id, traefik, cs-firewall-bouncer-<n>) pass the check as they are.
 
 - name: This node's agent can log in
   ansible.builtin.command: cscli lapi status

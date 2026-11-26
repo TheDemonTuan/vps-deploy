@@ -19,8 +19,10 @@ flowchart LR
   reads go to a node chosen by weighted rendezvous hashing of the client IP
   (`hosts/<node>.yml` `edge.weight`; lower on a node that also runs unbalanced services), so a
   client always lands on the same node and nodes share clients by weight. A 5xx (a read's 500
-  too), a connect failure or no response headers within 1 s is retried once on the next node
-  and (except a 500) marks the failed node last for 30 s; a `primary_paths` read waits for the
+  too; a node that does not route the site yet answers 503, `edge/dynamic/zz-unrouted.yml`), a
+  connect failure or no response headers within 1 s is retried once on the next node and
+  (except a 500) marks the failed node last for 30 s. When every node failed, a stale edge copy
+  is served, else the first node that only ran out of time is waited for. A `primary_paths` read waits for the
   writer instead (a replica refuses `/api/dl`, and a download's headers wait while a file the
   writer lacks comes from R2). The cron's checks (every minute) put a
   node last for everyone while its last check failed, and a replica whose follower has not
@@ -103,16 +105,17 @@ flowchart LR
   uses the same link), and restarts the follower on the lease writer when it follows another
   node; Telegram after two bad runs and on recovery. The fleet is `/etc/platform/nodes`
   (`<id> <ip> <ECDSA host key>`, written by `ansible/`).
-- **One CrowdSec LAPI** (`crowdsec_lapi_host`, n1; CrowdSec's multi-server setup): every node
-  runs the agent (its own logs, AppSec on `172.31.254.1:7422`), the nftables bouncer and
-  Traefik's bouncer; their alerts become decisions on n1, so a ban detected anywhere blocks
-  everywhere, and the CrowdSec → Cloudflare controller on n1 is the only writer of the edge
-  list. The other nodes reach n1's `172.31.254.1:8080` through `crowdsec-lapi.service`, an SSH
-  forward as `crowdsec-lapi` (key per node, `from=` its address, `permitopen` that port only):
-  no new open port. Agents (machine `n2`) and bouncers (`traefik-n2`, `cs-firewall-bouncer-n2`)
-  are registered on n1 by `ansible/`. With n1 down, the other nodes keep serving with the
-  decisions they hold (Traefik's bouncer is fail-open, `updateMaxFailure: -1`) but add no ban.
-- **Unban once**: `cscli decisions delete -i <ip>` on n1, or the Telegram bot's unban; every
+- **One CrowdSec LAPI**, on the lease writer. Every node runs its own agent, AppSec, nftables and
+  Traefik bouncers. On followers `crowdsec-lapi.service` forwards `172.31.254.1:8080` to the LAPI
+  via SSH with a host-pinned, source-restricted key; no public LAPI port. Litestream follows
+  `crowdsec.db` separately into `/var/lib/crowdsec/follow` so machine and bouncer registrations
+  move with decisions. `platform-lapi.service` switches roles independently of the app DB. Peer
+  checks the LAPI follower TXID; a missing restore cannot promote. Replication is asynchronous:
+  the newest decisions or unbans might not yet have reached the promoted node.
+- **Controller fencing**: only a writer heartbeat gets a local grant; the next writer waits out
+  its predecessor's last 180 s lease. A separate systemd timer stops the old LAPI and controller
+  when the 120 s boot-local grant expires, even if peer stops. Agents do not require this grant.
+- **Unban once**: `cscli decisions delete -i <ip>` on the current LAPI, or the Telegram bot's unban; every
   node drops it within a minute and the controller takes the IP off Cloudflare.
 - **No self-renewing bans**: the LAPI's first profile (`crowdsec/config/profiles.yaml`,
   `already_banned`) gives an IP that already has a ban no new one; the bouncer's own 403s used
@@ -121,7 +124,7 @@ flowchart LR
   `acquis.d/appsec.yaml`) drops the hub's out-of-band `crowdsecurity/experimental-no-user-agent`:
   six header-less API reads banned the owner's network for 16 h. That network leaves through
   three ISPs, each address banned on its own, so the site failed for some connections only.
-- **Controller** (`/opt/crowdsec-telegram-controller` on n1, no source repository: its releases
+- **Controller** (`/opt/crowdsec-telegram-controller` on all nodes, no source repository: its releases
   are the source; change one with `deploy/install.py --check/--install --source <copy>`): it
   tracks LAPI decisions by id, so it pulls the stream with `dedup=false` (release
   `574071fe425d99ee`). LAPI's default deduplication hides a deleted ban while another ban on the
@@ -297,6 +300,11 @@ again (`/var/lib/platform-peer/stopped-apps` lists what to start). Switches neve
 
 While the lease itself cannot be reached (the Worker down, every renewal failing), no node may
 write: the writer fences itself after 150 s and nobody can take over until renewals work.
+
+Inspect `writer` and `lapi` in `/var/lib/platform-peer` on every surviving node. Exactly one
+should say `lapi=here` and run `crowdsec-telegram-controller`; others name that node and their
+`cscli lapi status` must authenticate. Check both add and delete with a short TEST-NET decision,
+not a real visitor. Never enable a second controller to work around a missing grant.
 
 The deploy engine still follows the registry: until `host` and `replica_hosts` are swapped in
 the balanced apps' registries (render, release, `edge_lb.py --operation apply`), mc-hub-api's

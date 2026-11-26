@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the local CrowdSec writer grant independently of the peer job
+
+[Timer]
+OnBootSec=5s
+OnUnitInactiveSec=5s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

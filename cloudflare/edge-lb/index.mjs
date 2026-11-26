@@ -234,7 +234,7 @@ async function route(request, url, site, env, ctx, meta) {
     order = [state.writer, ...order.filter((n) => n !== state.writer)];
   }
   const patient = primary && rules.primary_paths.some((p) => new RegExp(p).test(url.pathname));
-  let last;
+  let last, stalled, waited;
   for (let i = 0; i < order.length; i++) {
     const final = i === order.length - 1;
     let failed = true;
@@ -250,9 +250,17 @@ async function route(request, url, site, env, ctx, meta) {
       last = response;
     } catch (error) {
       last = error;
+      // Only out of time for its headers: a working node behind a stalled tunnel (EWR, 2026-11-26).
+      if (error?.name === "AbortError") stalled ??= order[i];
     }
     // A 500 does not mark the node down: it is more often that one request's.
     if (failed && !final && last?.status !== 500) downUntil.set(order[i], Date.now() + DOWN_MS);
+    // Every node failed and none has a stale copy: wait for the first one that only ran out of
+    // time rather than answer with a down node's error.
+    if (failed && final && stalled && !hit && !waited) {
+      order.push(stalled);
+      waited = true;
+    }
   }
   if (hit) {
     meta.outcome = "stale";
@@ -468,6 +476,7 @@ export class Lease {
         return Response.json({ error: "WRITER_ALIVE", writer: s.writer, seconds: Math.round(age / 1000) }, { status: 409 });
       }
       alerts.push(`${node} is now the writer (was ${s.writer}${force ? ", forced" : ""}); ${s.writer} steps down to replica when it is back.`);
+      s.lapiAfter = Math.max(s.lapiAfter || 0, (s.beats[s.writer] || 0) + LEASE_MS);
       s.writer = node;
       s.epoch++;
       s.version++;
@@ -505,6 +514,7 @@ export class Lease {
         if (next) {
           const lag = floor === null ? "" : `, ${floor > at(next) ? floor - at(next) : 0n} transactions behind its last report`;
           alerts.push(`${next} is now the writer (was ${s.writer}, ${why}${lag}); ${s.writer} steps down to replica when it is back.`);
+          s.lapiAfter = Math.max(s.lapiAfter || 0, (s.beats[s.writer] || 0) + LEASE_MS);
           s.writer = next;
           s.epoch++;
           s.version++;
@@ -527,7 +537,8 @@ export class Lease {
         body: JSON.stringify({ chat_id: this.env.TELEGRAM_CHAT_ID, text: `[edge] ${alerts.join("\n")}` }),
       }).catch(() => {});
     }
-    return Response.json({ writer: s.writer, epoch: s.epoch, version: s.version, down: downNodes(s, now) });
+    return Response.json({ writer: s.writer, epoch: s.epoch, version: s.version, down: downNodes(s, now),
+      lapiGrant: op === "beat" && node === s.writer && now >= (s.lapiAfter || 0) });
   }
 }
 
