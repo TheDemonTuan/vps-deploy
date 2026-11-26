@@ -7,14 +7,15 @@
 #    The edge checks every node's sites itself (cron) and alerts; this node alerts after two
 #    failed renewals.
 # 2. On the writer: the R2 mirror runs only while the lease confirms this node, and the day's
-#    database backup goes to /data/backups (the mirror copies it to R2).
+#    database backup goes to /data/backups (the mirror copies it to R2) and to OCI Object Storage.
 # 3. On a replica, checks that the Litestream follower keeps up with the writer. Telegram after
 #    two bad runs in a row, and again when it recovers.
 # CrowdSec shares bans through its one LAPI (roles/crowdsec), not here.
 # /etc/platform/peer.env: NODE, NODE_IP, ROLE (primary|replica before any failover), LEASE_URL,
 # TELEGRAM_CHAT_ID. /etc/platform/nodes: "<id> <ip> <ecdsa host key>" per edge node (ansible).
-# /etc/platform/telegram-token: bot token, /etc/platform/edge-node-key: the Worker's NODE_KEY
-# (both root 0600).
+# /etc/platform/telegram-token: bot token, /etc/platform/edge-node-key: the Worker's NODE_KEY,
+# /etc/platform/oci-backup-url: a write-only pre-authenticated request for the OCI bucket, ending
+# in /o/ (all root 0600).
 set -uo pipefail
 export LC_ALL=C
 . /etc/platform/peer.env
@@ -106,6 +107,17 @@ if [ "$role" = primary ]; then
     else
       rm -f "$volume/backups/.$backup"
       report "daily backup" fail "${app:-no mc-hub-api container}: backup failed"
+    fi
+  elif [ "$confirmed" = 1 ] && [ "$(cat "$state/oci-backup" 2>/dev/null)" != "$backup" ]; then
+    # A copy off Cloudflare, once a day in a later run than the backup (both would not fit
+    # TimeoutStartSec). The URL can only write, never read, list or delete, and the bucket's
+    # versioning keeps what an overwrite replaces. It stays off the command line.
+    if printf 'url = "%s%s"\n' "$(cat /etc/platform/oci-backup-url)" "$backup" |
+      curl -fsS -m 20 -o /dev/null -K - -T "$volume/backups/$backup"; then
+      echo "$backup" >"$state/oci-backup"
+      report "oci backup" ok "$backup"
+    else
+      report "oci backup" fail "upload of $backup failed"
     fi
   fi
 fi

@@ -27,10 +27,10 @@
   loop: [platform-peer.service, platform-peer.timer, platform-role.service]
   notify: Reload systemd
 
-- name: Shared peer secrets (alert bot, edge-lb NODE_KEY)
+- name: Shared peer secrets (alert bot, edge-lb NODE_KEY, OCI backup upload URL)
   ansible.builtin.include_role:
     name: shared_secret
-  loop: [/etc/platform/telegram-token, /etc/platform/edge-node-key]
+  loop: [/etc/platform/telegram-token, /etc/platform/edge-node-key, /etc/platform/oci-backup-url]
   loop_control:
     loop_var: peer_secret
   vars:
