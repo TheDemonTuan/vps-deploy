@@ -15,7 +15,7 @@
     owner: root
     group: root
     mode: "0755"
-  loop: [peer.sh, role.sh]
+  loop: [peer.sh, role.sh, write-position.sh]
 
 - name: Peer units
   ansible.builtin.copy:

@@ -9,4 +9,4 @@ dbs:
       user: platform-sync
       key-path: /etc/litestream/sync_key
       host-key: ${PRIMARY_HOST_KEY}
-      path: /litestream/mc-hub-api
+      path: /litestream/mc-hub-api${LTX_SUFFIX}

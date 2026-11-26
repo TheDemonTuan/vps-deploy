@@ -7,6 +7,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 mkdir -p "$t/bin" "$t/vol" "$t/peer" "$t/sync/crowdsec" "$t/etc"
+cp write-position.sh "$t/"
 sed -e "s#/etc/platform#$t/etc#g; s#/run/platform-role.lock#$t/lock#; s#/var/lib/docker/volumes/mc-hub-api-data/_data#$t/vol#;
   s#/var/lib/platform-peer#$t/peer#g; s#/srv/platform-sync/litestream#$t/sync#; s#sleep [0-9]*#:#g" role.sh >"$t/role.sh"
 printf 'NODE=n2\nROLE=replica\nLEASE_URL=http://lease.invalid\n' >"$t/etc/peer.env"

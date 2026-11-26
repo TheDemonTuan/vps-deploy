@@ -50,6 +50,7 @@ function durableObjects() {
       if (!objects.has(id)) {
         const data = new Map();
         const storage = { get: async (k) => structuredClone(data.get(k)), put: async (k, v) => void data.set(k, structuredClone(v)) };
+        storage.transaction = async (fn) => fn(storage);
         objects.set(id, new Lease({ storage }, env));
       }
       const object = objects.get(id);
@@ -441,3 +442,34 @@ test('a writer that stops renewing hands the lease to the replica holding its da
     Date.now = real;
   }
 });
+
+test('only a second durable copy is acknowledged and force cannot elect below that floor', async () => {
+  const key = createHash('sha256').update('quorum:node-key').digest('hex');
+  const floor = { epoch: 0, txid: '0000000000000042' };
+  await leaseCall('n1', { op: 'beat' });
+  assert.equal((await leaseCall('n2', { op: 'promote', force: true }, key)).status, 400);
+  replies.n2 = (req) => new URL(req.url).pathname === '/api/_replication'
+    ? new Response(null, { status: 204, headers: { 'X-Follower-Epoch': '0', 'X-Follower-Txid': floor.txid } })
+    : new Response(null, { status: 200 });
+  const receipt = await leaseCall('n1', { op: 'confirm', ...floor }, key);
+  assert.equal(receipt.status, 204);
+  assert.equal((await leaseCall('n1', { op: 'confirm', epoch: 0, txid: '0000000000000040' }, key)).status, 204);
+  assert.equal((await call('/api/posts/demo/views', { method: 'POST', body: '{}' })).status, 503);
+  assert.equal(queued.length, 0);
+  for (const position of [null, { ...floor, txid: '0000000000000040' }, { ...floor, epoch: 1 }]) {
+    const refused = await leaseCall('n2', { op: 'promote', force: true, position });
+    assert.equal(refused.status, 409);
+    assert.deepEqual((await refused.json()).floor, floor);
+  }
+  const next = await leaseCall('n2', { op: 'promote', force: true, position: floor });
+  assert.equal(next.status, 200);
+  assert.equal((await next.json()).writer, 'n2');
+  assert.equal((await leaseCall('n1', { op: 'confirm', ...floor }, key)).status, 409);
+});
+
+test('a writer without a durable follower cannot confirm', async () => {
+  const key = createHash('sha256').update('quorum:node-key').digest('hex');
+  const confirmation = await leaseCall('n1', { op: 'confirm', epoch: 0, txid: '0000000000000042' }, key);
+  assert.equal(confirmation.status, 503);
+  assert.equal((await (await leaseCall('n1', { op: 'beat' })).json()).floor, undefined);
+}, { timeout: 6000 });

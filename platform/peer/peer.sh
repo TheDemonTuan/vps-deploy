@@ -26,6 +26,7 @@ export LC_ALL=C
 . /etc/platform/peer.env
 state=/var/lib/platform-peer
 volume=/var/lib/docker/volumes/mc-hub-api-data/_data
+. "$(dirname "$0")/write-position.sh"
 peers=$(awk -v me="$NODE" '!/^#/ && NF >= 2 && $1 != me {print $1, $2}' /etc/platform/nodes)
 
 # peer_sftp <ip>: batch commands on stdin.
@@ -75,9 +76,10 @@ else
 fi
 [[ $txid =~ ^[0-9a-f]{16}$ ]] || txid=""
 renewed=0 writer=$(cat "$state/writer" 2>/dev/null || echo unknown)
+proof=$(position) || proof=null
 read -r begin _ </proc/uptime
 if lease=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/platform/edge-node-key)" |
-  curl -fsS -m 20 -K - -H 'content-type: application/json' -d "{\"op\":\"beat\",\"synced\":$synced${txid:+,\"txid\":\"$txid\"}}" "$LEASE_URL") &&
+  curl -fsS -m 20 -K - -H 'content-type: application/json' -d "{\"op\":\"beat\",\"synced\":$synced,\"position\":$proof${txid:+,\"txid\":\"$txid\"}}" "$LEASE_URL") &&
   writer=$(jq -er '.writer' <<<"$lease"); then
   renewed=1
   if [ "$(jq -r '.lapiGrant' <<<"$lease")" = true ] && [ "$writer" = "$NODE" ]; then
@@ -85,6 +87,7 @@ if lease=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/platform/e
   else
     rm -f /run/platform-peer/lapi
   fi
+  printf '%s\n' "$lease" >"$state/lease.tmp" && mv -f "$state/lease.tmp" "$state/lease" || exit 1
   echo "$writer" >"$state/writer"
   report "edge lease" ok "writer $writer"
 fi
@@ -100,7 +103,8 @@ if [ "$renewed" = 1 ]; then
   fi
   # role.sh leaves stopped-apps behind when a step-down did not finish: run it again.
   if { [ "$writer" = "$NODE" ] && [ "$role" != primary ]; } || { [ "$writer" != "$NODE" ] && [ "$role" = primary ]; } ||
-    { [ "$writer" != "$NODE" ] && [ "$writer_ip" != "$followed" ]; } || [ -e "$state/stopped-apps" ]; then
+    { [ "$writer" != "$NODE" ] && [ "$writer_ip" != "$followed" ]; } || [ -e "$state/stopped-apps" ] ||
+    { [ -f "$volume/write-quorum.json" ] && [ "$writer" != "$NODE" ] && [ "$(jq -r '.epoch' <<<"$lease")" != "$(cat "$volume/follower-epoch" 2>/dev/null)" ]; }; then
     echo "lease writer $writer, this node $role following ${followed:-nothing}: switching" >&2
     systemctl start --no-block platform-role.service
   fi
