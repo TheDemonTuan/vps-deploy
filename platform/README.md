@@ -79,7 +79,7 @@ flowchart LR
   it only while the lease confirms the node as writer and stops it after three failed renewals,
   so an old primary back from a reboot cannot replace the new primary's R2 copy. `peer/` also
   writes `/data/backups/daily-<UTC date>.db` on the confirmed writer (VACUUM INTO, 14 kept on the
-  node, every one in R2). Replication makes no R2 requests: following R2 directly
+  node, every one in R2 and in OCI Object Storage, below). Replication makes no R2 requests: following R2 directly
   listed ~480 objects a minute (Class A, beyond the free tier). Uploads are written locally and
   to R2; a node missing a file fetches it from R2.
 - **SSR** stays on the node: mc-hub calls `http://edge-traefik:8082` (entrypoint `internal`,
@@ -293,3 +293,10 @@ mc-hub-db, path: litestream/mc-hub-api, endpoint: https://<account>.r2.cloudflar
 region: auto}}]}` and `litestream restore -config … /out/mc-hub.db` rebuild the database as of
 the last hourly mirror; `r2:mc-hub-db/backups` holds `/data/backups` (the pre-release
 `VACUUM INTO` snapshots).
+
+Without Cloudflare: the confirmed writer also uploads each daily copy to the OCI bucket
+`mc-hub-db-backup` (n1's tenancy; Object Storage console → the bucket → Objects → Download).
+Setup, once, before the next platform run: a Standard bucket with Object Versioning on; a
+pre-authenticated request for the bucket, "Permit object writes" only (no listing), expiring
+years out; its URL (ending in `/o/`) in `/etc/platform/oci-backup-url` on the secrets source,
+root 0600, which the run copies to every node. About 30 requests a month (50,000 free).
