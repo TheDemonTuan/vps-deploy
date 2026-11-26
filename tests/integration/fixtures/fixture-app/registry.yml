@@ -11,7 +11,7 @@ manifest:
   version: 1
   app: fixture-app
   strategy: blue-green
-  image: localhost:5000/fixture-app
+  image: ghcr.io/thedemontuan/fixture-app
   platform: linux/arm64
   runtime: {port: 20128}
   health: {path: /api/health, timeout_seconds: 60}

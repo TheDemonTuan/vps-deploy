@@ -126,6 +126,31 @@ printf 'deploy-fixture-app ALL=(root) NOPASSWD: /usr/local/libexec/vps-deploy-fi
 chmod 0440 /etc/sudoers.d/vps-deploy-fixture-app
 visudo -cf /etc/sudoers.d/vps-deploy-fixture-app >/dev/null
 ssh-keygen -q -t ed25519 -N '' -f "$fixture/hostkey"
+host_fingerprint=$(ssh-keygen -lf "$fixture/hostkey.pub" | cut -d' ' -f2)
+python3 - "$release" "$fixture" "$api" "$ssh_port" "$fixture/hostkey.pub" "$host_fingerprint" <<'PY'
+import pathlib, sys, yaml
+release, work, api, port, key_file, fp = sys.argv[1:]
+release = pathlib.Path(release)
+host = yaml.safe_load((release/'hosts/oracle-main.yml').read_text())
+host['host'] = 'fixture-local'
+host['ssh'].update(
+    address='127.0.0.1',
+    port=int(port),
+    host_key=' '.join(pathlib.Path(key_file).read_text().split()[:2]),
+    fingerprint=fp
+)
+host['traefik']['dynamic_dir'] = work + '/dynamic'
+host['apps']['fixture-app'] = dict(
+    api_host=api, dashboard_host='dashboard.platform-smoke.test',
+    dashboard_alias_host='legacy.platform-smoke.test', work_dir=work + '/work',
+    compose_project='fixture-app', edge_network='edge-fixture-app', route_name='fixture-app.yml'
+)
+host['apps']['demo'] = dict(
+    api_host='demo.fixture.test', dashboard_host='', dashboard_alias_host='',
+    work_dir=work + '/demo', compose_project='demo', edge_network='edge-demo', route_name='demo.yml'
+)
+(release/'hosts/fixture-local.yml').write_text(yaml.safe_dump(host, sort_keys=False))
+PY
 cat > "$fixture/sshd_config" <<EOF
 Port $ssh_port
 ListenAddress 127.0.0.1
@@ -241,32 +266,7 @@ cp "$new_root/tests/integration/fixtures/fixture-app/registry.yml" "$new_release
 install -d -m 0755 "$new_release/apps/demo" 
 cp "$new_root/tests/integration/fixtures/demo/registry.yml" "$new_release/registry/demo.yml"
 cp "$new_root/tests/integration/fixtures/demo/adapter.sh" "$new_root/tests/integration/fixtures/demo/docker-compose.prod.yml" "$new_release/apps/demo/"
-python3 - "$new_release" "$fixture" "$api" "$ssh_port" <<'PY'
-import pathlib, sys, yaml
-release, work, api, port = sys.argv[1:]
-release = pathlib.Path(release)
-reg = release/'registry/fixture-app.yml'
-value = yaml.safe_load(reg.read_text())
-value['host'] = 'fixture-local'
-# Standard fixture registration
-reg.write_text(yaml.safe_dump(value, sort_keys=False))
-host = yaml.safe_load((release/'hosts/oracle-main.yml').read_text())
-host['host'] = 'fixture-local'
-host['ssh'].update(address='127.0.0.1', port=int(port))
-host['traefik']['dynamic_dir'] = work+'/dynamic'
-host['apps']['fixture-app'].update(api_host=api, dashboard_host='dashboard.platform-smoke.test', dashboard_alias_host='legacy.platform-smoke.test', work_dir=work+'/work')
-host['apps']['demo'] = dict(api_host='demo.fixture.test', dashboard_host='', dashboard_alias_host='', work_dir=work+'/demo', compose_project='demo', edge_network='edge-demo', route_name='demo.yml')
-(release/'hosts/fixture-local.yml').write_text(yaml.safe_dump(host, sort_keys=False))
-PY
-host_fingerprint=$(ssh-keygen -lf "$fixture/hostkey.pub" | cut -d' ' -f2)
-python3 - "$new_release/hosts/fixture-local.yml" "$fixture/hostkey.pub" "$host_fingerprint" <<'PY'
-import pathlib, sys, yaml
-path = pathlib.Path(sys.argv[1]); host = yaml.safe_load(path.read_text())
-host['ssh']['host_key'] = ' '.join(pathlib.Path(sys.argv[2]).read_text().split()[:2])
-host['ssh']['fingerprint'] = sys.argv[3]
-path.write_text(yaml.safe_dump(host, sort_keys=False))
-PY
-cp "$new_release/hosts/fixture-local.yml" "$release/hosts/fixture-local.yml"
+cp "$release/hosts/fixture-local.yml" "$new_release/hosts/fixture-local.yml"
 chown -R root:root "$new_release"
 chmod -R go-w "$new_release"
 install -d -m 0700 "$fixture/source/.deploy"
