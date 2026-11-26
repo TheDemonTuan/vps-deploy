@@ -45,12 +45,13 @@ check "an unfinished restore keeps the apps stopped and fails" '[ "$rc" = 1 ] &&
 rm "$t/stuck"; rc=$(run n1)
 check "the next run finishes it" '[ "$rc" = 0 ] && grep -qx "docker start mc-hub-api-blue" "$t/log" && [ ! -e "$t/peer/stopped-apps" ]'
 
-rc=$(run n2)
+mkdir -p "$t/vol/.mc-hub.db-litestream/ltx"; rc=$(run n2)
 check "the writer's own node becomes primary with a new lineage" '[ "$rc" = 0 ] && [ "$(cat "$t/vol/role")" = primary ] &&
-  [ -z "$(ls -A "$t/sync")" ] && [ ! -e "$t/etc/litestream-primary.env" ] && grep -qx "docker restart mc-hub-api-blue" "$t/log"'
+  [ -z "$(ls -A "$t/sync")" ] && [ ! -e "$t/vol/.mc-hub.db-litestream" ] && [ ! -e "$t/etc/litestream-primary.env" ] && grep -qx "docker restart mc-hub-api-blue" "$t/log"'
 rc=$(run n2)
 check "a settled primary does nothing" '[ "$rc" = 0 ] && [ ! -s "$t/log" ]'
 
-rc=$(run n1)
+mkdir -p "$t/sync/mc-hub-api/ltx/9" "$t/vol/.mc-hub.db-litestream/ltx"; rc=$(run n1)
 check "a primary that lost the lease follows the new writer" '[ "$rc" = 0 ] && [ "$(cat "$t/vol/role")" = replica ] && [ "$(follows)" = 10.0.0.1:22 ]'
+check "and stops serving its old lineage" '[ -z "$(ls -A "$t/sync")" ] && [ ! -e "$t/vol/.mc-hub.db-litestream" ]'
 exit $fail
