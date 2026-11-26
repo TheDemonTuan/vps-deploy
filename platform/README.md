@@ -56,12 +56,20 @@ flowchart LR
   - Workers Analytics Engine dataset `edge_lb`, a point per request: node, method, outcome
     (origin, hit, stale, queued, bucket, limited), status, milliseconds.
     `edge_lb.py --operation stats` sums the last hour (token: Account Analytics Read).
-- **Edge WAF & Rulesets** (`cloudflare/tofu/rulesets.tf`): `edge-probe-paths` on both zones
-  blocks dotfiles (not `/.well-known/`), `*.php` and WordPress paths before the tunnel; on
-  thedemontuan.dev `edge-free-managed` runs Cloudflare's Free Managed Ruleset except on
-  monitor./metrics. tuannguyenviet.site keeps its Free ruleset rule (OmniRoute hosts only)
-  and API path rules. Managed declaratively via OpenTofu in `cloudflare/tofu/`. Blocks show in
-  Security → Events.
+- **Edge WAF & Rulesets** (`cloudflare/tofu/rulesets.tf`, OpenTofu; Free plan: 5 custom rules and
+  1 rate limiting rule per zone, no regex): what an origin refuses anyway stops at Cloudflare,
+  before the Worker and the tunnels. `edge-probe-paths` on both zones blocks dotfiles (not
+  `/.well-known/`), `*.php`, WordPress paths and self-announcing scanners (sqlmap, nuclei, …);
+  on the site also `/internal` and every file type it never serves outside `/_astro/`,
+  `/media/`, `/cdn-cgi/` and `/.well-known/`. `mc-hub-api-host` keeps both API hosts to GET/HEAD
+  of the reads Traefik routes there (`tests/test_mc_hub_api.py` keeps the list equal to the
+  adapter) plus the nodes' lease POSTs; `mc-hub-methods` takes writes on the site only under
+  `/api/` and `/admin`. The rate limiting rule `mc-hub-api-flood` blocks an address for 10 s
+  after 150 `/api/` requests in 10 s at one Cloudflare location (verified bots exempt): looser
+  than Traefik's per-visitor limit, so it only sheds floods. On thedemontuan.dev
+  `edge-free-managed` runs Cloudflare's Free Managed Ruleset except on monitor./metrics;
+  tuannguyenviet.site keeps its Free ruleset rule (OmniRoute hosts only) and API path rules.
+  Traefik's limits and CrowdSec stay behind them. Blocks show in Security → Events.
 - **Data**: SQLite stays single-writer on the primary. Litestream (`litestream/`) writes its WAL
   changes to a local directory; each replica follows it over read-only SFTP (`sync/`) into its
   own file, and mc-hub-api opens that read-only (`DB_ROLE` = engine `NODE_ROLE`, or the volume's

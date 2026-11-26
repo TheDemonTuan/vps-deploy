@@ -94,6 +94,20 @@ class McHubApi(unittest.TestCase):
             return re.search(r'^  ' + key + r': (\S+)$', (ROOT / 'apps' / app / 'docker-compose.prod.yml').read_text(), re.M).group(1)
         self.assertIn(env('mc-hub-api', 'SITE_URL').removeprefix('https://'), api_site_hosts)
         self.assertEqual(env('mc-hub', 'API_URL'), 'http://edge-traefik:8082')
+        tofu = (ROOT / 'cloudflare/tofu/rulesets.tf').read_text()
+        waf = {name: re.search(r'\b' + name + r'\s*=\s*"([^"]*)"', tofu).group(1) for name in ('mc_hub_site', 'mc_hub_api_host', 'mc_hub_api_alias')}
+        self.assertEqual(waf, {'mc_hub_site': apps['mc-hub']['api_host'], 'mc_hub_api_host': apps['mc-hub-api']['api_host'],
+                               'mc_hub_api_alias': apps['mc-hub-api']['dashboard_alias_host']})
+
+    def test_edge_waf_admits_every_api_host_read(self):
+        # Cloudflare blocks the rest of an API host (cloudflare/tofu/rulesets.tf): a read added to the
+        # router but not there would be refused at the edge.
+        tofu = (ROOT / 'cloudflare/tofu/rulesets.tf').read_text()
+        def waf(name):
+            return set(re.findall(r'"([^"]*)"', re.search(r'\b' + name + r'\s*=\s*\[([^\]]*)\]', tofu).group(1)))
+        rule = parse_yaml(render('mc-hub-api'))['http']['routers']['mc-hub-api-router']['rule']
+        self.assertEqual(waf('api_host_paths'), set(re.findall(r'Path\(`([^`]*)`\)', rule)))
+        self.assertEqual(waf('api_host_prefixes'), set(re.findall(r'PathPrefix\(`([^`]*)`\)', rule)))
 
 
 if __name__ == '__main__':
