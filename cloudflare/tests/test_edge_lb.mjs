@@ -68,7 +68,7 @@ beforeEach(() => {
   pending = [];
   _test.downUntil.clear();
   _test.leases.clear();
-  _test.timing.ttfbMs = 10_000;
+  _test.timing.ttfbMs = 3_000;
   env = {
     LEASE: durableObjects(),
     WRITES: { send: async (message) => void queued.push(structuredClone(message)) },
