@@ -38,9 +38,11 @@ const REPLAYED_HEADERS = ["content-type", "user-agent", "accept-language"];
 // Cache API copies carry the origin's Cache-Control and their store time in these headers.
 const ORIGIN_CC = "x-edge-origin-cache-control";
 const STORED = "x-edge-stored";
-// A node that has not sent response headers by then is treated as down and the read moves on;
-// the lease (writer, cache version) is re-read from its Durable Object at most this often.
-const timing = { ttfbMs: 10_000, leaseMs: 30_000 };
+// A node that has not sent response headers by then is treated as down and the read moves on.
+// Origins answer reads in under 0.5 s (p99.9), while one Cloudflare location's path to a tunnel
+// can stall a request for 10 s or more (EWR, 2026-11-26), so 3 s is the cost of such a stall.
+// The lease (writer, cache version) is re-read from its Durable Object at most leaseMs apart.
+const timing = { ttfbMs: 3_000, leaseMs: 30_000 };
 
 // Isolate-local passive health: a node that just failed is tried last for DOWN_MS.
 const downUntil = new Map();

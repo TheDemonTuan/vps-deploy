@@ -19,7 +19,7 @@ flowchart LR
   reads go to a node chosen by weighted rendezvous hashing of the client IP
   (`hosts/<node>.yml` `edge.weight`; lower on a node that also runs unbalanced services), so a
   client always lands on the same node and nodes share clients by weight. A 5xx (a read's 500
-  too), a connect failure or no response headers within 10 s is retried once on the next node
+  too), a connect failure or no response headers within 3 s is retried once on the next node
   and (except a 500) marks the failed node last for 30 s. The cron's checks (every minute) put a
   node last for everyone while its last check failed, and a replica whose follower has not
   confirmed for 3 minutes that it is current (`peer.sh` sends `synced` with each renewal) while
