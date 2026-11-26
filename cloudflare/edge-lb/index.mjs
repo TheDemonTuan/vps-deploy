@@ -145,13 +145,14 @@ async function route(request, url, site, env, ctx, meta) {
   }
 
   const state = await leaseState(site, env);
-  if (needsPrimary(request, url, rules)) {
+  const primary = needsPrimary(request, url, rules);
+  if (primary && !SAFE.has(request.method)) {
     meta.node = state.writer;
     const fanout = rules.fanout.find((f) => f.method === request.method && new RegExp(f.path).test(url.pathname));
     const cookie = request.headers.get("cookie") || "";
     // A replay that reaches this handler again (it carries X-Edge-Replay) fails instead, so the
     // consumer retries it rather than queueing a copy under the Worker's own address.
-    const queueable = env.WRITES && env.REPLAY_KEY && !SAFE.has(request.method) && rules.queue_paths.some((p) => new RegExp(p).test(url.pathname)) &&
+    const queueable = env.WRITES && env.REPLAY_KEY && rules.queue_paths.some((p) => new RegExp(p).test(url.pathname)) &&
       !rules.primary_cookies.some((name) => cookie.includes(name + "=")) && !request.headers.has("x-edge-replay");
     const body = fanout || queueable ? await request.clone().arrayBuffer() : null;
     let response;
@@ -171,7 +172,7 @@ async function route(request, url, site, env, ctx, meta) {
     if (fanout && response.ok) ctx.waitUntil(replay(request, body, fanout, site, state.writer).then(() => site.lease && lease(env, site, { op: "purge" })));
     // A 204 (a view count, a boost) has nothing to read back: no sticky cookie, so the reader keeps
     // the edge cache and failover to the other node for the next pages.
-    if (!SAFE.has(request.method) && response.status < 400 && response.status !== 204 && rules.sticky_seconds > 0) {
+    if (response.status < 400 && response.status !== 204 && rules.sticky_seconds > 0) {
       const sticky = new Response(response.body, response);
       sticky.headers.append("Set-Cookie", `${STICKY}=1; Max-Age=${rules.sticky_seconds}; Path=/; Secure; HttpOnly; SameSite=Lax`);
       return sticky;
@@ -184,7 +185,7 @@ async function route(request, url, site, env, ctx, meta) {
   const immutable = rules.immutable_paths.some((p) => new RegExp(p).test(url.pathname));
   const cf = immutable ? { cacheTtlByStatus: { "200-299": 31536000, "300-599": -1 } } : {};
   const cache = rules.edge_cache;
-  const cached = cache && request.method === "GET" && !request.headers.has("authorization") && cache.paths.some((p) => new RegExp(p).test(url.pathname));
+  const cached = !primary && cache && request.method === "GET" && !request.headers.has("authorization") && cache.paths.some((p) => new RegExp(p).test(url.pathname));
   let key, hit;
   if (cached) {
     // The lease's version is bumped after each fanout (the admin's cache purge) reached every node.
@@ -198,7 +199,10 @@ async function route(request, url, site, env, ctx, meta) {
     }
   }
 
-  const order = pickOrder(site.nodes, client);
+  // A read that wants the writer (a session, an admin page, the client's own recent write) goes
+  // there first; while the writer fails, another node's copy (about a second behind) beats a 502.
+  let order = pickOrder(site.nodes, client);
+  if (primary && !(downUntil.get(state.writer) > Date.now())) order = [state.writer, ...order.filter((n) => n !== state.writer)];
   let last;
   for (let i = 0; i < order.length; i++) {
     const final = i === order.length - 1;
