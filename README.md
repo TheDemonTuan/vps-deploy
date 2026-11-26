@@ -385,7 +385,7 @@ UID 1000 with a read-only root, and deploy independently.
 - Domains live in `hosts/oracle-main.yml`: each app's `api_host` is its domain and
   `dashboard_alias_host` the previous one, kept routed by Traefik as a **fallback**
   (`tuannguyenviet.site`, `minecraft-api.tuannguyenviet.site`). The adapters, the deploy probe
-  (`api_host`) and the Cloudflare scripts (`cloudflare/mc_hub_hosts.py`) read them from there;
+  (`api_host`) and the Cloudflare OpenTofu code (`cloudflare/tofu/`) read them from there;
   `tests/test_mc_hub_api.py` fails until the few literal copies agree (mc-hub-api's site hosts,
   `SITE_URL`, the CrowdSec scope). Cloudflare Single Redirects (dashboard, zone
   `tuannguyenviet.site`) send `tuannguyenviet.site` and `minecraft.tuannguyenviet.site` to
@@ -649,20 +649,12 @@ private `omniroute` package and its historical versions are not modified.
 
 Local checks: `python3 -m unittest discover -s tests -p test_omniroute.py -v`.
 
-Configure the scoped Access application and API custom WAF rule in the owner
-Cloudflare console before publishing DNS. `cloudflare/omniroute_ingress.py`
-contains the exact rule expression; keep that rule first so an earlier skip rule
-cannot bypass it. No wildcard or secondary dashboard alias is permitted.
+OmniRoute Cloudflare infrastructure (DNS CNAMEs, tunnel ingress rules, Access application,
+and custom WAF rules) is declared as code in `cloudflare/tofu/`. Keep the API path rule
+first so an earlier skip rule cannot bypass it. No wildcard or secondary dashboard alias is
+permitted.
 
-Run `omniroute-ingress.yml` with `operation=survey` before enrollment. Its
-`operation=apply` requires the protected `platform-admin` environment and an
-independently verified healthy origin. It verifies the admin identity policy,
-HttpOnly cookie, API's lack of Access, and enabled first-position WAF rule before
-adding only the two exact DNS CNAMEs and tunnel routes. Missing or drifted security
-fails closed without ingress writes; the workflow never edits Access/WAF policy
-or sibling routes. The token needs Access Apps and Policies Read and Zone WAF
-Read in addition to its existing zone/DNS/tunnel permissions.
-Do not apply another shared-tunnel change concurrently: Cloudflare provides no
-conditional configuration PUT; the adapter re-reads immediately before its write.
+Changes to Cloudflare infrastructure are tested with `tofu plan` and applied via GitHub
+Actions workflow `.github/workflows/cloudflare-infra.yml`.
 The API token stays in this platform repository, not the source repo or VPS.
 

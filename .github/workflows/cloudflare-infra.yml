@@ -1,0 +1,118 @@
+name: Cloudflare Infrastructure
+on:
+  pull_request:
+    paths:
+      - 'cloudflare/tofu/**'
+      - 'hosts/**'
+      - 'registry/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'cloudflare/tofu/**'
+      - 'hosts/**'
+      - 'registry/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-infra
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu-version: 1.13.10
+
+      - name: Check HCL formatting
+        run: tofu fmt -check
+        working-directory: cloudflare/tofu
+
+      - name: Initialize OpenTofu without backend
+        run: tofu init -backend=false
+        working-directory: cloudflare/tofu
+
+      - name: Validate configuration
+        run: tofu validate
+        working-directory: cloudflare/tofu
+        env:
+          TF_VAR_cloudflare_api_token: "dummy-token-for-validation-only-00000000"
+          TF_VAR_tofu_encryption_passphrase: "dummy-encryption-passphrase-at-least-16-chars"
+
+  infra:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check required secrets
+        id: check_secrets
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_TOFU_TOKEN != '' }}
+          HAS_S3_KEY: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID != '' }}
+          HAS_S3_SECRET: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY != '' }}
+          HAS_PASSPHRASE: ${{ secrets.TOFU_ENCRYPTION_PASSPHRASE != '' }}
+        run: |
+          missing=()
+          [ "$HAS_TOKEN" = "true" ] || missing+=(CLOUDFLARE_TOFU_TOKEN)
+          [ "$HAS_S3_KEY" = "true" ] || missing+=(TOFU_STATE_ACCESS_KEY_ID)
+          [ "$HAS_S3_SECRET" = "true" ] || missing+=(TOFU_STATE_SECRET_ACCESS_KEY)
+          [ "$HAS_PASSPHRASE" = "true" ] || missing+=(TOFU_ENCRYPTION_PASSPHRASE)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::notice title=Cloudflare Infra::Skipping remote plan/apply; missing secrets: ${missing[*]}"
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup OpenTofu
+        if: steps.check_secrets.outputs.has_secrets == 'true'
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu-version: 1.13.10
+
+      - name: Initialize OpenTofu with remote S3 backend
+        if: steps.check_secrets.outputs.has_secrets == 'true'
+        working-directory: cloudflare/tofu
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_TOFU_TOKEN }}
+          TF_VAR_tofu_encryption_passphrase: ${{ secrets.TOFU_ENCRYPTION_PASSPHRASE }}
+        run: tofu init
+
+      - name: Plan OpenTofu changes (PR)
+        if: steps.check_secrets.outputs.has_secrets == 'true' && github.event_name == 'pull_request'
+        working-directory: cloudflare/tofu
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_TOFU_TOKEN }}
+          TF_VAR_tofu_encryption_passphrase: ${{ secrets.TOFU_ENCRYPTION_PASSPHRASE }}
+        run: tofu plan -no-color
+
+      - name: Plan and Apply OpenTofu changes (main)
+        if: steps.check_secrets.outputs.has_secrets == 'true' && github.ref == 'refs/heads/main'
+        working-directory: cloudflare/tofu
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_TOFU_TOKEN }}
+          TF_VAR_tofu_encryption_passphrase: ${{ secrets.TOFU_ENCRYPTION_PASSPHRASE }}
+        run: |
+          tofu plan -out=tfplan
+          tofu apply -auto-approve tfplan

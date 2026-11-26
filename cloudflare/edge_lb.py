@@ -29,8 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'lib'))
 from core import Failure as CoreFailure, app_hosts, app_registration, host_registration  # noqa: E402
-from mc_hub_ingress import origin  # noqa: E402
-from tunnel_api import Client, Failure, active_connectors, inventory_list  # noqa: E402
+from tunnel_api import Client, Failure, inventory_list  # noqa: E402
 
 WORKER = Path(__file__).with_name('edge-lb')
 SCRIPT = 'edge-lb'
@@ -99,36 +98,6 @@ def zones(client, wanted):
         raise Failure('EDGE_ZONE_NOT_IN_ACCOUNT:' + ','.join(sorted(set(wanted) - set(found))))
     return found
 
-
-def ingress_changes(client, tunnel, hostnames):
-    path = '/accounts/' + client.account + '/cfd_tunnel/' + tunnel + '/configurations'
-    current = client.get(path)
-    config = json.loads(json.dumps(current.get('config')))
-    ingress = inventory_list(config.get('ingress') if type(config) is dict else None)
-    if not ingress or ingress[-1].get('hostname') or ingress[-1].get('service') != 'http_status:404':
-        raise Failure('TUNNEL_CATCHALL_POLICY:' + tunnel)
-    if active_connectors(client.get('/accounts/' + client.account + '/cfd_tunnel/' + tunnel + '/connections')) < 1:
-        raise Failure('ACTIVE_CONNECTOR_REQUIRED:' + tunnel)
-    for host in hostnames:
-        selected = [rule for rule in ingress if rule.get('hostname') == host]
-        if len(selected) > 1 or selected and selected[0] != origin(host):
-            raise Failure('TUNNEL_SCOPE_CONFLICT:' + host)
-        if not selected:
-            ingress.insert(len(ingress) - 1, origin(host))
-    return path, current, config
-
-
-def dns_changes(client, zone_ids, records):
-    missing = []
-    for name, (zone, target) in records.items():
-        found = [r for r in inventory_list(client.get('/zones/' + zone_ids[zone] + '/dns_records?name=' + name + '&per_page=100'))
-                 if r.get('type') in ('A', 'AAAA', 'CNAME')]
-        if found and (len(found) > 1 or found[0].get('type') != 'CNAME' or found[0].get('proxied') is not True or
-                      found[0].get('content', '').rstrip('.') != target):
-            raise Failure('DNS_OWNERSHIP_CONFLICT:' + name)
-        if not found:
-            missing.append(name)
-    return missing
 
 
 def route_changes(client, zone_ids, wanted):
@@ -200,13 +169,9 @@ def run(client, operation):
     for host, site in sites.items():
         if not (host == site['zone'] or host.endswith('.' + site['zone'])):
             raise Failure('EDGE_ZONE_POLICY:' + host)
-    records = {node + '-origin.' + sites[host]['zone']: (sites[host]['zone'], tunnel + '.cfargotunnel.com')
-               for node, (tunnel, hostnames) in edge['tunnels'].items() for host in hostnames}
-    tunnels = {node: ingress_changes(client, tunnel, hostnames) for node, (tunnel, hostnames) in edge['tunnels'].items()}
     routes = {}
     for host, site in sites.items():
         routes.setdefault(site['zone'], {})[host + '/*'] = SCRIPT
-    missing = dns_changes(client, zone_ids, records)
     route_plan = route_changes(client, zone_ids, routes)
     account = '/accounts/' + client.account
     script = account + '/workers/scripts/' + SCRIPT
@@ -214,21 +179,12 @@ def run(client, operation):
     queue = next((q for q in result(client, 'GET', account + '/queues') if q.get('queue_name') == QUEUE), None)
     schedules = [s['cron'] for s in result(client, 'GET', script + '/schedules')['schedules']] if deployed else []
     secrets = {s['name'] for s in result(client, 'GET', script + '/secrets')} if deployed else set()
-    summary = {'operation': operation, 'nodes': edge['worker']['nodes'], 'sites': sorted(sites), 'missing_dns': missing,
-               'tunnel_changes': sorted(node for node, (_, current, wanted) in tunnels.items() if current['config'] != wanted),
+    summary = {'operation': operation, 'nodes': edge['worker']['nodes'], 'sites': sorted(sites), 'missing_dns': [],
+               'tunnel_changes': [],
                'route_changes': [(method, body['pattern']) for method, _, body in route_plan],
                'missing_secrets': sorted(set(SECRETS) - secrets) if edge['leased'] else [],
                'queue': bool(queue), 'schedules': schedules}
     if operation == 'apply':
-        for node, (path, current, wanted) in tunnels.items():
-            if current['config'] != wanted:
-                if client.get(path) != current:
-                    raise Failure('TUNNEL_VERSION_DRIFT:' + node)
-                client.request('PUT', path, {'config': wanted})
-        for name in missing:
-            zone, target = records[name]
-            client.request('POST', '/zones/' + zone_ids[zone] + '/dns_records',
-                           {'type': 'CNAME', 'name': name, 'content': target, 'proxied': True, 'ttl': 1})
         if edge['leased'] and not queue:
             queue = result(client, 'POST', account + '/queues', {'queue_name': QUEUE})
         upload(client, edge, bindings(edge, deployed.get('migration_tag')))
@@ -242,8 +198,7 @@ def run(client, operation):
         # Routes last: traffic reaches the Worker only once every origin answers.
         for method, path, body in route_plan:
             client.request(method, path, None if method == 'DELETE' else body)
-        if dns_changes(client, zone_ids, records) or route_changes(client, zone_ids, routes) or any(
-                client.get(path)['config'] != wanted for path, _, wanted in tunnels.values()):
+        if route_changes(client, zone_ids, routes):
             raise Failure('EDGE_VERIFY_FAILED')
     return summary
 

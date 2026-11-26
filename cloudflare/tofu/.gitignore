@@ -1,0 +1,8 @@
+# OpenTofu local data and state
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*override.tf
+*.auto.tfvars
+*.tfvars

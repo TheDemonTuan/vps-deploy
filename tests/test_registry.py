@@ -23,6 +23,17 @@ class Registration(unittest.TestCase):
         with self.assertRaisesRegex(Failure, 'HOST_NOT_REGISTERED'):
             host_registration(ROOT, 'not-enrolled')
 
+    def test_host_registration_allows_omitted_edge_tunnel(self):
+        raw = (ROOT / 'hosts/oracle-main.yml').read_text()
+        mutated = raw.replace('  tunnel: 09575df7-5465-4201-94c0-130e16472dce\n', '')
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name) / 'hosts'
+            directory.mkdir()
+            (directory / 'oracle-main.yml').write_text(mutated)
+            host = host_registration(directory.parent, 'oracle-main')
+            self.assertNotIn('tunnel', host['edge'])
+            self.assertEqual(host['edge']['id'], 'n1')
+
     def test_manifest_bool_does_not_equal_integer(self):
         with self.assertRaisesRegex(Failure, 'MANIFEST_POLICY'):
             exact({'version': True}, {'version': 1})
