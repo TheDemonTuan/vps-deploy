@@ -179,8 +179,9 @@ the nodes' `opc` keys); CI only lints it.
    `systemctl enable --now vps-deploy-drain@<app>.timer`, and apply again with the real weight.
    Add the host to the app's caller workflow (after the primary host).
 
-The monitoring hub (`monitor_hub: true`, n2) keeps its own `/etc/platform/monitor.env` (below);
-Ansible writes only the agents'. Changing any node's platform files: edit them here, then the
+The monitoring hub (`monitor_hub: true`, n1) keeps its own `/etc/platform/monitor.env` (below);
+Ansible writes only the agents', from n1's `/etc/platform/monitor-agent.env` (NODE, METRICS_URL,
+remoteWrite_headers). Changing any node's platform files: edit them here, then the
 same two commands (`--limit <host>` for one node). App routes in `/opt/platform/edge/dynamic`
 belong to the deploy engine and are never touched.
 
@@ -202,16 +203,18 @@ How it fits together (`platform/monitor/compose.yml`):
 - Every node runs the `agent` profile: node-exporter, cAdvisor and vmagent, which scrapes them
   and Traefik every 30 s, labels everything `node=<NODE>` and pushes it to the hub, buffering up
   to 1 GB on disk while the hub is unreachable.
-- The hub (n2) also runs `hub`: VictoriaMetrics (90 days) and Grafana. Its own vmagent writes to
-  `127.0.0.1:8428`; the others push to `metrics.thedemontuan.dev` (tunnel B, Access app
+- The hub (n1, the strongest node) also runs `hub`: VictoriaMetrics (90 days) and Grafana. Its own vmagent writes to
+  `127.0.0.1:8428`; the others push to `metrics.thedemontuan.dev` (n1's tunnel, Access app
   "Fleet Metrics Ingest": service token `monitor-vmagent` only, expires 2027-11-25), whose
   Traefik route only accepts `POST /api/v1/write`. The hub's `/etc/platform/monitor.env` (root
   0600, written by hand before `ansible/` runs there: it stops otherwise) is `NODE`,
   `METRICS_URL=http://127.0.0.1:8428/api/v1/write`, `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` (user
   token `grafana-analytics-read`: Account Analytics Read, IP-filtered to the hub) and
   `ACCESS_AUD` (the Grafana Access app's AUD). The hub is one node: while it is down Grafana is
-  down and the other agents buffer; its VictoriaMetrics data lives only on its disk (lost with
-  n2's boot volume on 2026-11-26).
+  down and the other agents buffer up to 1 GB and send it once it is back; its VictoriaMetrics
+  data lives only on its disk. Moving the hub: `monitor_hub` in `host_vars`, the hub env on the
+  new node, the `monitor`/`metrics` ingress and CNAMEs in `cloudflare/tofu`, the analytics
+  token's IP filter; copy the `monitor_victoriametrics` volume with VictoriaMetrics stopped.
 - Traefik on each node: a `metrics` entrypoint `:8899` with `metrics.prometheus` (entryPoint
   `metrics`, `addServicesLabels`), published only on `127.0.0.1:18082`. On the hub Traefik also
   joins `edge-monitor`, and `platform/monitor/traefik-monitor.yml` is

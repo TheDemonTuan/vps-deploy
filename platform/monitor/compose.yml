@@ -1,5 +1,5 @@
 # Fleet monitoring (replaces Beszel): every node runs the `agent` profile, one node (the hub,
-# oracle-sg2) also runs `hub`. From /opt/platform/monitor:
+# oracle-main, monitor_hub in ansible/host_vars) also runs `hub`. From /opt/platform/monitor:
 #   docker compose --env-file /etc/platform/monitor.env --profile agent [--profile hub] up -d
 # agent: node-exporter (host), cAdvisor (containers) and Traefik's metrics, scraped every 30 s by
 #   vmagent and pushed to the hub with the label node=<id>: the hub's own agent writes to it

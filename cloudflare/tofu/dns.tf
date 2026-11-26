@@ -28,7 +28,7 @@ locals {
       id       = "06f566661d5f7dfa56d0608b1068dc18"
       name     = "metrics.thedemontuan.dev"
       type     = "CNAME"
-      content  = "2c0939e7-b73e-4d29-9c7f-ac30f59a3ebf.cfargotunnel.com"
+      content  = "09575df7-5465-4201-94c0-130e16472dce.cfargotunnel.com"
       proxied  = true
       ttl      = 1
       comment  = null
@@ -39,7 +39,7 @@ locals {
       id       = "500609bdd33ccd66c35c284e09bc817f"
       name     = "monitor.thedemontuan.dev"
       type     = "CNAME"
-      content  = "2c0939e7-b73e-4d29-9c7f-ac30f59a3ebf.cfargotunnel.com"
+      content  = "09575df7-5465-4201-94c0-130e16472dce.cfargotunnel.com"
       proxied  = true
       ttl      = 1
       comment  = null

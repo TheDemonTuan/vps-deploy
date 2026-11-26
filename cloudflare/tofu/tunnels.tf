@@ -16,12 +16,12 @@ locals {
       { hostname = "minecraft-api.tuannguyenviet.site", origin_server_name = "minecraft-api.tuannguyenviet.site" },
       { hostname = "thedemontuan.dev", origin_server_name = "thedemontuan.dev" },
       { hostname = "api.thedemontuan.dev", origin_server_name = "api.thedemontuan.dev" },
+      { hostname = "monitor.thedemontuan.dev", origin_server_name = "monitor.thedemontuan.dev" },
+      { hostname = "metrics.thedemontuan.dev", origin_server_name = "metrics.thedemontuan.dev" },
     ],
     "oracle-sg2" = [
       { hostname = "thedemontuan.dev", origin_server_name = "thedemontuan.dev" },
       { hostname = "api.thedemontuan.dev", origin_server_name = "api.thedemontuan.dev" },
-      { hostname = "monitor.thedemontuan.dev", origin_server_name = "monitor.thedemontuan.dev" },
-      { hostname = "metrics.thedemontuan.dev", origin_server_name = "metrics.thedemontuan.dev" },
     ],
   }
 

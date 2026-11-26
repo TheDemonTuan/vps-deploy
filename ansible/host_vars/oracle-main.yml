@@ -3,3 +3,5 @@ edge_extra_networks:
   - {key: edge-acb, name: edge-acb}
   - {key: edge-portfolio, name: edge-tuan-portfolio}
   - {key: edge-omniroute, name: edge-omniroute}
+# Grafana and VictoriaMetrics: the strongest node, one copy (platform/README "Fleet monitoring").
+monitor_hub: true
