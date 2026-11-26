@@ -30,73 +30,36 @@ This directory declares the Cloudflare infrastructure for `vps-deploy` using Ope
 
 ### Local Development
 
-1. Export credentials from local token files:
+1. Export credentials from local files (account tokens `vps-deploy-tofu-ci` and
+   `vps-deploy-tofu-state`; the S3 key is the state token's ID, the secret its SHA-256):
    ```bash
-   export TF_VAR_cloudflare_api_token="$(cat ~/.config/cloudflare/mc-hub.token)"
-   export TF_VAR_cloudflare_waf_api_token="$(cat ~/.config/cloudflare/edge-waf.token)"
+   export TF_VAR_cloudflare_api_token="$(cat ~/.config/vps-deploy/vps-deploy-tofu-ci.token)"
    export TF_VAR_tofu_encryption_passphrase="$(cat ~/.config/vps-deploy/tofu-passphrase)"
+   export AWS_ACCESS_KEY_ID="$(cat ~/.config/vps-deploy/vps-deploy-tofu-state.id)"
+   export AWS_SECRET_ACCESS_KEY="$(cat ~/.config/vps-deploy/vps-deploy-tofu-state.s3-secret)"
    ```
 
-2. State override:
-   While R2 S3 access keys are being provisioned by the account owner, state is stored locally and encrypted outside the repo:
+2. Plan and apply (state: R2 bucket `vps-deploy-tofu`, encrypted with the passphrase, locked by
+   a lock file there while a run holds it):
    ```bash
-   ln -sf ~/.local/state/vps-deploy/tofu/backend_override.tf backend_override.tf
    tofu init
-   ```
-
-3. Plan and apply:
-   ```bash
    tofu plan
    tofu apply
    ```
 
-### Migrating State to Remote R2 S3 Backend
-
-Once the account owner provisions R2 S3 credentials for bucket `vps-deploy-tofu`:
-
-1. Remove the local backend override:
-   ```bash
-   rm -f backend_override.tf
-   ```
-
-2. Export S3 credentials and passphrase:
-   ```bash
-   export AWS_ACCESS_KEY_ID="<TOFU_STATE_ACCESS_KEY_ID>"
-   export AWS_SECRET_ACCESS_KEY="<TOFU_STATE_SECRET_ACCESS_KEY>"
-   export TF_VAR_tofu_encryption_passphrase="$(cat ~/.config/vps-deploy/tofu-passphrase)"
-   ```
-
-3. Migrate state:
-   ```bash
-   tofu init -migrate-state
-   ```
+CI (`.github/workflows/cloudflare-infra.yml`) plans on pull requests and applies on `main` with
+the same credentials, as repository secrets `CLOUDFLARE_TOFU_TOKEN`, `TOFU_STATE_ACCESS_KEY_ID`,
+`TOFU_STATE_SECRET_ACCESS_KEY` and `TOFU_ENCRYPTION_PASSPHRASE`.
 
 ---
 
-## Required Permissions for Account Owner
+## Tokens
 
-### 1. Cloudflare Central API Token (`CLOUDFLARE_TOFU_TOKEN`)
-
-Create a custom API token with the following permissions:
-- **Account Permissions**:
-  - `Cloudflare Tunnel`: Edit
-  - `Access: Apps and Policies`: Edit
-  - `Workers R2 Storage`: Edit
-- **Zone Permissions** (Scoped to `thedemontuan.dev` and `tuannguyenviet.site`):
-  - `DNS`: Edit
-  - `Zone WAF`: Edit
-  - `Zone`: Read
-  - `Cache Rules`: Edit (grants management of zone cache settings entrypoints)
-
-### 2. R2 S3 Credentials for State Backend (`vps-deploy-tofu`)
-
-Under Cloudflare Dashboard -> **R2** -> **Manage R2 API Tokens**:
-1. Create API token with `Object Read & Write` permission scoped to bucket `vps-deploy-tofu`.
-2. Save credentials in repository secrets:
-   - `TOFU_STATE_ACCESS_KEY_ID`
-   - `TOFU_STATE_SECRET_ACCESS_KEY`
-   - `TOFU_ENCRYPTION_PASSPHRASE` (32+ character passphrase)
-   - `CLOUDFLARE_TOFU_TOKEN`
+- `vps-deploy-tofu-ci` (account token): DNS Write, Zone WAF Write, Zone Read on the two zones;
+  Cloudflare Tunnel Write, Access: Apps and Policies Write, Workers R2 Storage Write, Account
+  Settings Read on the account. Not IP-filtered: GitHub's runners have no fixed addresses.
+- `vps-deploy-tofu-state` (account token): Workers R2 Storage Bucket Item Write on
+  `vps-deploy-tofu` only.
 
 ---
 
