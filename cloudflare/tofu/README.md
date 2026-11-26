@@ -13,8 +13,8 @@ This directory declares the Cloudflare infrastructure for `vps-deploy` using Ope
   - `OmniRoute Admin Dashboard`
   - `Bank Event Gateway Dashboard`
 - **Zone Rulesets**:
-  - `thedemontuan.dev`: Custom WAF (`Edge IP bans`, `edge-probe-paths`), Rate limiting (`Leaked credential check`), Managed WAF (`edge-free-managed`).
-  - `tuannguyenviet.site`: Custom WAF (`omniroute_api_paths`, `Edge IP bans`, `edge-probe-paths`), Rate limiting, Managed WAF (`OmniRoute managed WAF`).
+  - `thedemontuan.dev`: Custom WAF (`Edge IP bans`, `edge-probe-paths`, `mc-hub-api-host`, `mc-hub-methods`), Rate limiting (`mc-hub-api-flood`), Managed WAF (`edge-free-managed`).
+  - `tuannguyenviet.site`: Custom WAF (`omniroute_api_paths`, `Edge IP bans`, `edge-probe-paths`, `mc-hub-api-host`), Rate limiting, Managed WAF (`OmniRoute managed WAF`).
 - **R2 Storage**: `mc-hub-db` and `mc-hub-media` buckets, protected with `prevent_destroy`.
 
 ### What is Left Unmanaged

@@ -1,3 +1,33 @@
+# What the MC hub's origins refuse anyway (their Traefik routes, apps/mc-hub*/adapter.sh) stops
+# here, before the edge-lb Worker and the tunnels. Free plan: 5 custom rules and 1 rate limiting
+# rule per zone, no regex, and a rate limiting rule may only test the path and verified bots.
+locals {
+  # From hosts/oracle-main.yml; tests/test_mc_hub_api.py keeps these and the paths below equal.
+  mc_hub_site      = "thedemontuan.dev"
+  mc_hub_api_host  = "api.thedemontuan.dev"
+  mc_hub_api_alias = "minecraft-api.tuannguyenviet.site"
+
+  # The reads Traefik routes on an API host (mc-hub-api-router); it answers 403 to everything else.
+  api_host_paths    = ["/healthz", "/api/posts", "/api/settings", "/api/stats", "/api/auth/me"]
+  api_host_prefixes = ["/api/posts/", "/api/pages/"]
+  api_host_reads = join(" or ", concat(
+    [for p in local.api_host_paths : "http.request.uri.path eq \"${p}\""],
+    [for p in local.api_host_prefixes : "starts_with(http.request.uri.path, \"${p}\")"],
+  ))
+  api_host_refused = "not (http.request.method in {\"GET\" \"HEAD\"} and (${local.api_host_reads}))"
+
+  probe_paths    = "(http.request.uri.path contains \"/.\" and not starts_with(http.request.uri.path, \"/.well-known/\")) or ends_with(lower(http.request.uri.path), \".php\") or lower(http.request.uri.path) contains \"/wp-admin\" or lower(http.request.uri.path) contains \"/wp-includes\" or lower(http.request.uri.path) contains \"/wp-content\""
+  scanner_probes = join(" or ", [for a in ["acunetix", "dirbuster", "feroxbuster", "fuzz faster u fool", "gobuster", "l9explore", "masscan", "netsparker", "nikto", "nmap scripting engine", "nuclei", "sqlmap", "wpscan", "zgrab"] : "lower(http.user_agent) contains \"${a}\""])
+  # Traefik denies /internal on the site. Outside /_astro/ (build) and /media/ (uploads) it serves
+  # only these file types: public/ files, feeds, sitemap, ads.txt, the search index, and HTML a
+  # verifier may ask for. Any other extension is a probe the site would answer with its 404 page.
+  site_extensions = join(" ", [for e in ["avif", "css", "gif", "htm", "html", "ico", "jpeg", "jpg", "js", "json", "png", "svg", "txt", "webmanifest", "webp", "woff", "woff2", "xml"] : "\"${e}\""])
+  site_probes     = "http.host eq \"${local.mc_hub_site}\" and (starts_with(http.request.uri.path, \"/internal\") or (http.request.uri.path.extension ne \"\" and not http.request.uri.path.extension in {${local.site_extensions}} and not starts_with(http.request.uri.path, \"/_astro/\") and not starts_with(http.request.uri.path, \"/media/\") and not starts_with(http.request.uri.path, \"/cdn-cgi/\") and not starts_with(http.request.uri.path, \"/.well-known/\")))"
+  # The site takes writes only under /api/ and /admin (Access); /cdn-cgi/ is Cloudflare's own
+  # (Web Analytics beacons, challenges, Access login).
+  site_methods = "http.host eq \"${local.mc_hub_site}\" and not starts_with(http.request.uri.path, \"/cdn-cgi/\") and (not http.request.method in {\"GET\" \"HEAD\" \"POST\" \"PUT\" \"DELETE\"} or (not http.request.method in {\"GET\" \"HEAD\"} and not starts_with(http.request.uri.path, \"/api/\") and http.request.uri.path ne \"/admin\" and not starts_with(http.request.uri.path, \"/admin/\")))"
+}
+
 resource "cloudflare_ruleset" "thedemontuan_dev_custom_waf" {
   provider    = cloudflare.waf
   zone_id     = var.zones["thedemontuan.dev"]
@@ -18,8 +48,23 @@ resource "cloudflare_ruleset" "thedemontuan_dev_custom_waf" {
       action      = "block"
       description = "edge-probe-paths"
       enabled     = true
-      expression  = "(http.request.uri.path contains \"/.\" and not starts_with(http.request.uri.path, \"/.well-known/\")) or ends_with(lower(http.request.uri.path), \".php\") or lower(http.request.uri.path) contains \"/wp-admin\" or lower(http.request.uri.path) contains \"/wp-includes\" or lower(http.request.uri.path) contains \"/wp-content\""
+      expression  = "${local.probe_paths} or (${local.site_probes}) or ${local.scanner_probes}"
       ref         = "ef7d847cf4094f29a25d1ca321d0110c"
+    },
+    {
+      # The nodes renew edge-lb's lease with POST /__edge/lease/<name> (platform/peer).
+      action      = "block"
+      description = "mc-hub-api-host"
+      enabled     = true
+      expression  = "http.host eq \"${local.mc_hub_api_host}\" and ${local.api_host_refused} and not (http.request.method eq \"POST\" and starts_with(http.request.uri.path, \"/__edge/lease/\"))"
+      ref         = "mc_hub_api_host"
+    },
+    {
+      action      = "block"
+      description = "mc-hub-methods"
+      enabled     = true
+      expression  = local.site_methods
+      ref         = "mc_hub_methods"
     }
   ]
 }
@@ -55,8 +100,15 @@ resource "cloudflare_ruleset" "tuannguyenviet_site_custom_waf" {
       action      = "block"
       description = "edge-probe-paths"
       enabled     = true
-      expression  = "(http.request.uri.path contains \"/.\" and not starts_with(http.request.uri.path, \"/.well-known/\")) or ends_with(lower(http.request.uri.path), \".php\") or lower(http.request.uri.path) contains \"/wp-admin\" or lower(http.request.uri.path) contains \"/wp-includes\" or lower(http.request.uri.path) contains \"/wp-content\""
+      expression  = "${local.probe_paths} or ${local.scanner_probes}"
       ref         = "19bf78541ff445faa190cc973746875c"
+    },
+    {
+      action      = "block"
+      description = "mc-hub-api-host"
+      enabled     = true
+      expression  = "http.host eq \"${local.mc_hub_api_alias}\" and ${local.api_host_refused}"
+      ref         = "mc_hub_api_host"
     }
   ]
 }
@@ -76,16 +128,19 @@ resource "cloudflare_ruleset" "thedemontuan_dev_ratelimit" {
 
   rules = [
     {
+      # Above what Traefik's per-visitor /api/ limit (10/s, burst 30) lets through, so it only sheds
+      # floods. Replaces the leaked-credential rule: every password form sits behind Access.
+      # /api/admin/ is Access-only; vmagent (metrics.) flushes its disk buffer in bursts.
       action      = "block"
-      description = "Leaked credential check"
+      description = "mc-hub-api-flood"
       enabled     = true
-      expression  = "(cf.waf.credential_check.password_leaked)"
-      ref         = "24bf4553484c4980a9b5f8f4df4c491a"
+      expression  = "starts_with(http.request.uri.path, \"/api/\") and not starts_with(http.request.uri.path, \"/api/admin/\") and http.request.uri.path ne \"/api/v1/write\" and not cf.bot_management.verified_bot"
+      ref         = "mc_hub_api_flood"
       ratelimit = {
         characteristics     = ["ip.src", "cf.colo.id"]
         mitigation_timeout  = 10
         period              = 10
-        requests_per_period = 5
+        requests_per_period = 150
       }
     }
   ]
