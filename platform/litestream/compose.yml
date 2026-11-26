@@ -4,6 +4,8 @@
 # primary (registry `host`): replicates every WAL change of /data/mc-hub.db within ~1 s into
 #   /srv/platform-sync/litestream (local disk), and `mirror` copies that directory plus
 #   /data/backups to R2 bucket mc-hub-db every hour (off-site; `litestream restore` reads it).
+#   The mirror never restarts by itself: platform/peer starts it only while the edge lease
+#   confirms this node as the writer, so an old primary cannot overwrite the new one's R2 copy.
 # replica (registry `replica_hosts`): follows the primary's directory over read-only SFTP into this
 #   node's own /data/mc-hub.db, which mc-hub-api opens read-only (DB_ROLE=replica). A restart
 #   resumes from the last applied txid.
@@ -47,6 +49,7 @@ services:
     image: rclone/rclone:1.76.0@sha256:7cbeec24a44f206067597c0368be4de90ae19a64d5113c7d1938bd737a81e466
     container_name: litestream-mirror
     profiles: [primary]
+    restart: "no"
     environment:
       HOME: /tmp
       RCLONE_CONFIG_R2_TYPE: s3
@@ -69,7 +72,7 @@ services:
               rclone sync "/replica/mc-hub-api/ltx/$$level" "r2:mc-hub-db/litestream/mc-hub-api/$$(printf %04x "$$level")" --size-only --fast-list --stats-one-line -v || true
             done
           fi
-          rclone copy /data/backups r2:mc-hub-db/backups --size-only --fast-list --stats-one-line -v || true
+          rclone copy /data/backups r2:mc-hub-db/backups --exclude '.*' --size-only --fast-list --stats-one-line -v || true
           sleep 3600
         done
     volumes:

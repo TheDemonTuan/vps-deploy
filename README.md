@@ -373,7 +373,8 @@ UID 1000 with a read-only root, and deploy independently.
 - `mc-hub-api` also owns `/api/` and `/media/` on the site host (`mc-hub-api-site-router`,
   priority 200 over the frontend's 100), so admin and uploads stay same-origin.
 - `mc-hub-api` blue and green share the named volume `mc-hub-api-data` (SQLite + media +
-  daily `VACUUM INTO` backups under `/data/backups`); its migrations must stay additive.
+  backups under `/data/backups`: one per import and a daily `daily-<date>.db` written by
+  `platform/peer` on the writer, 14 kept there, all of them in R2); its migrations must stay additive.
   `edge-mc-hub-api` is internal (inbound from Traefik only); outbound goes through
   `mc-hub-api-egress`, used for Cloudflare Turnstile siteverify and the R2 media bucket.
 - Both run on every host in `replica_hosts` too, behind the `edge-lb` Worker; the registry
@@ -433,15 +434,19 @@ UID 1000 with a read-only root, and deploy independently.
   10 req/s burst 30 and 8 in flight; public `POST /api/*` (router `mc-hub-api-site-write`,
   `/api/admin/` excluded) 30/min burst 10 with a 64 KiB body. The API host has none: all of it
   is SSR traffic from the VPS. Both adapters changed, so re-render both live routes first.
-- Bot challenge (CrowdSec AppSec, global `crowdsec-ip` bouncer): hub collection
-  `crowdsecurity/appsec-bot-challenge` (balanced) plus `security/crowdsec/mc-hub-bot-scope.yaml`
-  (as `local/mc-hub-bot-scope`), all listed in `/etc/crowdsec/acquis.d/appsec.yaml`. Its scoring
-  config challenges every non-exempt request on every host, so the scope file must stay loaded:
-  it exempts every host but the two site domains and, there, non-GET, `/api/`, `/media/`,
-  `/_astro/`, `/admin`, `/healthz` and crawler files. Googlebot, Bingbot, AdSense, social and
-  monitoring bots pass when UA and forward-confirmed rDNS/IP agree (`cscli bot match --ip …
-  --user-agent …`); a spoofed UA is challenged. Challenge pages are `no-store` (Cloudflare BYPASS).
-  Disable: drop those entries from `appsec.yaml`, `systemctl reload crowdsec`.
+- Bot challenge (CrowdSec AppSec, global `crowdsec-ip` bouncer): **off since 2026-11-19** at the
+  owner's request; the collection `crowdsecurity/appsec-bot-challenge` (balanced) stays installed,
+  and `appsec.yaml.pre-disable-bot-challenge-*` next to `/etc/crowdsec/acquis.d/appsec.yaml` on n1
+  holds the config that loaded it. Re-enabling means listing the collection's configs plus
+  `security/crowdsec/mc-hub-bot-scope.yaml` (as `local/mc-hub-bot-scope`) in `appsec.yaml` on
+  every node and `systemctl reload crowdsec`. Its scoring config challenges every non-exempt
+  request on every host, so the scope file must be loaded with it: it exempts every host but the
+  two site domains and, there, non-GET, `/api/`, `/media/`, `/_astro/`, `/admin`, `/healthz` and
+  crawler files. Googlebot, Bingbot, AdSense, social and monitoring bots pass when UA and
+  forward-confirmed rDNS/IP agree (`cscli bot match --ip … --user-agent …`); a spoofed UA is
+  challenged. Challenge pages are `no-store` (Cloudflare BYPASS). It only ever sees edge cache misses.
+- CRS scope `platform/crowdsec/local-mc-hub-crs-scope.yaml`: rule 930120 (OS file names) is off
+  for out-of-band scoring on the site's `/api/`, where it matched readers' Turnstile tokens.
 - Enrollment follows the portfolio procedure per app: create `edge-<app>` and attach
   Traefik (live `docker network connect` plus the edge Compose file, no restart), stage
   `<app>-blue` from this release's Compose profile, publish the adapter-rendered route,

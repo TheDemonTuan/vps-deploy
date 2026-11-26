@@ -109,6 +109,15 @@ test('writes, admin, sessions and downloads go to the writer; a write sets the s
   assert.equal(points[0].doubles[0], 200);
 });
 
+test('a 204 write (a view count) sets no sticky cookie, so the next read stays balanced', async () => {
+  replies.n1 = () => new Response(null, { status: 204 });
+  const view = await call('/api/posts/x/views', { method: 'POST', body: '{}' }, clientOn('n2'));
+  assert.equal(view.status, 204);
+  assert.equal(view.headers.get('set-cookie'), null);
+  await call('/', {}, clientOn('n2'));
+  assert.deepEqual(calls.map((c) => c.node), ['n1', 'n2']);
+});
+
 test('writes over a reader address budget are refused at the edge; reads, nodes, other addresses and a failing limiter pass', async () => {
   const counts = new Map();
   env.WRITE_LIMIT = { limit: async ({ key }) => ({ success: counts.set(key, (counts.get(key) ?? 0) + 1).get(key) <= 2 }) };

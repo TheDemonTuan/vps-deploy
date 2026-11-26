@@ -8,11 +8,16 @@
 #                              it when its renewal shows the role changed)
 # Promotion loses what the old primary had not replicated yet (normally about a second). The old
 # primary, once back, steps down by itself: its database moves aside to fenced-<time>/ in the
-# volume and it follows the new primary.
+# volume and it follows the new primary. A step-down whose restore does not finish leaves
+# stopped-apps behind: peer.sh runs it again, and the apps start once the copy is in place.
 set -euo pipefail
 . /etc/platform/peer.env
+# One switch at a time: a manual promote and the timer's reconcile would otherwise run together.
+exec 9>/run/platform-role.lock
+flock 9
 volume=/var/lib/docker/volumes/mc-hub-api-data/_data
 writer_file=/var/lib/platform-peer/writer
+stopped=/var/lib/platform-peer/stopped-apps
 
 litestream() {
   docker compose --env-file /etc/platform/litestream.env --project-directory /opt/platform/litestream \
@@ -22,28 +27,41 @@ litestream() {
 become() {
   local want=$1 current apps
   current=$(cat "$volume/role" 2>/dev/null || echo "$ROLE")
-  [ "$current" = "$want" ] && return
+  [ "$current" = "$want" ] && [ ! -e "$stopped" ] && return
   echo "mc-hub-api: $current -> $want"
   apps=$(docker ps --format '{{.Names}}' | grep -E '^mc-hub-api-(blue|green)$' || true)
   # The follower check compares against the old lineage's position otherwise.
   rm -f /var/lib/platform-peer/primary-txid
+  if [ "$want" = primary ]; then
+    # Edge isolates keep the old writer for up to 30 s (edge-lb timing.leaseMs), and a live old
+    # writer still answers those writes with 200: keep following it until they have all switched.
+    sleep 35
+  fi
   litestream --profile primary --profile replica down
   if [ "$want" = primary ]; then
     # A new lineage from this node's copy; the old primary's files would not continue it.
     find /srv/platform-sync/litestream -mindepth 1 -delete
     echo primary >"$volume/role"
     litestream --profile primary up -d
+    # Also the apps an unfinished step-down left stopped (docker restart starts them).
+    apps=$({ printf '%s\n' $apps; cat "$stopped" 2>/dev/null || true; } | sort -u)
     [ -z "$apps" ] || docker restart $apps
+    rm -f "$stopped"
   else
     echo replica >"$volume/role"
-    [ -z "$apps" ] || docker stop $apps
-    aside="$volume/fenced-$(date -u +%Y%m%dT%H%M%SZ)"
-    mkdir "$aside"
-    find "$volume" -maxdepth 1 -name 'mc-hub.db*' -exec mv -t "$aside" {} +
+    touch "$stopped"
+    [ -z "$apps" ] || { printf '%s\n' $apps >>"$stopped"; docker stop $apps; }
+    if [ -n "$(find "$volume" -maxdepth 1 -name 'mc-hub.db*' -print -quit)" ]; then
+      aside="$volume/fenced-$(date -u +%Y%m%dT%H%M%SZ)"
+      mkdir "$aside"
+      find "$volume" -maxdepth 1 -name 'mc-hub.db*' -exec mv -t "$aside" {} +
+    fi
     litestream --profile replica up -d
     for _ in $(seq 300); do [ -s "$volume/mc-hub.db-txid" ] && break; sleep 1; done
-    [ -s "$volume/mc-hub.db-txid" ] || { echo "replica restore did not finish; mc-hub-api stays stopped" >&2; exit 1; }
+    [ -s "$volume/mc-hub.db-txid" ] || { echo "replica restore did not finish; mc-hub-api stays stopped until the next try" >&2; exit 1; }
+    apps=$(sort -u "$stopped")
     [ -z "$apps" ] || docker start $apps
+    rm -f "$stopped"
   fi
 }
 
