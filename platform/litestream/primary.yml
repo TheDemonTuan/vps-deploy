@@ -1,5 +1,9 @@
 # Primary: replicate to a local directory. Replica nodes read it over SFTP (platform/sync) and the
 # mirror service copies it to R2 hourly, so replication itself makes no R2 requests.
+socket:
+  enabled: true
+  path: /data/litestream.sock
+  permissions: 384 # 0600, same UID as the API
 dbs:
   - path: /data/mc-hub.db
     replica:

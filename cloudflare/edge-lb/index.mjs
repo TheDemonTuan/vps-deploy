@@ -130,6 +130,7 @@ async function route(request, url, site, env, ctx, meta) {
   const client = request.headers.get("cf-connecting-ip") || "";
   const leaseCall = LEASE_PATH.exec(url.pathname);
   if (leaseCall) return nodeLease(request, leaseCall[1], client, env);
+  if (url.pathname === "/api/_replication") return new Response("Not Found", { status: 404 });
 
   const bucket = rules.public_bucket;
   if (bucket && (request.method === "GET" || request.method === "HEAD") && new RegExp(bucket.path).test(url.pathname)) {
@@ -171,7 +172,7 @@ async function route(request, url, site, env, ctx, meta) {
     const cookie = request.headers.get("cookie") || "";
     // A replay that reaches this handler again (it carries X-Edge-Replay) fails instead, so the
     // consumer retries it rather than queueing a copy under the Worker's own address.
-    const queueable = env.WRITES && env.REPLAY_KEY && rules.queue_paths.some((p) => new RegExp(p).test(url.pathname)) &&
+    const queueable = !state.floor && env.WRITES && env.REPLAY_KEY && rules.queue_paths.some((p) => new RegExp(p).test(url.pathname)) &&
       !rules.primary_cookies.some((name) => cookie.includes(name + "=")) && !request.headers.has("x-edge-replay");
     const body = fanout || queueable ? await request.clone().arrayBuffer() : null;
     let response;
@@ -194,6 +195,9 @@ async function route(request, url, site, env, ctx, meta) {
       meta.outcome = "unavailable";
       return Response.json({ error: { code: "WRITER_UNAVAILABLE", message: "The site is switching servers. Please try again in a few minutes." } },
         { status: 503, headers: { "retry-after": "60" } });
+    }
+    if (state.floor && url.pathname.startsWith("/api/") && response.ok && response.headers.get("X-Write-Confirmed") !== "1") {
+      return Response.json({ error: { code: "WRITE_NOT_CONFIRMED", message: "The change was not confirmed on a second server." } }, { status: 503 });
     }
     if (fanout && response.ok) ctx.waitUntil(replay(request, body, fanout, site, state.writer).then(() => site.lease && lease(env, site, { op: "purge" })));
     // A 204 (a view count, a boost) has nothing to read back: no sticky cookie, so the reader keeps
@@ -348,18 +352,51 @@ function lease(env, site, args) {
   return stub.fetch("https://lease/", { method: "POST", body: JSON.stringify({ ...args, primary: site.primary }) });
 }
 
+async function quorumKey(env) {
+  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`quorum:${env.NODE_KEY}`)));
+}
+
+function validPosition(p) {
+  return !!p && Number.isSafeInteger(p.epoch) && p.epoch >= 0 && typeof p.txid === "string" && TXID.test(p.txid);
+}
+
+function covers(position, floor) {
+  return validPosition(position) && position.epoch === floor.epoch && position.txid >= floor.txid;
+}
+
 // POST /__edge/lease/<name> {"op": "beat" | "promote", "force"?: true, "synced"?: <unix seconds>, "txid"?: <16 hex>},
 // only from a node's own address with "Authorization: Bearer <NODE_KEY>"; the node is the one the address belongs to.
 async function nodeLease(request, name, client, env) {
   const node = NODE_BY_IP.get(client);
   const site = Object.values(config.sites).find((s) => s.lease === name && s.nodes.includes(node));
-  if (!site || request.method !== "POST" || !env.NODE_KEY || !same(request.headers.get("authorization") || "", `Bearer ${env.NODE_KEY}`)) {
-    return new Response("Not Found", { status: 404 });
+  if (!site || request.method !== "POST" || !env.NODE_KEY) return new Response("Not Found", { status: 404 });
+  const auth = request.headers.get("authorization") || "";
+  const scoped = same(auth, `Bearer ${await quorumKey(env)}`);
+  if (!scoped && !same(auth, `Bearer ${env.NODE_KEY}`)) return new Response("Not Found", { status: 404 });
+  const { op, force, synced, txid, epoch, position } = await request.json().catch(() => ({})) || {};
+  if (op === "confirm" && scoped && validPosition({ epoch, txid })) {
+    const origin = Object.entries(config.sites).find(([host, candidate]) => host === "thedemontuan.dev" && candidate.lease === name);
+    if (!origin) return new Response(null, { status: 403 });
+    const until = Date.now() + 3500;
+    while (Date.now() < until) {
+      const positions = await Promise.all(site.nodes.filter((n) => n !== node).map(async (n) => {
+        try {
+          const r = await send(new Request(`https://${origin[0]}/api/_replication`, { headers: { authorization: auth } }), n, origin[1], 700, { cacheTtl: -1 });
+          if (r.status !== 204 || !r.headers.has("X-Follower-Epoch")) return null;
+          return { epoch: Number(r.headers.get("X-Follower-Epoch")), txid: r.headers.get("X-Follower-Txid") };
+        } catch { return null; }
+      }));
+      if (positions.some((p) => covers(p, { epoch, txid }))) {
+        leases.delete(name);
+        return lease(env, site, { op, node, epoch, txid });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return new Response(null, { status: 503 });
   }
-  const { op, force, synced, txid } = await request.json().catch(() => ({}));
-  if (op !== "beat" && op !== "promote") return new Response("Bad Request", { status: 400 });
+  if (scoped || (op !== "beat" && op !== "promote")) return new Response("Bad Request", { status: 400 });
   leases.delete(name);
-  return lease(env, site, { op, node, force: force === true, synced: Number(synced) || 0, txid: TXID.test(txid) ? txid : "" });
+  return lease(env, site, { op, node, force: force === true, synced: Number(synced) || 0, txid: TXID.test(txid) ? txid : "", position: validPosition(position) ? position : null });
 }
 
 function same(a, b) {
@@ -455,8 +492,31 @@ export class Lease {
   }
 
   async fetch(request) {
-    const { op, node, force, results, primary, synced, txid } = await request.json();
-    const s = (await this.storage.get("lease")) ?? { writer: primary, epoch: 0, version: 0, beats: {}, fails: {}, alerted: {} };
+    const args = await request.json();
+    const outcome = await this.storage.transaction((tx) => this.update(tx, args));
+    if (outcome instanceof Response) return outcome;
+    const { response, alerts } = outcome;
+    if (alerts.length && this.env.TELEGRAM_TOKEN) {
+      await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chat_id: this.env.TELEGRAM_CHAT_ID, text: `[edge] ${alerts.join("\n")}` }),
+      }).catch(() => {});
+    }
+    return response;
+  }
+
+  async update(tx, { op, node, force, results, primary, synced, txid, epoch, position }) {
+    const s = (await tx.get("lease")) ?? { writer: primary, epoch: 0, version: 0, beats: {}, fails: {}, alerted: {} };
+    if (op === "confirm") {
+      if (s.writer !== node || s.epoch !== epoch) return new Response(null, { status: 409 });
+      if (!s.floor || s.floor.epoch !== epoch || s.floor.txid < txid) {
+        s.floor = { epoch, txid };
+        await tx.put("lease", s);
+      }
+      return new Response(null, { status: 204 });
+    }
+    s.positions ??= {};
     s.synced ??= {};
     s.ok ??= {};
     s.txid ??= {};
@@ -464,6 +524,7 @@ export class Lease {
     const alerts = [];
     if (op === "beat") {
       s.beats[node] = now;
+      s.positions[node] = position;
       if (synced > 0) s.synced[node] = Math.min(synced * 1000, now);
       // A node that cannot tell its position (Litestream stopped) must not keep an old one.
       if (txid) s.txid[node] = txid;
@@ -472,6 +533,7 @@ export class Lease {
     if (op === "purge") s.version++;
     if (op === "promote" && s.writer !== node) {
       const age = now - (s.beats[s.writer] ?? 0);
+      if (s.floor && !covers(position, s.floor)) return Response.json({ error: "DURABLE_FLOOR_REQUIRED", floor: s.floor }, { status: 409 });
       if (!force && age < LEASE_MS) {
         return Response.json({ error: "WRITER_ALIVE", writer: s.writer, seconds: Math.round(age / 1000) }, { status: 409 });
       }
@@ -507,12 +569,13 @@ export class Lease {
         const floor = at(s.writer);
         const weight = (n) => config.nodes[n]?.weight ?? 0;
         const next = nodes
-          .filter((n) => n !== s.writer && !failing(n) && now - (s.beats[n] ?? 0) < LEASE_MS && (s.synced[n] ?? 0) >= s.ok[s.writer] - SYNC_SLACK_MS &&
-            (floor === null || (at(n) !== null && floor - at(n) <= PROMOTE_LAG_TXIDS)))
+          .filter((n) => n !== s.writer && !failing(n) && now - (s.beats[n] ?? 0) < LEASE_MS &&
+            (s.floor ? covers(s.positions[n], s.floor) : (s.synced[n] ?? 0) >= s.ok[s.writer] - SYNC_SLACK_MS &&
+              (floor === null || (at(n) !== null && floor - at(n) <= PROMOTE_LAG_TXIDS))))
           .sort((a, b) => (at(a) === at(b) ? 0 : (at(b) ?? -1n) > (at(a) ?? -1n) ? 1 : -1) || weight(b) - weight(a) || s.synced[b] - s.synced[a])[0];
         const why = writerFails >= PROMOTE_CHECKS ? `failing ${writerFails} checks in a row` : `no lease renewal for ${Math.round(age / 60000)} min`;
         if (next) {
-          const lag = floor === null ? "" : `, ${floor > at(next) ? floor - at(next) : 0n} transactions behind its last report`;
+          const lag = s.floor || floor === null ? "" : `, ${floor > at(next) ? floor - at(next) : 0n} transactions behind its last report`;
           alerts.push(`${next} is now the writer (was ${s.writer}, ${why}${lag}); ${s.writer} steps down to replica when it is back.`);
           s.lapiAfter = Math.max(s.lapiAfter || 0, (s.beats[s.writer] || 0) + LEASE_MS);
           s.writer = next;
@@ -523,22 +586,15 @@ export class Lease {
         } else if (!s.alerted.failover) {
           s.alerted.failover = true;
           alerts.push(`PROBLEM: writer ${s.writer} is down (${why}) and no replica may take over by itself (each must pass its checks, renew the lease and hold the writer's data). ` +
-            "sudo /opt/platform/peer/role.sh promote --force on a replica takes it anyway, losing what that replica lacks.");
+            (s.floor ? "Even forced promotion requires the last acknowledged position." : "sudo /opt/platform/peer/role.sh promote --force takes it anyway, losing what that replica lacks."));
         }
       } else {
         delete s.alerted.failover;
       }
     }
-    await this.storage.put("lease", s);
-    if (alerts.length && this.env.TELEGRAM_TOKEN) {
-      await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: this.env.TELEGRAM_CHAT_ID, text: `[edge] ${alerts.join("\n")}` }),
-      }).catch(() => {});
-    }
-    return Response.json({ writer: s.writer, epoch: s.epoch, version: s.version, down: downNodes(s, now),
-      lapiGrant: op === "beat" && node === s.writer && now >= (s.lapiAfter || 0) });
+    await tx.put("lease", s);
+    return { alerts, response: Response.json({ writer: s.writer, epoch: s.epoch, version: s.version, down: downNodes(s, now),
+      ...(s.floor && { floor: s.floor }), lapiGrant: op === "beat" && node === s.writer && now >= (s.lapiAfter || 0) }) };
   }
 }
 

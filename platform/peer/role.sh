@@ -20,6 +20,20 @@ flock 9
 volume=/var/lib/docker/volumes/mc-hub-api-data/_data
 writer_file=/var/lib/platform-peer/writer
 stopped=/var/lib/platform-peer/stopped-apps
+. "$(dirname "$0")/write-position.sh"
+lease_file=/var/lib/platform-peer/lease
+
+source_epoch() {
+  local path tmp
+  tmp=$(mktemp -d)
+  path=$tmp/epoch
+  printf 'get /litestream/mc-hub-api-%s/epoch %s\n' "$2" "$path" |
+    sftp -q -b - -i /etc/platform/sync_key -o BatchMode=yes -o ConnectTimeout=5 \
+      -o ServerAliveInterval=3 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=yes \
+      -o UserKnownHostsFile=/etc/platform/known_hosts "platform-sync@$1" >/dev/null 2>&1 || true
+  if [ -s "$path" ]; then cat "$path"; fi
+  rm -rf "$tmp"
+}
 # The writer a replica follows (PRIMARY_SSH, PRIMARY_HOST_KEY for platform/litestream/replica.yml),
 # from /etc/platform/nodes: "<id> <ip> <ecdsa host key>" (Litestream's SSH client pins ECDSA).
 follows=/etc/platform/litestream-primary.env
@@ -32,12 +46,32 @@ litestream() {
 # become primary | become replica <writer>
 become() {
   local want=$1 current apps follow=""
+  local epoch='' floor='' checked peer_ip expected=''
+  if [ -f "$volume/write-quorum.json" ]; then
+    checked=$(cat "$lease_file")
+    expected=${2:-$NODE}
+    jq -e --arg writer "$expected" '.writer == $writer and (.epoch | type == "number")' <<<"$checked" >/dev/null
+    epoch=$(jq -r .epoch <<<"$checked")
+    [[ $epoch =~ ^[0-9]{1,15}$ ]] || return 1
+    floor=$(jq -c '.floor // empty' <<<"$checked")
+  fi
   current=$(cat "$volume/role" 2>/dev/null || echo "$ROLE")
   if [ "$want" = replica ]; then
     follow=$(awk -v n="$2" '$1 == n && NF >= 4 {printf "PRIMARY_SSH=%s:22\nPRIMARY_HOST_KEY=%s %s\n", $2, $3, $4}' /etc/platform/nodes)
     [ -n "$follow" ] || { echo "writer $2 is not in /etc/platform/nodes" >&2; exit 1; }
+    [ -z "$epoch" ] || follow+=$'\n'"LTX_SUFFIX=-$epoch"
   fi
-  [ "$current" = "$want" ] && [ ! -e "$stopped" ] && { [ "$want" = primary ] || [ "$(cat "$follows" 2>/dev/null)" = "$follow" ]; } && return
+  if [ "$current" = "$want" ] && [ ! -e "$stopped" ]; then
+    if [ "$want" = primary ]; then
+      [ -z "$epoch" ] || [ "$(cat "$volume/writer-epoch" 2>/dev/null)" = "$epoch" ] || { echo 'primary on a different epoch; refusing to relabel its database' >&2; return 1; }
+      return 0
+    fi
+    if [ "$(cat "$follows" 2>/dev/null)" = "$follow" ] && { [ -z "$epoch" ] || [ "$(cat "$volume/follower-epoch" 2>/dev/null)" = "$epoch" ]; }; then return 0; fi
+  fi
+  if [ "$want" = replica ] && [ -n "$epoch" ]; then
+    peer_ip=$(sed -n 's/^PRIMARY_SSH=\(.*\):22$/\1/p' <<<"$follow")
+    [ "$(source_epoch "$peer_ip" "$epoch")" = "$epoch" ] || { echo 'writer has not published the new replication epoch' >&2; return 1; }
+  fi
   echo "mc-hub-api: $current -> $want${2:+ of $2}"
   apps=$(docker ps --format '{{.Names}}' | grep -E '^mc-hub-api-(blue|green)$' || true)
   # The follower check compares against the old lineage's position otherwise.
@@ -48,6 +82,12 @@ become() {
     sleep 35
   fi
   litestream --profile primary --profile replica down
+  if [ "$want" = primary ] && [ -n "$floor" ]; then
+    checked=$(position) || { echo 'missing durable follower position' >&2; return 1; }
+    jq -e --argjson floor "$floor" '.epoch == $floor.epoch and .txid >= $floor.txid' <<<"$checked" >/dev/null ||
+      { echo 'local database does not cover the durable floor' >&2; return 1; }
+  fi
+  rm -f "$volume/follower-epoch" "$volume/writer-epoch"
   # Any switch ends this node's lineage. Its served copy must go, or a replica pointed here before
   # this node's new snapshot restores the old one and stays stuck on it; its local LTX state
   # (.mc-hub.db-litestream) must go, or a new primary tries to continue the old lineage. The
@@ -59,7 +99,18 @@ become() {
     # mc-hub-api takes writes while this is under 150 s old; peer.sh keeps it from now on.
     touch "$volume/writer-lease"
     rm -f "$follows"
+    if [ -n "$epoch" ]; then
+      local lineage=/srv/platform-sync/litestream/mc-hub-api-$epoch
+      [ ! -e "$lineage" ] || { echo 'refusing to reuse an existing replication epoch' >&2; return 1; }
+      install -d -o 1000 -g 1000 "$lineage"
+      ln -s "mc-hub-api-$epoch" /srv/platform-sync/litestream/mc-hub-api
+    fi
     litestream --profile primary up -d
+    if [ -n "$epoch" ]; then
+      printf '%s\n' "$epoch" >"$lineage/epoch"
+      printf '%s\n' "$epoch" >"$volume/writer-epoch.tmp"
+      mv -f "$volume/writer-epoch.tmp" "$volume/writer-epoch"
+    fi
     # Also the apps an unfinished step-down left stopped (docker restart starts them).
     apps=$({ printf '%s\n' $apps; cat "$stopped" 2>/dev/null || true; } | sort -u)
     [ -z "$apps" ] || docker restart $apps
@@ -76,6 +127,11 @@ become() {
     litestream --profile replica up -d
     for _ in $(seq 300); do [ -s "$volume/mc-hub.db-txid" ] && break; sleep 1; done
     [ -s "$volume/mc-hub.db-txid" ] || { echo "replica restore did not finish; mc-hub-api stays stopped until the next try" >&2; exit 1; }
+    if [ -n "$epoch" ]; then
+      [ "$(source_epoch "$peer_ip" "$epoch")" = "$epoch" ] || { echo 'source changed during restore' >&2; return 1; }
+      printf '%s\n' "$epoch" >"$volume/follower-epoch.tmp"
+      mv -f "$volume/follower-epoch.tmp" "$volume/follower-epoch"
+    fi
     apps=$(sort -u "$stopped")
     [ -z "$apps" ] || docker start $apps
     rm -f "$stopped"
@@ -83,16 +139,54 @@ become() {
 }
 
 case "${1:-}" in
+  prepare-quorum)
+    lease=$(cat "$lease_file")
+    epoch=$(jq -er --arg n "$NODE" 'select(.writer == $n and .floor == null) | .epoch' <<<"$lease")
+    [[ $epoch =~ ^[0-9]{1,15}$ && $(cat "$volume/role") = primary ]]
+    base=/srv/platform-sync/litestream/mc-hub-api
+    if [ ! -L "$base" ]; then
+      [ -d "$base/ltx" ] && [ ! -e "$base-$epoch" ]
+      litestream --profile primary --profile replica down
+      mv "$base" "$base-$epoch"
+      ln -s "mc-hub-api-$epoch" "$base"
+    fi
+    [ "$(readlink "$base")" = "mc-hub-api-$epoch" ]
+    litestream --profile primary up -d
+    printf '%s\n' "$epoch" >"$base/epoch"
+    printf '%s\n' "$epoch" >"$volume/writer-epoch"
+    ;;
+  enable-quorum)
+    lease=$(cat "$lease_file")
+    writer=$(jq -er '.writer' <<<"$lease")
+    epoch=$(jq -er '.epoch' <<<"$lease")
+    if [ "$writer" = "$NODE" ]; then
+      [ "$(cat "$volume/writer-epoch")" = "$epoch" ] && [ -S "$volume/litestream.sock" ]
+    fi
+    umask 077
+    printf 'quorum:%s' "$(cat /etc/platform/edge-node-key)" | sha256sum | cut -d' ' -f1 |
+      jq -Rn --arg url "$LEASE_URL" '{url:$url,key:input}' >"$volume/write-quorum.json.tmp"
+    chown 1000:1000 "$volume/write-quorum.json.tmp"
+    mv -f "$volume/write-quorum.json.tmp" "$volume/write-quorum.json"
+    if [ "$writer" = "$NODE" ]; then
+      apps=$(docker ps --format '{{.Names}}' | grep -E '^mc-hub-api-(blue|green)$')
+      docker restart $apps
+    else
+      become replica "$writer"
+    fi
+    ;;
   promote)
     force=false
     [ "${2:-}" = --force ] && force=true
+    proof=$(position) || proof=null
     reply=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/platform/edge-node-key)" |
-      curl -sS -m 20 -K - -H 'content-type: application/json' -d "{\"op\":\"promote\",\"force\":$force}" -w '\n%{http_code}' "$LEASE_URL")
+      curl -sS -m 20 -K - -H 'content-type: application/json' -d "{\"op\":\"promote\",\"force\":$force,\"position\":$proof}" -w '\n%{http_code}' "$LEASE_URL")
     code=${reply##*$'\n'}
     if [ "$code" != 200 ]; then
       echo "promote refused (HTTP $code): ${reply%$'\n'*}" >&2
       exit 1
     fi
+    printf '%s\n' "${reply%$'\n'*}" >"$lease_file.tmp"
+    mv -f "$lease_file.tmp" "$lease_file"
     echo "$NODE" >"$writer_file"
     become primary
     ;;
