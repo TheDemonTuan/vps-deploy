@@ -6,7 +6,7 @@ Hệ thống CI/CD và deployment engine dùng chung trên VPS cho các dịch v
 
 ## 1. Luồng hoạt động khi commit code (Deployment Flow)
 
-Khi developer commit và push code lên nhánh mặc định (`master`) của repository ứng dụng (ví dụ `9router`):
+Khi developer commit và push code lên nhánh mặc định (`production`) của repository ứng dụng (ví dụ `omniroute`):
 
 ```mermaid
 sequenceDiagram
@@ -90,7 +90,7 @@ sequenceDiagram
 
 ## 2. Hướng dẫn đồng bộ thêm một ứng dụng mới (App Onboarding Guide)
 
-Để đưa một ứng dụng mới (ví dụ `my-service`) vào hệ thống triển khai Blue/Green đồng bộ với quy chuẩn của `9router`, thực hiện theo 3 giai đoạn:
+Để đưa một ứng dụng mới (ví dụ `my-service`) vào hệ thống triển khai Blue/Green đồng bộ với quy chuẩn của nền tảng, thực hiện theo 3 giai đoạn:
 
 ```
 [Giai đoạn 1: App Repo]      [Giai đoạn 2: Platform Repo]      [Giai đoạn 3: VPS Host]
@@ -479,23 +479,6 @@ installed binding, so the API side goes first.
    GA4 stream URL; editorial `site_api`; links on YouTube, TikTok, Modrinth, CurseForge, PMC.
    A previous fallback domain only needs its redirect target updated.
 
-### 4. Thành phần Stateful ChatGPT Web Runtime (`cgw`)
-
-**Production 9router đang tạm ngừng CGW (2026-10-16).** Registration không enroll `cgw`, host binding không có `cgw_network`, và caller runtime không còn trong build/security/deploy allowlists. Web app không cần Chrome/runtime để build, healthy hoặc deploy. Source/runtime implementation và account/browser volumes được giữ lại; không tự enroll hay khởi chạy lại.
-
-Khi nâng từ registration có CGW, installer chỉ cho phép so sánh gateway đang chạy với overlay cũ sau khi đã xác minh registration/host cũ. Nó vẫn kiểm tra chính xác network, secret mounts và Compose parity, nhưng không yêu cầu runtime CGW khỏe để bỏ enrollment. Cài platform bằng `install/install.sh --check` rồi cùng lệnh không có `--check`; lần app deploy kế tiếp dùng Compose không CGW. Giữ nguyên `/etc/vps-deploy/apps/9router` secrets và hai volume `9router-cgw-data`, `9router-cgw-browser` để phục hồi có chủ đích; runtime đã dừng phải giữ restart policy `no`.
-
-Đối với các ứng dụng có thành phần runtime trình duyệt hoặc stateful harness (như `9router`):
-- Runtime được quản lý dưới Compose project riêng biệt `9router-cgw`, container `9router-cgw-runtime`, volume account `9router-cgw-data` và cache trình duyệt `9router-cgw-browser` riêng biệt.
-- Runtime chạy non-root (`10001:10001`), `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges: true`, shm 1GB, giới hạn 1 CPU / 2GB RAM và seccomp profile tương thích user-namespace của Chromium. VNC chỉ bind `127.0.0.1:17842`.
-- Giao tiếp giữa gateway và runtime đi qua mạng nội bộ cô lập `9router-cgw` (`internal: true`). Runtime sở hữu mạng egress riêng biệt `9router-cgw-egress` để kết nối ra ngoài, không đi qua Traefik edge.
-- Triển khai runtime sử dụng transaction riêng biệt với durable fence, kiểm tra `physicalIdle: true`, tạo private SQLite snapshot, và resume an toàn sau khi commit. Gateway blue/green không can thiệp vòng đời runtime.
-- Khi enroll lại CGW có chủ đích, registration phải bổ sung image và caller `chatgpt-web-runtime.yml` trong build/security/deploy allowlists; giữ source gate của `rtk-sidecar.yml`. Caller manifest, mọi `uses` và `platform-ref` phải cutover cùng immutable platform SHA.
-- Reusable `build-docker.yml` nhận `component` tùy chọn (`app` mặc định, hoặc `cgw`). `app` giữ Dockerfile, tag/cache và root image smoke hiện tại. `cgw` chỉ dùng `services/chatgpt-web-runtime/Dockerfile`, app-root context, `APP_REVISION=source-sha`, native ARM64 và tag `sha-<source-sha>`; không có input arbitrary Dockerfile/image/component.
-- CGW public image không chứa browser. `docker compose up` tự chạy `browser-init` bằng cùng image, non-root, root read-only, 0.5 CPU / 1GB RAM; tải Chrome for Testing `154.0.8037.92` trực tiếp từ Google và xác minh SHA256/provenance trong Docker cache. Không cài Chrome/Python browser installer trên host, không compile/browser builder hoặc COPY payload vào image. Cache mount tại `/opt/cgw-browser`: init RW, runtime RO; executable versioned do từng image sở hữu, giữ các version cũ để rollback. Managed deploy chuẩn bị cache **trước** drain rồi dùng runtime `up --no-deps`; transaction profile/data vẫn giữ nguyên. Build chạy verifier thật trong image sandboxed và COPY duy nhất generated compatibility JSON vào `/opt/cgw/compatibility.json`. Exact published digest phải qua native image/browser smoke và image Trivy gate. `scripts/scan-browser.py` dùng SPDX đọc qua Docker, Grype `0.120.0` theo CPE `google:chrome`, không ignore HIGH/CRITICAL; mỗi lần scan phải chứng minh phát hiện Chrome cũ có lỗ hổng, scanner/database lỗi hoặc thiếu CPE coverage đều fail closed. CI dọn cache/container của chính job, không upload browser/account/runtime state. Offline build evidence không chứng minh account login hay Full readiness. Runbook: [`install/README.md`](install/README.md#first-cgw-enrollment-and-build-proof).
-- Gateway CGW env chỉ cho phép URL nội bộ và ba file selectors `CHATGPT_WEB_RUNTIME_TOKEN_FILE`, `CHATGPT_WEB_RUNTIME_ADMIN_TOKEN_FILE`, `CHATGPT_WEB_CLIENT_KEYS_FILE`; không dùng socket env cũ hoặc secrets trực tiếp. `INITIAL_PASSWORD` vẫn bắt buộc; CGW secret-file/native-policy checks chỉ áp dụng khi manifest enroll CGW.
-
-
 ### Lưu ý an toàn cơ sở dữ liệu Blue/Green
 
 Hai slot blue/green dùng chung volume dữ liệu (như SQLite hoặc DB container). Deployment engine hỗ trợ rollback route và container ngay lập tức, nhưng **không rollback dữ liệu đã thay đổi**.
@@ -512,14 +495,14 @@ Khi cần kiểm tra hoặc xử lý trực tiếp trên VPS với quyền root:
 
 - **Kiểm tra trạng thái triển khai**:
   ```bash
-  /opt/vps-deploy/current/bin/deployctl status --app 9router --strict
+  /opt/vps-deploy/current/bin/deployctl status --app omniroute --strict
   ```
 - **Xử lý sự cố / khôi phục route sau gián đoạn (`reconcile`)**:
   Nếu deploy bị ngắt giữa chừng và báo `recovery_required`, tuyệt đối không khởi động lại script cũ:
   ```bash
   python3 -c '
   import json, subprocess
-  payload = dict(version=1, op="reconcile", app="9router", component="app",
+  payload = dict(version=1, op="reconcile", app="omniroute", component="app",
                  request_id="manual-reconcile", platform_ref="<PLATFORM_SHA>",
                  manifest_sha256="<MANIFEST_SHA>", source_sha="<SOURCE_SHA>")
   print(subprocess.run(["/opt/vps-deploy/current/bin/deployctl", "submit"], input=json.dumps(payload), text=True, capture_output=True).stdout)
@@ -527,7 +510,7 @@ Khi cần kiểm tra hoặc xử lý trực tiếp trên VPS với quyền root:
   ```
 - **Chủ động dọn dẹp các slot đang drain**:
   ```bash
-  /opt/vps-deploy/current/bin/deployctl cleanup-drains --app 9router
+  /opt/vps-deploy/current/bin/deployctl cleanup-drains --app omniroute
   ```
 
 ## Cloudflare releases: ACB and uptimeflare
@@ -600,9 +583,8 @@ private `omniroute` package and its historical versions are not modified.
 - The API hostname allows inference paths and health only; management paths fall
   through to the existing deny middleware. No host ports or Docker socket mount.
 - Cloudflare Access protects the entire dashboard hostname, including login,
-  settings and static assets. Its single identity policy copies the exact email
-  allowlist, IdP and 24-hour session from `9router-admin.tuannguyenviet.site`;
-  9router's monitoring service-token policy is deliberately not copied. Native
+  settings and static assets. Its single identity policy uses an email allowlist,
+  IdP and 24-hour session configured in Cloudflare Access. Native
   OmniRoute password authentication remains enabled behind Access.
 - The first zone custom WAF rule, `omniroute_api_paths`, blocks API-host requests
   outside `/v1/`, `/api/v1/`, `/v1beta/`, `/api/v1beta/` and exact `/api/health`.
@@ -616,7 +598,7 @@ private `omniroute` package and its historical versions are not modified.
   denial and API rate limiting remain active behind Cloudflare.
 - Root-owned mode-0600 `runtime.env` requires `INITIAL_PASSWORD`, `JWT_SECRET`,
   `API_KEY_SECRET`, `PUBLIC_URL` and `PUBLIC_API_URL`. Generate new secrets;
-  never reuse 9router's DB.
+  never reuse old DB volumes.
 - `BASE_URL` stays on container loopback for internal sync jobs; only
   `NEXT_PUBLIC_BASE_URL` uses `PUBLIC_URL` for public dashboard/OAuth callbacks.
   `PUBLIC_API_URL=https://omniroute-api.tuannguyenviet.site` supplies the runtime
@@ -644,7 +626,7 @@ private `omniroute` package and its historical versions are not modified.
 - Both slots share the OmniRoute SQLite volume. Before updating across schema
   changes, take a consistent SQLite backup and verify backward compatibility;
   switching an image does not roll back database migrations. Never attach
-  `9router-data` to OmniRoute. Browser/embedded CLI providers are not installed in
+  old database volumes to OmniRoute. Browser/embedded CLI providers are not installed in
   the lean production image; selecting those requires a separately reviewed image.
 
 Local checks: `python3 -m unittest discover -s tests -p test_omniroute.py -v`.

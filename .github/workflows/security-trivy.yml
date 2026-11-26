@@ -38,7 +38,7 @@ permissions:
   packages: read
 jobs:
   scan:
-    runs-on: ${{ inputs.scan-mode == 'image' && startsWith(inputs.image-ref, 'ghcr.io/thedemontuan/9router-cgw-runtime@sha256:') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Reject mutable platform checkout
@@ -221,35 +221,6 @@ jobs:
               --severity "${VULN_SEVERITY:-HIGH,CRITICAL}" \
               --exit-code 1 \
               "$IMAGE_REF"
-            if [[ "$IMAGE_REF" == ghcr.io/thedemontuan/9router-cgw-runtime@sha256:* ]]; then
-              [[ "$(uname -m)" == aarch64 ]]
-              metadata="$RUNNER_TEMP/cgw-browser-security"
-              mkdir -m 0700 "$metadata"
-              cache="cgw-security-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-              docker volume create "$cache"
-              trap 'docker rm -f "${cache}-init" "${cache}-metadata" >/dev/null 2>&1 || true; docker volume rm "$cache" >/dev/null 2>&1 || true' EXIT
-              docker pull "$IMAGE_REF"
-              docker run --rm --read-only --user 10001:10001 --cap-drop ALL \
-                --name "${cache}-init" \
-                --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
-                --mount "type=volume,src=$cache,dst=/opt/cgw-browser" \
-                --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-                --tmpfs /run:rw,nosuid,nodev,mode=0700,uid=10001,gid=10001 \
-                "$IMAGE_REF" python3 scripts/install-browser.py --manifest image-build-manifest.json
-              # Only SPDX metadata crosses Docker's cache boundary; no browser files on host.
-              docker run --rm --read-only --network none --user 10001:10001 --cap-drop ALL \
-                --name "${cache}-metadata" \
-                --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
-                --mount "type=volume,src=$cache,dst=/opt/cgw-browser,readonly" \
-                --entrypoint bun "$IMAGE_REF" -e 'const fs=require("node:fs");const m=JSON.parse(fs.readFileSync("image-build-manifest.json","utf8"));process.stdout.write(fs.readFileSync(m.browser.installRoot+"/browser.spdx.json","utf8"))' \
-                > "$metadata/browser.spdx.json"
-              sudo bash "$GITHUB_WORKSPACE/platform/scripts/install-grype.sh" /usr/local/bin
-              python3 "$GITHUB_WORKSPACE/platform/scripts/scan-browser.py" \
-                --sbom "$metadata/browser.spdx.json" \
-                --report "$REPORT_DIR/grype-browser-${APP}.json"
-              docker volume rm "$cache"
-              trap - EXIT
-            fi
             echo "::endgroup::"
           fi
       - name: Save Trivy DB cache

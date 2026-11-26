@@ -15,8 +15,6 @@ class OmniRoute(unittest.TestCase):
         registration = app_registration(ROOT, 'omniroute')
         host = host_registration(ROOT, 'oracle-main')
         resource_collisions(host)
-        self.assertNotIn('rtk', registration['manifest'])
-        self.assertNotIn('cgw', registration['manifest'])
 
     def test_route_slot_identity_and_api_management_boundary(self):
         registration = app_registration(ROOT, 'omniroute')

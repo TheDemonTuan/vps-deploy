@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class Registration(unittest.TestCase):
 
     def test_unknown_and_unsafe_identifiers(self):
-        for app in ('../9router', '9router/', '%i', 'not-enrolled', 'a' * 25):
+        for app in ('../omniroute', 'omniroute/', '%i', 'not-enrolled', 'a' * 25):
             with self.subTest(app=app), self.assertRaises(Failure):
                 app_registration(ROOT, app)
         with self.assertRaisesRegex(Failure, 'HOST_NOT_REGISTERED'):
@@ -50,21 +50,21 @@ class Registration(unittest.TestCase):
             exact({'version': True}, {'version': 1})
 
     def test_registry_rejects_duplicate_alias_and_bad_port(self):
-        raw = (ROOT / 'registry/9router.yml').read_bytes()
+        raw = (ROOT / 'registry/omniroute.yml').read_bytes()
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name) / 'registry'
             directory.mkdir()
-            for mutated in (raw + b'app: 9router\n', raw.replace(b'port: 20128', b'port: true'), raw.replace(b'port: 20128', b'port: &port 20128')):
-                (directory / '9router.yml').write_bytes(mutated)
+            for mutated in (raw + b'app: omniroute\n', raw.replace(b'port: 20128', b'port: true'), raw.replace(b'port: 20128', b'port: &port 20128')):
+                (directory / 'omniroute.yml').write_bytes(mutated)
                 with self.assertRaises(Failure):
-                    app_registration(directory.parent, '9router')
+                    app_registration(directory.parent, 'omniroute')
 
     def test_drain_wrapper_namespace(self):
         host = host_registration(ROOT, 'oracle-main')
-        host['apps']['drain-9router'] = {
+        host['apps']['drain-omniroute'] = {
             'api_host': 'demo.fixture.test', 'dashboard_host': '', 'dashboard_alias_host': '',
-            'work_dir': '/opt/demo', 'compose_project': 'drain-9router',
-            'edge_network': 'edge-drain-9router', 'route_name': 'drain-9router.yml',
+            'work_dir': '/opt/demo', 'compose_project': 'drain-omniroute',
+            'edge_network': 'edge-drain-omniroute', 'route_name': 'drain-omniroute.yml',
         }
         with self.assertRaisesRegex(Failure, 'RESOURCE_COLLISION'):
             resource_collisions(host)
@@ -109,13 +109,13 @@ class Registration(unittest.TestCase):
 
     def test_only_private_app_images_skip_the_anonymous_pull_check(self):
         import operations
-        for access, rtk, checked in (('public', False, True), ('private', False, False), ('private', True, True)):
-            profile = {'registration': {'image_access': access}, 'image_repository': 'ghcr.io/x/app', 'rtk_image_repository': 'ghcr.io/x/rtk'}
-            ref = ('ghcr.io/x/rtk' if rtk else 'ghcr.io/x/app') + '@sha256:' + 'a' * 64
-            with self.subTest(access=access, rtk=rtk), mock.patch('operations.image_id', side_effect=[Failure('MISSING'), 'id']), \
+        for access, checked in (('public', True), ('private', False)):
+            profile = {'registration': {'image_access': access}, 'image_repository': 'ghcr.io/x/app'}
+            ref = 'ghcr.io/x/app@sha256:' + 'a' * 64
+            with self.subTest(access=access), mock.patch('operations.image_id', side_effect=[Failure('MISSING'), 'id']), \
                     mock.patch('operations.anonymous_image') as anonymous, mock.patch('operations.command'), mock.patch('operations.compose'), \
                     mock.patch('operations.environment', return_value={}):
-                operations.pull(Path('/release'), profile, Path('/cfg'), ref, 'blue', rtk=rtk)
+                operations.pull(Path('/release'), profile, Path('/cfg'), ref, 'blue')
                 self.assertEqual(anonymous.called, checked)
 
 

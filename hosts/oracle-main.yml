@@ -18,15 +18,6 @@ edge:
   tunnel: 09575df7-5465-4201-94c0-130e16472dce
   weight: 40
 apps:
-  9router:
-    api_host: 9router-api.tuannguyenviet.site
-    dashboard_host: 9router.tuannguyenviet.site
-    dashboard_alias_host: 9router-admin.tuannguyenviet.site
-    work_dir: /opt/9router
-    compose_project: 9router
-    edge_network: edge-9router
-    rtk_network: 9router-rtk
-    route_name: 9router.yml
   omniroute:
     api_host: omniroute-api.tuannguyenviet.site
     dashboard_host: omniroute.tuannguyenviet.site

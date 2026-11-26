@@ -13,18 +13,18 @@ from core import Failure, digest
 ROOT = Path(__file__).resolve().parents[1]
 GENERATION = '0123456789abcdef0123456789abcdef'
 PROFILE = {
-    'app': '9router', 'route_name': '9router.yml', 'platform_ref': 'a' * 40,
+    'app': 'omniroute', 'route_name': 'omniroute.yml', 'platform_ref': 'a' * 40,
     'api_host': 'api.test.invalid', 'dashboard_host': 'dashboard.test.invalid',
-    'dashboard_alias_host': 'legacy.test.invalid',
+    'dashboard_alias_host': '',
     'registration': {'manifest': {'runtime': {'port': 20128}, 'health': {'path': '/api/health'}},
-                     'route': {'generation_header': 'X-9Router-Route-Generation',
+                     'route': {'generation_header': 'X-OmniRoute-Route-Generation',
                                'required_middlewares': ['security-headers', 'deny-internal']}},
     'host_registration': {'traefik': {'container': 'edge-traefik', 'mount': '/etc/traefik/dynamic'}},
 }
 
 
 def rendered():
-    return subprocess.check_output(['bash', str(ROOT / 'apps/9router/adapter.sh'), 'blue', GENERATION,
+    return subprocess.check_output(['bash', str(ROOT / 'apps/omniroute/adapter.sh'), 'blue', GENERATION,
                                     PROFILE['dashboard_host'], PROFILE['dashboard_alias_host'], PROFILE['api_host']])
 
 
@@ -32,7 +32,7 @@ class RoutePolicy(unittest.TestCase):
     def test_registered_identity_and_exact_url(self):
         raw = rendered()
         self.assertEqual(route.route_state(raw, PROFILE), ('blue', GENERATION))
-        for bad in (raw.replace(b'20128', b'18081'), raw.replace(b'X-9Router-Route-Generation', b'X-Demo-Route-Generation')):
+        for bad in (raw.replace(b'20128', b'18081'), raw.replace(b'X-OmniRoute-Route-Generation', b'X-Demo-Route-Generation')):
             with self.subTest(bad=bad[:40]), self.assertRaises(Failure):
                 route.route_state(bad, PROFILE)
 
@@ -67,7 +67,7 @@ class RoutePolicy(unittest.TestCase):
                 shared.write_bytes(b'# deny-internal: security-headers:\nhttp: {middlewares: {}}\n')
                 with self.assertRaisesRegex(Failure, 'MIDDLEWARE_MISSING'):
                     route.preflight(directory, PROFILE)
-                shared.write_bytes(b'http: {middlewares: {security-headers: {}, deny-internal: {}}, routers: {9router-api-fallback: {}}}\n')
+                shared.write_bytes(b'http: {middlewares: {security-headers: {}, deny-internal: {}}, routers: {omniroute-api-fallback: {}}}\n')
                 with self.assertRaisesRegex(Failure, 'ROUTE_COLLISION'):
                     route.preflight(directory, PROFILE)
                 shared.unlink()

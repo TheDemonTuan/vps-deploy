@@ -35,18 +35,10 @@ except (ValueError, TypeError, KeyError):
 PY
 }
 
-rtk_healthy() {
-  local container="$1"
-  docker exec "$container" bun -e 'const h=await fetch("http://127.0.0.1:8080/health"); const v=await fetch("http://127.0.0.1:8080/version"); if(!h.ok || !(await h.json()).ok || !v.ok || (await v.json()).protocolVersion!==1)process.exit(1)' >/dev/null 2>&1 &&
-    docker exec "$container" bun -e 'const content=Array.from({length:50},(_,i)=>`src/a.ts:${i+1}:KEEP_${i+1} ${"padding ".repeat(12)}`).join("\n"); const r=await fetch("http://127.0.0.1:8080/filter",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({content,filter:"grep"})}); const data=await r.json(); if(!r.ok || data.protocolVersion!==1 || !data.content.includes("KEEP_1") || Buffer.byteLength(data.content)>=Buffer.byteLength(content))process.exit(1)' >/dev/null 2>&1
-}
 
 compose_app() {
   local release="$1" config="$2"; shift 2
   local args=(--env-file "$config/runtime.env" -p "$COMPOSE_PROJECT" -f "$release/apps/$APP_ID/docker-compose.prod.yml")
-  if [[ -n "${CGW_NETWORK:-}" ]]; then
-    args+=(-f "$release/apps/$APP_ID/docker-compose.chatgpt-web.yml")
-  fi
   timeout 300 docker compose "${args[@]}" --ansi=never --progress=plain "$@"
 }
 
@@ -114,7 +106,6 @@ handoff() {
 
 case "${1:-}" in
   health) [[ $# == 2 || $# == 3 ]] && direct_slot_healthy "$2" "${3:-health}" ;;
-  rtk) [[ $# == 2 ]] && rtk_healthy "$2" ;;
   pull) [[ $# == 4 ]] && pull_image "$2" "$3" "$4" ;;
   candidate) [[ $# == 4 ]] && start_candidate "$2" "$3" "$4" ;;
   rollback) [[ $# == 2 ]] && start_previous "$2" ;;

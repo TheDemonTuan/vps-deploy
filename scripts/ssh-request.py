@@ -31,7 +31,7 @@ def main():
     parser.add_argument("--fixture", action="store_true")
     parser.add_argument("--platform-root", type=pathlib.Path)
     parser.add_argument("--operation", choices=("deploy", "status", "rollback", "reconcile"), required=True)
-    parser.add_argument('--component', choices=('app', 'rtk', 'cgw'), default='app')
+    parser.add_argument('--component', choices=('app',), default='app')
     image_options = parser.add_mutually_exclusive_group()
     image_options.add_argument('--image', default='')
     image_options.add_argument('--images', default='')
@@ -58,18 +58,17 @@ def main():
     if args.config != registration["caller"]["config"]:
         raise ValueError("invalid config path")
     policy = registration["manifest"]
-    if args.component != 'app' and args.component not in policy:
+    if args.component != 'app':
         raise ValueError('unregistered component')
-    repository = policy['image'] if args.component == 'app' else policy[args.component]['image']
+    repository = policy['image']
     if args.fixture:
         profile = pathlib.Path("/etc/vps-deploy/apps") / args.app / "host.json"
         selected = json.loads(trusted_path(profile).read_bytes())
         if selected.get("platform_ref") != args.platform_ref or selected.get("fixture_ci") is not True:
             raise ValueError("fixture release mismatch")
-        if args.component != 'cgw':
-            repository = selected['image_repository' if args.component == 'app' else 'rtk_image_repository']
-            if not re.fullmatch(r'localhost:5000/[a-z0-9/_-]+', repository):
-                raise ValueError('invalid fixture image repository')
+        repository = selected['image_repository']
+        if not re.fullmatch(r'localhost:5000/[a-z0-9/_-]+', repository):
+            raise ValueError('invalid fixture image repository')
     if args.images:
         raise ValueError('images map not accepted')
     if args.operation == 'deploy':
@@ -150,7 +149,7 @@ def dispatch(args, payload, ssh):
             raise ValueError("invalid host response")
         return response
 
-    deadline = time.monotonic() + (1860 if args.component == 'cgw' else 960)
+    deadline = time.monotonic() + 960
 
     def connected(request):
         while True:
@@ -182,11 +181,9 @@ def dispatch(args, payload, ssh):
         raise RuntimeError("host operation did not complete")
     if answer.get("healthy") is not True:
         raise RuntimeError("strict route, image, or health proof failed")
-    if args.operation == 'deploy' and args.component == 'app':
+    if args.operation == 'deploy':
         if answer.get('image') != args.image:
             raise RuntimeError('deployed image digest mismatch')
-    if args.operation == 'deploy' and args.component == 'cgw' and (answer.get('cgw') or {}).get('current') != args.image:
-        raise RuntimeError('deployed CGW image digest mismatch')
     if args.operation != "status" and answer.get("platform_ref") != args.platform_ref:
         raise RuntimeError("deployed platform SHA mismatch")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:

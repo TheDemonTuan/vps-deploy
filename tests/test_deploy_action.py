@@ -23,14 +23,14 @@ class DeployActionBoundary(unittest.TestCase):
         source = self.root / "source"
         for directory in (platform, source):
             directory.mkdir()
-        for folder, name in (("registry", "9router.yml"), ("hosts", "oracle-main.yml")):
+        for folder, name in (("registry", "omniroute.yml"), ("hosts", "oracle-main.yml")):
             dest = platform / folder
             dest.mkdir()
-            shutil.copyfile(ROOT / 'tests/fixtures/activation' / folder / name, dest / name)
+            shutil.copyfile(ROOT / folder / name, dest / name)
         sys.path.insert(0, str(ROOT / "lib"))
         self.addCleanup(sys.path.remove, str(ROOT / "lib"))
         from core import app_registration
-        registration = app_registration(platform, "9router")
+        registration = app_registration(platform, "omniroute")
         self.caller = registration["caller"]
         manifest = source / ".deploy/app.yml"
         manifest.parent.mkdir()
@@ -39,22 +39,20 @@ class DeployActionBoundary(unittest.TestCase):
         workflows.mkdir(parents=True)
         self.workflow = workflows / "deploy.yml"
         self.workflow.write_text("jobs:\n  build:\n    uses: approved\n")
-        for name in ("rtk-sidecar.yml", "deploy-ops.yml", "chatgpt-web-runtime.yml"):
-            (workflows / name).write_text("jobs:\n  deploy:\n    steps:\n      - uses: approved\n")
+        (workflows / "deploy-ops.yml").write_text("jobs:\n  deploy:\n    steps:\n      - uses: approved\n")
         for directory in (platform, source):
             subprocess.run(["git", "init", "-q", str(directory)], check=True)
             subprocess.run(["git", "-C", str(directory), "add", "."], check=True)
             subprocess.run(["git", "-C", str(directory), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"], check=True)
         self.platform_sha = subprocess.check_output(["git", "-C", str(platform), "rev-parse", "HEAD"], text=True).strip()
         self.source_sha = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-        self.env = dict(APP="9router", HOST="oracle-main", CALLER_REPO=self.caller["repository"],
+        self.env = dict(APP="omniroute", HOST="oracle-main", CALLER_REPO=self.caller["repository"],
                         CALLER_REF=self.caller["ref"], CALLER_SHA=self.source_sha, ACTION_REF=self.platform_sha,
                         SOURCE_SHA=self.source_sha, PLATFORM_REF=self.platform_sha, CONFIG=self.caller["config"],
                         OPERATION="deploy", COMPONENT="app", IMAGE_REF=registration["manifest"]["image"] + "@sha256:" + "b" * 64)
         self.pin = "TheDemonTuan/vps-deploy/.github/actions/deploy@" + self.platform_sha
         self.workflow.write_text("jobs:\n  deploy:\n    steps:\n      - uses: " + self.pin + "\n")
-        for name in ("rtk-sidecar.yml", "deploy-ops.yml", "chatgpt-web-runtime.yml"):
-            (workflows / name).write_text("jobs:\n  deploy:\n    steps:\n      - uses: " + self.pin + "\n")
+        (workflows / "deploy-ops.yml").write_text("jobs:\n  deploy:\n    steps:\n      - uses: " + self.pin + "\n")
         # Recommit source after inserting the platform pin, then bind caller SHA.
         subprocess.run(["git", "-C", str(source), "add", "."], check=True)
         subprocess.run(["git", "-C", str(source), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "pin"], check=True)
@@ -68,16 +66,14 @@ class DeployActionBoundary(unittest.TestCase):
     def test_registered_caller_and_denials(self):
         self.assertEqual(self.check().returncode, 0)
         self.assertEqual(self.check(preflight=True).returncode, 0)
-        for changes in ({"APP": "../9router"}, {"HOST": "other"}, {"CALLER_REPO": "attacker/repo"},
+        for changes in ({"APP": "../omniroute"}, {"HOST": "other"}, {"CALLER_REPO": "attacker/repo"},
                         {"CALLER_REF": "refs/heads/evil"}, {"ACTION_REF": "c" * 40},
                         {"SOURCE_SHA": "c" * 40}, {"CONFIG": "other.yml"},
                         {"IMAGE_REF": "ghcr.io/attacker/app@sha256:" + "b" * 64},
-                        {"IMAGE_REF": "ghcr.io/thedemontuan/9router:latest"},
-                        {"OPERATION": "rollback", "COMPONENT": "rtk", "IMAGE_REF": ""}):
+                        {"IMAGE_REF": "ghcr.io/thedemontuan/omniroute-vps:latest"},
+                        {"OPERATION": "rollback", "COMPONENT": "invalid", "IMAGE_REF": ""}):
             with self.subTest(changes=changes):
                 self.assertNotEqual(self.check(changes, preflight=True).returncode, 0)
-        self.assertEqual(self.check({"COMPONENT": "cgw", "IMAGE_REF": "ghcr.io/thedemontuan/9router-cgw-runtime@sha256:" + "b" * 64}).returncode, 0)
-        self.assertNotEqual(self.check({"COMPONENT": "cgw", "IMAGE_REF": self.env["IMAGE_REF"]}, preflight=True).returncode, 0)
 
     def test_actual_uses_not_comment_or_duplicate(self):
         self.workflow.write_text("# " + self.pin + "\njobs:\n  deploy:\n    uses: attacker/action@" + self.platform_sha + "\n")
@@ -90,13 +86,9 @@ class DeployActionBoundary(unittest.TestCase):
     def test_build_uses_reusable_workflow(self):
         pin = "TheDemonTuan/vps-deploy/.github/workflows/build-docker.yml@" + self.platform_sha
         self.workflow.write_text("jobs:\n  build:\n    uses: " + pin + "\n")
-        (self.root / "source/.github/workflows/chatgpt-web-runtime.yml").write_text("jobs:\n  build:\n    uses: " + pin + "\n")
         env = {**os.environ, **self.env, "OPERATION": "build", "COMPONENT": "app", "IMAGE_REF": ""}
         result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml"], cwd=self.root,
                                 env=env, capture_output=True, text=True)
-        cgw_result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml"], cwd=self.root,
-                                    env={**env, "COMPONENT": "cgw"}, capture_output=True, text=True)
-        self.assertEqual(cgw_result.returncode, 0, cgw_result.stderr)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.workflow.write_text("# " + pin + "\njobs:\n  build:\n    uses: attacker/workflow@" + self.platform_sha + "\n")
         self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "build-docker.yml"],
@@ -104,29 +96,19 @@ class DeployActionBoundary(unittest.TestCase):
 
     def test_build_component_enrollment_and_image_scope(self):
         base = {"OPERATION": "build", "IMAGE_REF": ""}
-        for component in ("app", "cgw"):
-            result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml", "--preflight"],
-                                    cwd=self.root, env={**os.environ, **self.env, **base, "COMPONENT": component},
-                                    capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-        for change in ({"COMPONENT": "rtk"}, {"COMPONENT": "anything"}, {"COMPONENT": "../cgw"},
-                       {"COMPONENT": "cgw", "IMAGE_REF": "ghcr.io/thedemontuan/9router-cgw-runtime:latest"}):
+        result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml", "--preflight"],
+                                cwd=self.root, env={**os.environ, **self.env, **base, "COMPONENT": "app"},
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for change in ({"COMPONENT": "invalid"}, {"COMPONENT": "anything"}, {"COMPONENT": "other"}):
             result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml", "--preflight"],
                                     cwd=self.root, env={**os.environ, **self.env, **base, **change}, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
-        path = self.root / "platform/registry/9router.yml"
-        registration = yaml.safe_load(path.read_text())
-        del registration["manifest"]["cgw"]
-        path.write_text(yaml.safe_dump(registration, sort_keys=False))
-        result = subprocess.run([sys.executable, str(CHECKER), "build-docker.yml", "--preflight"],
-                                cwd=self.root, env={**os.environ, **self.env, **base, "COMPONENT": "cgw"}, capture_output=True)
-        self.assertNotEqual(result.returncode, 0)
 
     def test_security_trivy_uses_reusable_workflow(self):
         pin = "TheDemonTuan/vps-deploy/.github/workflows/security-trivy.yml@" + self.platform_sha
         self.workflow.write_text("jobs:\n  security:\n    uses: " + pin + "\n")
-        (self.root / "source/.github/workflows/rtk-sidecar.yml").write_text("jobs:\n  security:\n    uses: " + pin + "\n")
-        (self.root / "source/.github/workflows/chatgpt-web-runtime.yml").write_text("jobs:\n  security:\n    uses: " + pin + "\n")
+        pass
         base_env = {k: v for k, v in self.env.items() if k not in ("ACTION_REF", "HOST")}
         env_src = {**os.environ, **base_env, "SCAN_MODE": "source", "IMAGE_REF": ""}
         self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
@@ -134,11 +116,6 @@ class DeployActionBoundary(unittest.TestCase):
         env_img = {**os.environ, **base_env, "SCAN_MODE": "image"}
         self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
                                          cwd=self.root, env=env_img, capture_output=True).returncode, 0)
-        cgw_ref = "ghcr.io/thedemontuan/9router-cgw-runtime@sha256:" + "d" * 64
-        self.assertEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
-                                         cwd=self.root, env={**env_img, "IMAGE_REF": cgw_ref}, capture_output=True).returncode, 0)
-        self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
-                                            cwd=self.root, env={**env_img, "IMAGE_REF": cgw_ref.replace("@sha256:", ":latest@sha256:")}, capture_output=True).returncode, 0)
         env_bad_mode = {**os.environ, **base_env, "SCAN_MODE": "invalid"}
         self.assertNotEqual(subprocess.run([sys.executable, str(CHECKER), "security-trivy.yml"],
                                             cwd=self.root, env=env_bad_mode, capture_output=True).returncode, 0)
@@ -164,7 +141,7 @@ class DeployActionBoundary(unittest.TestCase):
                    "DEPLOY_HOST": "target.example", "DEPLOY_PORT": "22", "DEPLOY_USER": "attacker",
                    "DEPLOY_KEY_FILE": str(key), "GITHUB_STEP_SUMMARY": str(summary), "SSH_CAPTURE": str(captured)}
         res_bad = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
-                                  "--app", "9router", "--host", "oracle-main", "--operation", "status",
+                                  "--app", "omniroute", "--host", "oracle-main", "--operation", "status",
                                   "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
                                   "--config", self.caller["config"], "--request-id", "fixture-status"],
                                  cwd=self.root / "source", env=bad_env, capture_output=True, text=True)
@@ -172,17 +149,17 @@ class DeployActionBoundary(unittest.TestCase):
         self.assertIn("invalid DEPLOY_USER", res_bad.stderr)
 
         good_env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
-                    "DEPLOY_HOST": "target.example", "DEPLOY_PORT": "22", "DEPLOY_USER": "deploy-9router",
+                    "DEPLOY_HOST": "target.example", "DEPLOY_PORT": "22", "DEPLOY_USER": "deploy-omniroute",
                     "DEPLOY_KEY_FILE": str(key), "GITHUB_STEP_SUMMARY": str(summary), "SSH_CAPTURE": str(captured)}
         res_good = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
-                                   "--app", "9router", "--host", "oracle-main", "--operation", "status",
+                                   "--app", "omniroute", "--host", "oracle-main", "--operation", "status",
                                    "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
                                    "--config", self.caller["config"], "--request-id", "fixture-status"],
                                   cwd=self.root / "source", env=good_env, capture_output=True, text=True)
         self.assertEqual(res_good.returncode, 0, res_good.stderr)
         import json
         argv = json.loads(captured.read_text())
-        self.assertIn("deploy-9router@target.example", argv)
+        self.assertIn("deploy-omniroute@target.example", argv)
         self.assertIn("GlobalKnownHostsFile=/dev/null", argv)
         self.assertIn("ClearAllForwardings=yes", argv)
         self.assertIn("ForwardAgent=no", argv)
@@ -191,7 +168,7 @@ class DeployActionBoundary(unittest.TestCase):
         # oracle-main pins ssh.host_key: a different key from a scan is never trusted.
         make_mock("ssh-keyscan", "print('target.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP//////////////////////////////////////////')")
         res_mitm = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
-                                   "--app", "9router", "--host", "oracle-main", "--operation", "status",
+                                   "--app", "omniroute", "--host", "oracle-main", "--operation", "status",
                                    "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
                                    "--config", self.caller["config"], "--request-id", "fixture-status"],
                                   cwd=self.root / "source", env=good_env, capture_output=True, text=True)
