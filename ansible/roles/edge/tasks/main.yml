@@ -49,6 +49,12 @@
     group: root
     mode: "0644"
 
+- name: No hub route on the other nodes
+  when: not monitor_hub
+  ansible.builtin.file:
+    path: /opt/platform/edge/dynamic/monitor.yml
+    state: absent
+
 - name: Cloudflare origin certificates
   ansible.builtin.include_role:
     name: shared_secret

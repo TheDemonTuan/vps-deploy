@@ -20,6 +20,7 @@
     that: monitor_hub_env.stat.exists
     fail_msg: "write /etc/platform/monitor.env on {{ inventory_hostname }} (platform/README.md, Fleet monitoring), then run again"
 
+# From monitor-agent.env on secrets_source: its monitor.env is the hub's when that node is the hub.
 - name: Agent settings (the ingest service token, from {{ secrets_source }})
   when: not monitor_hub
   ansible.builtin.include_role:
@@ -27,7 +28,15 @@
   vars:
     secret:
       dest: /etc/platform/monitor.env
+      src: /etc/platform/monitor-agent.env
       node_line: true
+
+- name: No hub here (it moved to another node)
+  when: not monitor_hub
+  ansible.builtin.command: docker rm -f monitor-grafana monitor-victoriametrics
+  register: monitor_old_hub
+  changed_when: monitor_old_hub.stdout | length > 0
+  failed_when: false
 
 - name: Monitor stack
   ansible.builtin.command: >-
