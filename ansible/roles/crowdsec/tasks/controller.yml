@@ -1,0 +1,141 @@
+# The CrowdSec controller (/opt/crowdsec-telegram-controller: Telegram bot and ban notifications,
+# Cloudflare edge list; no source repository, its releases are the source) on every node, as on
+# secrets_source. peer.sh starts it on the LAPI node only, and only while the lease confirms that
+# node (two would fight over the bot and the list), so it is not enabled at boot.
+- name: Controller release on {{ secrets_source }}
+  ansible.builtin.command: readlink -f /opt/crowdsec-telegram-controller/current
+  delegate_to: "{{ secrets_source }}"
+  run_once: true
+  register: crowdsec_ctl_release
+  check_mode: false
+  changed_when: false
+
+- name: Look for it here
+  ansible.builtin.stat:
+    path: "{{ crowdsec_ctl_release.stdout }}"
+  register: crowdsec_ctl_here
+
+- name: Copy the release from {{ secrets_source }}
+  when: not crowdsec_ctl_here.stat.exists
+  # One node at a time: they share the archive on secrets_source and in .cache/.
+  throttle: 1
+  block:
+    - name: Pack it on {{ secrets_source }}
+      ansible.builtin.command: tar czf /tmp/crowdsec-telegram-controller.tgz -C /opt/crowdsec-telegram-controller/releases {{ crowdsec_ctl_release.stdout | basename }}  # noqa: command-instead-of-module
+      delegate_to: "{{ secrets_source }}"
+      changed_when: false
+
+    - name: Fetch it
+      ansible.builtin.fetch:
+        src: /tmp/crowdsec-telegram-controller.tgz
+        dest: "{{ playbook_dir }}/.cache/crowdsec-telegram-controller.tgz"
+        flat: true
+      delegate_to: "{{ secrets_source }}"
+
+    - name: Releases directory
+      ansible.builtin.file:
+        path: /opt/crowdsec-telegram-controller/releases
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Unpack it
+      ansible.builtin.unarchive:
+        src: "{{ playbook_dir }}/.cache/crowdsec-telegram-controller.tgz"
+        dest: /opt/crowdsec-telegram-controller/releases
+
+- name: Current release
+  ansible.builtin.file:
+    src: "{{ crowdsec_ctl_release.stdout }}"
+    dest: /opt/crowdsec-telegram-controller/current
+    state: link
+    force: "{{ ansible_check_mode }}"  # the release is not unpacked in check mode
+  notify: Restart controller
+
+- name: Controller group
+  ansible.builtin.group:
+    name: crowdsec-telegram
+    system: true
+
+- name: Controller user
+  ansible.builtin.user:
+    name: crowdsec-telegram
+    group: crowdsec-telegram
+    system: true
+    create_home: false
+    home: /opt/crowdsec-telegram-controller
+    shell: /sbin/nologin
+
+- name: Controller directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/crowdsec-telegram-controller, mode: "0755"}
+    - {path: /etc/crowdsec-telegram-controller/secrets, mode: "0700"}
+    - {path: /etc/systemd/system/crowdsec-telegram-controller.service.d, mode: "0755"}
+
+- name: Controller settings and secrets (as on {{ secrets_source }})
+  ansible.builtin.include_role:
+    name: shared_secret
+  loop:
+    - {dest: /etc/crowdsec-telegram-controller/config.json, mode: "0644"}
+    - {dest: /etc/crowdsec-telegram-controller/secrets/cloudflare-api-token}
+    - {dest: /etc/crowdsec-telegram-controller/secrets/cloudflare-lapi-key}
+    - {dest: /etc/crowdsec-telegram-controller/secrets/lapi-credentials.json}
+    - {dest: /etc/crowdsec-telegram-controller/secrets/notification-secret}
+    - {dest: /etc/crowdsec-telegram-controller/secrets/telegram-token}
+  loop_control:
+    loop_var: crowdsec_ctl_file
+    label: "{{ crowdsec_ctl_file.dest }}"
+  vars:
+    secret: "{{ crowdsec_ctl_file }}"
+
+# Its own setting names only the node it was installed on.
+- name: The controller never bans a node of this fleet
+  ansible.builtin.shell: |
+    set -euo pipefail
+    f=/etc/crowdsec-telegram-controller/config.json
+    w='{{ groups["edge"] | map("extract", hostvars, "edge_ip") | map("regex_replace", "$", "/32") | list | to_json }}'
+    jq -e --argjson w "$w" '($w - .protected_cidrs) == []' "$f" >/dev/null && exit 0
+    {{ 'echo missing; exit 0' if ansible_check_mode else '' }}
+    jq --argjson w "$w" '.protected_cidrs = (.protected_cidrs + $w | unique)' "$f" >"$f.tmp"
+    chmod 0644 "$f.tmp" && mv -f "$f.tmp" "$f" && echo added
+  register: crowdsec_ctl_protected
+  check_mode: false
+  changed_when: crowdsec_ctl_protected.stdout in ['added', 'missing']
+  notify: Restart controller
+
+- name: Controller units (from the release) and the edge list credentials
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    remote_src: "{{ item.remote | default(true) }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {src: /opt/crowdsec-telegram-controller/current/deploy/crowdsec-telegram-controller.service, dest: /etc/systemd/system/}
+    - {src: /opt/crowdsec-telegram-controller/current/deploy/crowdsec-telegram-health.service, dest: /etc/systemd/system/}
+    - {src: /opt/crowdsec-telegram-controller/current/deploy/crowdsec-telegram-health.timer, dest: /etc/systemd/system/}
+    - src: "{{ platform_src }}/crowdsec/controller-cloudflare.conf"
+      dest: /etc/systemd/system/crowdsec-telegram-controller.service.d/cloudflare.conf
+      remote: false
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: [Reload systemd, Restart controller]
+  ignore_errors: "{{ ansible_check_mode }}"  # no release to copy from in check mode
+
+- name: Flush systemd reload for the controller
+  ansible.builtin.meta: flush_handlers
+
+- name: Controller not at boot (peer.sh starts it on the LAPI node)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+  loop: [crowdsec-telegram-controller.service, crowdsec-telegram-health.timer]
+  ignore_errors: "{{ ansible_check_mode }}"

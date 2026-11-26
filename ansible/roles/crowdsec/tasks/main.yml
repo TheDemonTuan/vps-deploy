@@ -1,9 +1,10 @@
-# One LAPI for the fleet, on crowdsec_lapi_host (CrowdSec's multi-server setup): it holds every
-# decision, the allowlists, the profiles, the console/CAPI link and the Telegram notifications.
-# Every node runs the agent (its own logs and AppSec on 172.31.254.1:7422), the nftables firewall
-# bouncer and Traefik's bouncer; on the other nodes they reach the LAPI through
-# crowdsec-lapi.service, an SSH forward to the LAPI node's 172.31.254.1:8080. The endpoint guard
-# keeps 8080/7422 off every interface but lo and the edge-crowdsec bridge on every node.
+# One LAPI for the fleet (CrowdSec's multi-server setup), on the edge lease's writer: it holds every
+# decision, the allowlists, the profiles, the console/CAPI link and the Telegram notifications, and
+# platform/crowdsec/lapi.sh moves it with the lease (its crowdsec.db is replicated to every other
+# node with Litestream). Every node runs the agent (its own logs and AppSec on 172.31.254.1:7422),
+# the nftables firewall bouncer and Traefik's bouncer; on the other nodes they reach the LAPI
+# through crowdsec-lapi.service, an SSH forward to the LAPI node's 172.31.254.1:8080. The endpoint
+# guard keeps 8080/7422 off every interface but lo and the edge-crowdsec bridge on every node.
 - name: CrowdSec repository
   ansible.builtin.copy:
     src: "{{ platform_src }}/crowdsec/crowdsec.repo"
@@ -82,15 +83,61 @@
     mode: "0644"
   notify: Reload crowdsec
 
-- name: LAPI here, or agent only
+# The LAPI node: the writer every node last saw named (peer/ writes it each minute), before peer/
+# ever ran initial_writer. Registrations go there; lapi.sh settles each node below.
+- name: The lease writer as each node last saw it
+  ansible.builtin.slurp:
+    src: /var/lib/platform-peer/writer
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['edge'] }}"
+  register: crowdsec_writers
+  run_once: true
+  failed_when: false
+  ignore_unreachable: true  # a dead node (the writer, before the edge moved the lease) names none
+  check_mode: false
+
+- name: The writers they name
+  ansible.builtin.set_fact:
+    crowdsec_writers_seen: "{{ crowdsec_writers.results | selectattr('content', 'defined') | map(attribute='content') | map('b64decode') | map('trim') | unique | list }}"
+  run_once: true
+
+- name: One writer (otherwise the lease is switching; run again in a minute)
+  ansible.builtin.assert:
+    that: crowdsec_writers_seen | length <= 1
+    fail_msg: "the nodes name different writers: {{ crowdsec_writers_seen }}"
+  run_once: true
+
+- name: The LAPI node
+  vars:
+    node: "{{ crowdsec_writers_seen | first | default(initial_writer) }}"
+  ansible.builtin.set_fact:
+    crowdsec_lapi_node: "{{ node }}"
+    crowdsec_lapi_host: "{{ dict(groups['edge'] | map('extract', hostvars, 'edge_id') | zip(groups['edge']))[node] }}"
+  run_once: true
+
+- name: Directories for the LAPI move
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/platform/crowdsec, mode: "0755"}
+    - {path: /opt/platform/crowdsec, mode: "0755"}
+    - {path: /var/lib/crowdsec/follow, mode: "0700"}
+    - {path: /var/lib/platform-peer, mode: "0700"}
+
+- name: Both configurations (lapi.sh installs the one this node runs as config.yaml.local)
   ansible.builtin.template:
     src: "{{ platform_src }}/crowdsec/config.yaml.local.j2"
-    dest: /etc/crowdsec/config.yaml.local
+    dest: "/etc/platform/crowdsec/{{ item }}.yaml.local"
     owner: root
     group: root
     mode: "0600"
-  register: crowdsec_local_config
-  notify: Reload crowdsec
+  loop: [lapi, agent]
+  vars:
+    crowdsec_mode: "{{ item }}"
 
 - name: The agent and cscli use the LAPI on 172.31.254.1:8080 (local, or the forward)
   ansible.builtin.lineinfile:
@@ -99,38 +146,149 @@
     line: "url: http://172.31.254.1:8080"
   notify: Restart crowdsec
 
-- name: Tunnel user and key on the other nodes (the LAPI node reads the keys next)
-  when: not crowdsec_hub
-  block:
-    - name: Tunnel user
-      ansible.builtin.user:
-        name: crowdsec-lapi
-        system: true
-        create_home: false
-        home: /
-        shell: /sbin/nologin
+# Every node may hold the LAPI, so every node lets the others forward to it.
+- name: Forward-only SSH user
+  ansible.builtin.user:
+    name: crowdsec-lapi
+    system: true
+    create_home: false
+    home: /
+    shell: /sbin/nologin
 
-    - name: Tunnel key (the LAPI node allows it to forward to 172.31.254.1:8080 only)
-      ansible.builtin.command: ssh-keygen -q -t ed25519 -N '' -C crowdsec-lapi@{{ edge_id }} -f /etc/platform/lapi_key
-      args:
-        creates: /etc/platform/lapi_key
+- name: Tunnel key (the other nodes allow it to forward to their 172.31.254.1:8080 only)
+  ansible.builtin.command: ssh-keygen -q -t ed25519 -N '' -C crowdsec-lapi@{{ edge_id }} -f /etc/platform/lapi_key
+  args:
+    creates: /etc/platform/lapi_key
 
-    - name: Tunnel key owner
-      when: not ansible_check_mode  # the key and user exist only after a real run
-      ansible.builtin.file:
-        path: /etc/platform/lapi_key
-        owner: crowdsec-lapi
-        group: crowdsec-lapi
-        mode: "0600"
+- name: Tunnel key owner
+  when: not ansible_check_mode  # the key and user exist only after a real run
+  ansible.builtin.file:
+    path: /etc/platform/lapi_key
+    owner: crowdsec-lapi
+    group: crowdsec-lapi
+    mode: "0600"
 
-# Imported, not included: in lockstep the LAPI node's tasks (sshd, keys) run before the others'.
-- name: The LAPI node
+- name: The other nodes' tunnel keys
+  ansible.builtin.slurp:
+    src: /etc/platform/lapi_key.pub
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['edge'] | difference([inventory_hostname]) | sort }}"
+  register: crowdsec_tunnel_keys
+  failed_when: not ansible_check_mode and crowdsec_tunnel_keys.content is not defined
+
+- name: Keys allowed to forward, each only from its node's address
+  ansible.builtin.copy:
+    dest: /etc/ssh/crowdsec-lapi.keys
+    content: |
+      # ansible/roles/crowdsec: the other nodes' crowdsec-lapi.service keys.
+      {% for r in crowdsec_tunnel_keys.results if r.content is defined %}
+      restrict,port-forwarding,permitopen="172.31.254.1:8080",from="{{ hostvars[r.item].edge_ip }}" {{ r.content | b64decode | trim }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0644"
+  register: crowdsec_lapi_keys
+
+- name: "Sshd: the crowdsec-lapi user may only forward to the LAPI"
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/crowdsec/60-crowdsec-lapi.conf"
+    dest: /etc/ssh/sshd_config.d/60-crowdsec-lapi.conf
+    owner: root
+    group: root
+    mode: "0600"
+  register: crowdsec_lapi_sshd
+
+# Now, not as a handler: the other nodes connect a few tasks later.
+- name: Reload sshd for them
+  when: crowdsec_lapi_keys.changed or crowdsec_lapi_sshd.changed
+  ansible.builtin.shell: restorecon /etc/ssh/crowdsec-lapi.keys /etc/ssh/sshd_config.d/60-crowdsec-lapi.conf && /usr/sbin/sshd -t && systemctl reload sshd
+  changed_when: true
+
+# profiles.yaml notifies http_telegram (the controller on the LAPI node, its bearer key inside).
+- name: Ban notifications plugin config
+  ansible.builtin.include_role:
+    name: shared_secret
+  vars:
+    secret:
+      dest: /etc/crowdsec/notifications/http_telegram.yaml
+
+- name: LAPI move (lapi.sh, its unit, the tunnel unit, Litestream for crowdsec.db)
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/crowdsec/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode | default('0644') }}"
+  loop:
+    - {src: lapi.sh, dest: /opt/platform/crowdsec/lapi.sh, mode: "0755"}
+    - {src: litestream.yml, dest: /opt/platform/crowdsec/litestream.yml}
+    - {src: litestream-primary.yml, dest: /opt/platform/crowdsec/litestream-primary.yml}
+    - {src: litestream-replica.yml, dest: /opt/platform/crowdsec/litestream-replica.yml}
+    - {src: platform-lapi.service, dest: /etc/systemd/system/platform-lapi.service}
+    - {src: crowdsec-lapi.service, dest: /etc/systemd/system/crowdsec-lapi.service}
+    - {src: platform-lapi-guard.timer, dest: /etc/systemd/system/platform-lapi-guard.timer}
+    - {src: platform-lapi-guard.service, dest: /etc/systemd/system/platform-lapi-guard.service}
+    - {src: lapi-grant.conf, dest: /etc/systemd/system/crowdsec.service.d/30-lapi-grant.conf}
+  notify: Reload systemd
+
+- name: Agent and firewall bouncer start after the tunnel (a condition skips it on the LAPI node)
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item }}.service.d/20-lapi.conf"
+    content: |
+      [Unit]
+      After=crowdsec-lapi.service
+      Wants=crowdsec-lapi.service
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [crowdsec, crowdsec-firewall-bouncer]
+  notify: Reload systemd
+
+- name: Flush systemd reload before the move
+  ansible.builtin.meta: flush_handlers
+
+- name: Tunnel at boot (lapi.sh starts and stops it)
+  ansible.builtin.systemd_service:
+    name: crowdsec-lapi.service
+    enabled: true
+  ignore_errors: "{{ ansible_check_mode }}"  # the unit file is not written in check mode
+
+- name: Hold or follow the LAPI as the lease says
+  when: not ansible_check_mode
+  ansible.builtin.command: /opt/platform/crowdsec/lapi.sh reconcile {{ crowdsec_lapi_node }}
+  environment:
+    NODE: "{{ edge_id }}"
+  register: crowdsec_lapi_move
+  changed_when: crowdsec_lapi_move.stdout != ''
+
+- name: Wait for the LAPI (here, or through the tunnel)
+  ansible.builtin.uri:
+    url: http://172.31.254.1:8080/health
+  register: crowdsec_lapi_health
+  until: crowdsec_lapi_health.status == 200
+  retries: 12
+  delay: 5
+  check_mode: false
+
+- name: Registrations on the LAPI node
+  ansible.builtin.import_tasks: registration.yml
+
+# Entries keep the same expiry instant wherever they were created; a missing list is created first.
+- name: Allowlist entries
   when: crowdsec_hub
-  ansible.builtin.import_tasks: hub.yml
-
-- name: The other nodes
-  when: not crowdsec_hub
-  ansible.builtin.import_tasks: spoke.yml
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if cscli allowlists inspect {{ item.0.name }} -o json | jq -e --arg v {{ item.1.value }} '.items[]? | select(.value == $v)' >/dev/null 2>&1; then exit 0; fi
+    {{ 'echo missing; exit 0' if ansible_check_mode else '' }}
+    cscli allowlists inspect {{ item.0.name }} >/dev/null 2>&1 || cscli allowlists create {{ item.0.name }} -d '{{ item.0.description }}'
+    cscli allowlists add {{ item.0.name }} {{ item.1.value }} -e "$(( ($(date -d {{ item.1.expires }} +%s) - $(date +%s)) / 3600 ))h" -d '{{ item.1.comment }}'
+    echo added
+  loop: "{{ crowdsec_allowlists | subelements('entries') }}"
+  loop_control:
+    label: "{{ item.0.name }} {{ item.1.value }}"
+  register: crowdsec_allowlist_result
+  check_mode: false
+  changed_when: crowdsec_allowlist_result.stdout in ['added', 'missing']
 
 - name: Firewall bouncer configuration
   ansible.builtin.template:
@@ -154,3 +312,12 @@
     name: crowdsec-firewall-bouncer
     enabled: true
     state: started
+
+- name: The controller
+  ansible.builtin.import_tasks: controller.yml
+
+- name: Fence expired LAPI grants independently of the peer timer
+  ansible.builtin.systemd_service:
+    name: platform-lapi-guard.timer
+    state: started
+    enabled: true

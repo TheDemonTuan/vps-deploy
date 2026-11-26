@@ -13,3 +13,8 @@
   ansible.builtin.systemd_service:
     name: crowdsec-firewall-bouncer
     state: restarted
+
+# Only where it runs (the LAPI node): elsewhere peer.sh keeps it stopped.
+- name: Restart controller
+  ansible.builtin.command: systemctl try-restart crowdsec-telegram-controller.service  # noqa: command-instead-of-module
+  changed_when: true

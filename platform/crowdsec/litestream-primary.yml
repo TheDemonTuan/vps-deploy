@@ -1,0 +1,6 @@
+# The LAPI node: replicate crowdsec.db to a local directory the other nodes read over SFTP.
+dbs:
+  - path: /data/crowdsec.db
+    replica:
+      type: file
+      path: /replica/crowdsec

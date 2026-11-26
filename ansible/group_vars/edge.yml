@@ -52,8 +52,9 @@ crowdsec_collections:
   - crowdsecurity/sshd
   - crowdsecurity/traefik
   - crowdsecurity/whitelist-good-actors
-# The fleet's one CrowdSec LAPI (roles/crowdsec): decisions, allowlists, profiles, console.
-crowdsec_lapi_host: oracle-main
+# The fleet's one CrowdSec LAPI (roles/crowdsec): decisions, allowlists, profiles, console. It runs
+# on the edge lease's writer (platform/crowdsec/lapi.sh); roles/crowdsec sets crowdsec_lapi_host to
+# that node's inventory name.
 crowdsec_hub: "{{ inventory_hostname == crowdsec_lapi_host }}"
 crowdsec_allowlists: []
 

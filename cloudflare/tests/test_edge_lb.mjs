@@ -186,6 +186,26 @@ test('a node that sends no headers in time is abandoned for the other', async ()
   assert.ok(_test.downUntil.get('n2') > Date.now());
 });
 
+// A node that does not route the site yet answers Traefik's 503 (platform/edge/dynamic/zz-unrouted.yml).
+test('when every other node fails, the one that only ran out of time for its headers is waited for', async () => {
+  _test.timing.ttfbMs = 20;
+  // n1 sends headers after 60 ms (a stalled tunnel), unless the caller gives up first.
+  replies.n1 = (request, init) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(new Response('n1')), 60);
+    init.signal?.addEventListener('abort', () => (clearTimeout(timer), reject(new DOMException('aborted', 'AbortError'))));
+  });
+  replies.n2 = 503;
+  const response = await call('/ads.txt', {}, clientOn('n1'));
+  assert.equal(await response.text(), 'n1');
+  assert.deepEqual(calls.map((c) => c.node), ['n1', 'n2', 'n1']);
+  // Nothing stalled: the last failure is the answer, nothing is tried twice.
+  replies = { n1: 502, n2: 503 };
+  calls = [];
+  _test.downUntil.clear();
+  assert.equal((await call('/ads.txt', {}, clientOn('n1'))).status, 503);
+  assert.equal(calls.length, 2);
+});
+
 test('a primary_paths read (a download) waits for the writer past the header deadline; other reads move on', async () => {
   _test.timing.ttfbMs = 20;
   // Headers after 60 ms, unless the caller gives up first.
@@ -215,14 +235,14 @@ test('public images come from the bucket with the API headers; others fall throu
 test('a node takes the lease only with its key from its own address, and only once the writer stopped renewing', async () => {
   assert.equal((await leaseCall('n2', { op: 'promote' }, 'guess')).status, 404);
   assert.equal((await call('/__edge/lease/mc-hub-api', { method: 'POST', body: '{"op":"promote"}', headers: { authorization: 'Bearer node-key' } })).status, 404);
-  assert.deepEqual(await (await leaseCall('n1', { op: 'beat' })).json(), { writer: 'n1', epoch: 0, version: 0, down: [] });
+  assert.deepEqual(await (await leaseCall('n1', { op: 'beat' })).json(), { writer: 'n1', epoch: 0, version: 0, down: [], lapiGrant: true });
   const refused = await leaseCall('n2', { op: 'promote' });
   assert.equal(refused.status, 409);
   assert.equal((await refused.json()).writer, 'n1');
   assert.equal(telegrams.length, 0);
 
   const forced = await leaseCall('n2', { op: 'promote', force: true });
-  assert.deepEqual(await forced.json(), { writer: 'n2', epoch: 1, version: 1, down: [] });
+  assert.deepEqual(await forced.json(), { writer: 'n2', epoch: 1, version: 1, down: [], lapiGrant: false });
   assert.match(telegrams[0], /n2 is now the writer \(was n1, forced\)/);
   _test.leases.clear();
   await call('/api/comments', { method: 'POST', body: '{}' });
@@ -387,6 +407,7 @@ test('a writer failing three checks in a row hands the lease to a replica that w
   await worker.scheduled({}, env);
   const state = await (await leaseCall('n2', { op: 'beat', synced: now })).json();
   assert.deepEqual([state.writer, state.epoch, state.down], ['n2', 1, ['n1']]);
+  assert.equal(state.lapiGrant, false); // old writer renewed moments before its health checks failed
   assert.ok(telegrams.some((t) => /n2 is now the writer \(was n1, failing 4 checks in a row\)/.test(t)));
   _test.leases.clear();
   calls = [];
@@ -414,6 +435,7 @@ test('a writer that stops renewing hands the lease to the replica holding its da
     await worker.scheduled({}, env);
     const state = await beat('n2', '00000000000000fc');
     assert.deepEqual([state.writer, state.epoch], ['n2', 1]);
+    assert.equal(state.lapiGrant, true); // old writer's last grant has expired
     assert.ok(telegrams.some((t) => /n2 is now the writer \(was n1, no lease renewal for 3 min, 4 transactions behind its last report\)/.test(t)));
   } finally {
     Date.now = real;

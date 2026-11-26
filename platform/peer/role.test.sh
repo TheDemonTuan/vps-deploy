@@ -6,7 +6,7 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
-mkdir -p "$t/bin" "$t/vol" "$t/peer" "$t/sync/x" "$t/etc"
+mkdir -p "$t/bin" "$t/vol" "$t/peer" "$t/sync/crowdsec" "$t/etc"
 sed -e "s#/etc/platform#$t/etc#g; s#/run/platform-role.lock#$t/lock#; s#/var/lib/docker/volumes/mc-hub-api-data/_data#$t/vol#;
   s#/var/lib/platform-peer#$t/peer#g; s#/srv/platform-sync/litestream#$t/sync#; s#sleep [0-9]*#:#g" role.sh >"$t/role.sh"
 printf 'NODE=n2\nROLE=replica\nLEASE_URL=http://lease.invalid\n' >"$t/etc/peer.env"
@@ -45,13 +45,13 @@ check "an unfinished restore keeps the apps stopped and fails" '[ "$rc" = 1 ] &&
 rm "$t/stuck"; rc=$(run n1)
 check "the next run finishes it" '[ "$rc" = 0 ] && grep -qx "docker start mc-hub-api-blue" "$t/log" && [ ! -e "$t/peer/stopped-apps" ]'
 
-mkdir -p "$t/vol/.mc-hub.db-litestream/ltx"; rc=$(run n2)
+mkdir -p "$t/sync/mc-hub-api/ltx/9" "$t/vol/.mc-hub.db-litestream/ltx"; rc=$(run n2)
 check "the writer's own node becomes primary with a new lineage" '[ "$rc" = 0 ] && [ "$(cat "$t/vol/role")" = primary ] &&
-  [ -z "$(ls -A "$t/sync")" ] && [ ! -e "$t/vol/.mc-hub.db-litestream" ] && [ ! -e "$t/etc/litestream-primary.env" ] && grep -qx "docker restart mc-hub-api-blue" "$t/log"'
+  [ ! -e "$t/sync/mc-hub-api" ] && [ -d "$t/sync/crowdsec" ] && [ ! -e "$t/vol/.mc-hub.db-litestream" ] && [ ! -e "$t/etc/litestream-primary.env" ] && grep -qx "docker restart mc-hub-api-blue" "$t/log"'
 rc=$(run n2)
 check "a settled primary does nothing" '[ "$rc" = 0 ] && [ ! -s "$t/log" ]'
 
 mkdir -p "$t/sync/mc-hub-api/ltx/9" "$t/vol/.mc-hub.db-litestream/ltx"; rc=$(run n1)
 check "a primary that lost the lease follows the new writer" '[ "$rc" = 0 ] && [ "$(cat "$t/vol/role")" = replica ] && [ "$(follows)" = 10.0.0.1:22 ]'
-check "and stops serving its old lineage" '[ -z "$(ls -A "$t/sync")" ] && [ ! -e "$t/vol/.mc-hub.db-litestream" ]'
+check "and stops serving its old lineage (but not the LAPI's copy)" '[ ! -e "$t/sync/mc-hub-api" ] && [ -d "$t/sync/crowdsec" ] && [ ! -e "$t/vol/.mc-hub.db-litestream" ]'
 exit $fail

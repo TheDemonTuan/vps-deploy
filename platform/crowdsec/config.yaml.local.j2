@@ -1,5 +1,6 @@
-{% if crowdsec_hub %}
-# The fleet's one LAPI (crowdsec_lapi_host): every node's agent and bouncers use it, the other
+{% if crowdsec_mode == 'lapi' %}
+# The fleet's one LAPI, on the edge lease's writer (platform/crowdsec/lapi.sh installs this as
+# /etc/crowdsec/config.yaml.local there): every node's agent and bouncers use it, the other
 # nodes through crowdsec-lapi.service (SSH), which arrives from 172.31.254.1 like local callers.
 api:
   server:
@@ -20,8 +21,8 @@ db_config:
     max_items: 20000
   use_wal: true
 {% else %}
-# Agent only (log processor + AppSec on 172.31.254.1:7422): alerts go to the LAPI on
-# {{ crowdsec_lapi_host }} through crowdsec-lapi.service, which listens on 172.31.254.1:8080 here.
+# Agent only (log processor + AppSec on 172.31.254.1:7422): alerts go to the LAPI node through
+# crowdsec-lapi.service, which listens on 172.31.254.1:8080 here (platform/crowdsec/lapi.sh).
 api:
   server:
     enable: false
