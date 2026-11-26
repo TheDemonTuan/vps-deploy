@@ -1,0 +1,3 @@
+- name: Load peer SELinux module
+  ansible.builtin.command: semodule -i /opt/platform/peer/platform-peer.cil
+  changed_when: true

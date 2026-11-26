@@ -49,6 +49,12 @@
   check_mode: false
   changed_when: base_crashkernel.stdout in ['removed', 'missing']
 
+# setroubleshootd analyses every SELinux denial in Python (~8 % CPU each); audit.log keeps them.
+- name: No setroubleshoot
+  ansible.builtin.dnf:
+    name: [setroubleshoot-server, setroubleshoot-plugins]
+    state: absent
+
 # Performance Co-Pilot (~100 MB, its own archives on disk) and OCI's log shipper (fluentd, ~90 MB)
 # duplicate platform/monitor; masked so package updates and the cloud agent cannot start them.
 - name: No PCP, no unified-monitoring-agent
@@ -108,33 +114,3 @@
     name: dnf-automatic.timer
     enabled: true
     state: started
-
-- name: Keepalive directory
-  when: keepalive
-  ansible.builtin.file:
-    path: /opt/platform/keepalive
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Keepalive files
-  when: keepalive
-  ansible.builtin.copy:
-    src: "{{ platform_src }}/keepalive/{{ item.name }}"
-    dest: "{{ item.dest }}"
-    owner: root
-    group: root
-    mode: "0644"
-  loop:
-    - {name: keepalive.py, dest: /opt/platform/keepalive/keepalive.py}
-    - {name: platform-keepalive.service, dest: /etc/systemd/system/platform-keepalive.service}
-  notify: Reload systemd
-
-- name: Keepalive service
-  when: keepalive
-  ansible.builtin.systemd_service:
-    name: platform-keepalive.service
-    enabled: true
-    state: started
-    daemon_reload: true

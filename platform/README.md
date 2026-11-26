@@ -153,8 +153,7 @@ the nodes' `opc` keys); CI only lints it.
 1. **Instance**: Oracle Linux 9 or 10 (ARM), ingress only SSH 22 (security list and firewalld).
    Grow the boot volume (`oci-growfs -y`). Record the ed25519 host key from the OCI console
    serial log, not from a first connection. Oracle reclaims idle Always Free instances (over 7
-   days, 95th-percentile CPU, network and A1 memory all under 20 %), which a lightly loaded
-   replica is: `keepalive: true` in `ansible/host_vars/<host>.yml` on a node under 20 % memory, or
+   days, 95th-percentile CPU, network and A1 memory all under 20 %): keep the node in use, or
    upgrade its tenancy to Pay As You Go (Always Free resources stay free).
 2. **Cloudflare** (dashboard): the node's IP in the IP filter of the account tokens
    `litestream-mc-hub-db` and `mc-hub-media-nodes` (R2 backups and media; the litestream role

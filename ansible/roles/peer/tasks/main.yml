@@ -27,6 +27,15 @@
   loop: [platform-peer.service, platform-peer.timer, platform-role.service]
   notify: Reload systemd
 
+- name: Peer SELinux module (docker under NoNewPrivileges)
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/peer/platform-peer.cil"
+    dest: /opt/platform/peer/platform-peer.cil
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Load peer SELinux module
+
 - name: Shared peer secrets (alert bot, edge-lb NODE_KEY, OCI backup upload URL)
   ansible.builtin.include_role:
     name: shared_secret

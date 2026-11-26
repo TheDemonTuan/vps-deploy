@@ -35,8 +35,6 @@ edge_origin_certs: [cf-origin-20261005T063315Z, cf-origin-dev-20261119T092957Z]
 
 # Grafana and VictoriaMetrics run on one node (host_vars monitor_hub); every node runs the agent.
 monitor_hub: false
-# platform/keepalive: holds memory on a lightly loaded Always Free node so Oracle does not reclaim it.
-keepalive: false
 
 crowdsec_collections:
   - crowdsecurity/appsec-bot-challenge
@@ -57,12 +55,7 @@ crowdsec_collections:
 # The fleet's one CrowdSec LAPI (roles/crowdsec): decisions, allowlists, profiles, console.
 crowdsec_lapi_host: oracle-main
 crowdsec_hub: "{{ inventory_hostname == crowdsec_lapi_host }}"
-# On the LAPI only; it applies them to every node's alerts.
-crowdsec_allowlists:
-  - name: operator
-    description: TDT operator home IP
-    entries:
-      - {value: 113.161.34.3, expires: "2026-12-19T08:38:37Z", comment: "nguyenviettuan home (VNPT, dynamic)"}
+crowdsec_allowlists: []
 
 # Apps every edge node runs (registry balance): the `apps` role prepares their runtime env.
 balanced_apps: [mc-hub, mc-hub-api]
