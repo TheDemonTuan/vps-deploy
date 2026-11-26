@@ -13,6 +13,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-# node-exporter's textfile directory (platform/monitor) and the writer's daily backups; "-": the
-# unit still starts without them.
-ReadWritePaths=-/var/lib/node-exporter -/var/lib/docker/volumes/mc-hub-api-data/_data/backups
+# node-exporter's textfile directory (platform/monitor), the writer's daily backups and
+# mc-hub-api's writer-lease (a file: bound only once it exists, so the peer role creates it);
+# "-": the unit still starts without them.
+ReadWritePaths=-/var/lib/node-exporter -/var/lib/docker/volumes/mc-hub-api-data/_data/backups -/var/lib/docker/volumes/mc-hub-api-data/_data/writer-lease
