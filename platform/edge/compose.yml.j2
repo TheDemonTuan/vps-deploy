@@ -14,8 +14,9 @@ services:
     security_opt:
     - no-new-privileges:true
     pids_limit: 100
-    mem_limit: 128m
-    cpus: 0.25
+    # Every request to this node passes through it and Traefik: sized for load, not for idle.
+    mem_limit: 512m
+    cpus: 1
     networks:
       edge-egress:
         gw_priority: 1
@@ -103,8 +104,8 @@ services:
     cap_drop:
     - ALL
     pids_limit: 200
-    mem_limit: 256m
-    cpus: 0.5
+    mem_limit: 1g
+    cpus: 1
     environment:
       TZ: Asia/Ho_Chi_Minh
       DOCKER_API_VERSION: '1.44'
