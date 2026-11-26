@@ -34,6 +34,17 @@ class Registration(unittest.TestCase):
             self.assertNotIn('tunnel', host['edge'])
             self.assertEqual(host['edge']['id'], 'n1')
 
+    def test_registration_of_a_release_with_the_dropped_bypass_paths_still_loads(self):
+        raw = (ROOT / 'registry/mc-hub.yml').read_text()
+        mutated = raw.replace('  lease: mc-hub-api\n', "  lease: mc-hub-api\n  bypass_paths: ['/_astro/*']\n")
+        self.assertNotEqual(raw, mutated)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            for directory in ('registry', 'hosts'):
+                (root / directory).mkdir()
+            (root / 'registry/mc-hub.yml').write_text(mutated)
+            self.assertEqual(app_registration(root, 'mc-hub')['host'], 'oracle-main')
+
     def test_manifest_bool_does_not_equal_integer(self):
         with self.assertRaisesRegex(Failure, 'MANIFEST_POLICY'):
             exact({'version': True}, {'version': 1})
