@@ -118,7 +118,9 @@ def app_hosts(registration):
 
 def balance_policy(value):
     """Edge load-balancer rules of an app run on several hosts (cloudflare/edge_lb.py renders them)."""
-    fields(value, {'primary_paths', 'primary_cookies', 'sticky_seconds', 'fanout', 'public_bucket', 'lease', 'queue_paths', 'immutable_paths', 'edge_cache'}, {'primary_paths'})
+    # bypass_paths: dropped rule (now immutable_paths), still in releases installed before it; the
+    # installer reads the installed registration with this code, so it must not refuse the upgrade.
+    fields(value, {'primary_paths', 'primary_cookies', 'sticky_seconds', 'fanout', 'public_bucket', 'lease', 'queue_paths', 'immutable_paths', 'edge_cache', 'bypass_paths'}, {'primary_paths'})
     lists = [value['primary_paths'], value.get('primary_cookies', []), value.get('fanout', []), value.get('queue_paths', []), value.get('immutable_paths', [])]
     require(all(type(items) is list for items in lists), 'REGISTRY_POLICY')
     require(all(type(p) is str and p.startswith('^/') for p in value['primary_paths'] + value.get('queue_paths', []) + value.get('immutable_paths', [])), 'REGISTRY_POLICY')
