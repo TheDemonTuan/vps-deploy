@@ -109,6 +109,20 @@ test('writes, admin, sessions and downloads go to the writer; a write sets the s
   assert.equal(points[0].doubles[0], 200);
 });
 
+test('a signed-in or sticky read moves to the other node while the writer fails, and back once it is up', async () => {
+  replies.n1 = 502;
+  const page = await call('/', { headers: { cookie: '__Host-mch_session=t' } }, clientOn('n1'));
+  assert.equal(page.status, 200);
+  assert.equal(await page.text(), 'n2');
+  await call('/admin/posts', { headers: { cookie: '__Host-edge-primary=1' } });
+  assert.deepEqual(calls.map((c) => c.node), ['n1', 'n2', 'n2']);
+  assert.equal(cached.size, 0);
+  _test.downUntil.clear();
+  replies.n1 = 200;
+  await call('/', { headers: { cookie: '__Host-mch_session=t' } });
+  assert.equal(calls.at(-1).node, 'n1');
+});
+
 test('a 204 write (a view count) sets no sticky cookie, so the next read stays balanced', async () => {
   replies.n1 = () => new Response(null, { status: 204 });
   const view = await call('/api/posts/x/views', { method: 'POST', body: '{}' }, clientOn('n2'));

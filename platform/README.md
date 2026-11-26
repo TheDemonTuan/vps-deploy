@@ -23,7 +23,9 @@ flowchart LR
   failed node last for 30 s. Writes (non-GET), `primary_paths`, `primary_cookies` and, for
   `sticky_seconds` after a write that returns content (not a 204 such as a view count), the same
   client go to the writer: the registry `host`, or with `lease` the node its Durable Object names
-  (re-read every 30 s; see Failover).
+  (re-read every 30 s; see Failover). Reads among them (a signed-in admin's pages, a sticky
+  client's) fail over like any read while the writer fails, never through the edge cache; writes
+  do not (queued or an error).
   `fanout` repeats a request (the admin cache purge) on the other nodes after a delay.
   `X-Edge-Node: <id>` pins a read to one node, honoured only from a node's own IP (its
   `ssh.address`): the deploy probe (`lib/route.py`) uses it.
