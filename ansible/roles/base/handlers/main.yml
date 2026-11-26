@@ -15,3 +15,7 @@
 - name: Flush journal
   ansible.builtin.command: journalctl --flush
   changed_when: true
+
+- name: Apply UDP buffers
+  ansible.builtin.command: sysctl -p /etc/sysctl.d/90-udp-buffers.conf
+  changed_when: true

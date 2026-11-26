@@ -13,6 +13,18 @@
     mode: "2755"
   notify: Flush journal
 
+# cloudflared's QUIC connections want 7 MiB socket buffers; at the kernel's 224 KiB n1's tunnel
+# dropped datagrams under OmniRoute's uploads. Global, so it covers the container's namespace;
+# cloudflared takes it when it next starts.
+- name: UDP buffers for the tunnel's QUIC
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/base/sysctl-udp-buffers.conf"
+    dest: /etc/sysctl.d/90-udp-buffers.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply UDP buffers
+
 # kdump reserves 1 GB (crashkernel=…,8G-:1G) that the system never gets back; n1 runs without it.
 # The packages go first: kdump-utils' kernel-install hook puts crashkernel= back on new kernels.
 - name: No kdump
