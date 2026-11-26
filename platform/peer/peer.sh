@@ -97,13 +97,13 @@ if [ "$renewed" = 1 ]; then
   # A failed renewal leaves the file to age. A node the lease just named becomes primary through
   # role.sh, which touches the file itself.
   if [ "$writer" = "$NODE" ]; then
-    [ "$role" != primary ] || touch "$volume/writer-lease"
+    if [ "$role" = primary ] && [ ! -e "$state/promoting" ]; then touch "$volume/writer-lease"; fi
   elif [ "$role" = primary ] || [ -e "$volume/writer-lease" ]; then
     touch -d @0 "$volume/writer-lease"
   fi
   # role.sh leaves stopped-apps behind when a step-down did not finish: run it again.
   if { [ "$writer" = "$NODE" ] && [ "$role" != primary ]; } || { [ "$writer" != "$NODE" ] && [ "$role" = primary ]; } ||
-    { [ "$writer" != "$NODE" ] && [ "$writer_ip" != "$followed" ]; } || [ -e "$state/stopped-apps" ] ||
+    { [ "$writer" != "$NODE" ] && [ "$writer_ip" != "$followed" ]; } || [ -e "$state/stopped-apps" ] || [ -e "$state/promoting" ] ||
     { [ -f "$volume/write-quorum.json" ] && [ "$writer" != "$NODE" ] && [ "$(jq -r '.epoch' <<<"$lease")" != "$(cat "$volume/follower-epoch" 2>/dev/null)" ]; }; then
     echo "lease writer $writer, this node $role following ${followed:-nothing}: switching" >&2
     systemctl start --no-block platform-role.service

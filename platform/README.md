@@ -298,6 +298,13 @@ restore does not finish within 5 minutes, mc-hub-api stays stopped and the next 
 again (`/var/lib/platform-peer/stopped-apps` lists what to start). Switches never overlap
 (`/run/platform-role.lock`). Promote it back the same way.
 
+With write quorum enabled, the recorded floor (epoch and transaction ID of the last acknowledged
+write) replaces the lag tolerance above. Even a forced promotion must cover that floor. During
+promotion `/var/lib/platform-peer/promoting` records the lease epoch: the timer resumes a failed
+Litestream start or API restart without discarding that database or its new replication files.
+Do not delete the marker to force a different epoch. Run `bash platform/peer/role.test.sh` from
+the repository root to exercise recovery and credential permissions without accessing any node.
+
 While the lease itself cannot be reached (the Worker down, every renewal failing), no node may
 write: the writer fences itself after 150 s and nobody can take over until renewals work.
 
