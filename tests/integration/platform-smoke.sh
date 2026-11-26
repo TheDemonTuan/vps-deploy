@@ -18,7 +18,7 @@ new_release=/opt/vps-deploy/releases/$new_sha
 [[ ${GITHUB_RUN_ID:-0} =~ ^[0-9]+$ ]] || exit 1
 fixture=/tmp/vps-deploy-smoke-${GITHUB_RUN_ID:-0}
 [[ ! -e $fixture ]] || { echo "Fixture already exists: $fixture" >&2; exit 1; }
-release_sha=$(git -C "$root" rev-parse HEAD)
+release_sha="1111111111111111111111111111111111111111"
 [[ $release_sha =~ ^[0-9a-f]{40}$ ]] || exit 1
 release=/opt/vps-deploy/releases/$release_sha
 baseline_release=$release
@@ -80,10 +80,10 @@ chmod 0700 /etc/vps-deploy /etc/vps-deploy/apps "$profile" /var/lib/vps-deploy /
 install -d -m 0755 "$release"
 for area in bin lib apps schema install registry hosts; do cp -a "$root/$area" "$release/$area"; done
 install -d -m 0755 "$release/apps/fixture-app"
-sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' -e 's/X-Demo-Route-Generation/X-Fixture-App-Route-Generation/g' "$root/tests/integration/fixtures/demo/adapter.sh" > "$release/apps/fixture-app/adapter.sh"
+cp "$root/tests/integration/fixtures/fixture-app/adapter.sh" "$release/apps/fixture-app/adapter.sh"
 chmod 0755 "$release/apps/fixture-app/adapter.sh"
-sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' "$root/tests/integration/fixtures/demo/docker-compose.prod.yml" > "$release/apps/fixture-app/docker-compose.prod.yml"
-sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' -e 's/X-Demo-Route-Generation/X-Fixture-App-Route-Generation/g' "$root/tests/integration/fixtures/demo/registry.yml" > "$release/registry/fixture-app.yml" 
+cp "$root/tests/integration/fixtures/fixture-app/docker-compose.prod.yml" "$release/apps/fixture-app/docker-compose.prod.yml"
+cp "$root/tests/integration/fixtures/fixture-app/registry.yml" "$release/registry/fixture-app.yml"
 chown -R root:root "$release"; chmod -R go-w "$release"
 ln -s "$release" /opt/vps-deploy/current
 install -m 0600 /dev/null /etc/vps-deploy/fixture-ci
@@ -116,7 +116,7 @@ chmod 0600 "$profile/host.json"
 ssh-keygen -q -t ed25519 -N '' -f "$fixture/key"
 useradd --create-home --shell /bin/sh --user-group deploy-fixture-app
 user_created=1
-bash "$release/install/install-key.sh" "$fixture/key.pub"
+bash "$release/install/install-key.sh" --app fixture-app "$fixture/key.pub"
 install -d -m 0755 /usr/local/libexec
 sed -e 's/@APP@/fixture-app/g' -e "s/@RELEASE@/$release_sha/g" -e 's/@ACTION@/submit/g' "$release/install/vps-deploy-app" > /usr/local/libexec/vps-deploy-fixture-app
 chmod 0755 /usr/local/libexec/vps-deploy-fixture-app
@@ -234,10 +234,10 @@ curl -fsS --cacert "$ca" "https://$api/api/health" | assert_json '{"deployment_s
 install -d -m 0755 "$new_release"
 for area in bin lib apps schema install registry hosts; do cp -a "$new_root/$area" "$new_release/$area"; done
 install -d -m 0755 "$new_release/apps/fixture-app"
-sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' -e 's/X-Demo-Route-Generation/X-Fixture-App-Route-Generation/g' "$new_root/tests/integration/fixtures/demo/adapter.sh" > "$new_release/apps/fixture-app/adapter.sh"
+cp "$new_root/tests/integration/fixtures/fixture-app/adapter.sh" "$new_release/apps/fixture-app/adapter.sh"
 chmod 0755 "$new_release/apps/fixture-app/adapter.sh"
-sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' "$new_root/tests/integration/fixtures/demo/docker-compose.prod.yml" > "$new_release/apps/fixture-app/docker-compose.prod.yml"
-sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' -e 's/X-Demo-Route-Generation/X-Fixture-App-Route-Generation/g' "$new_root/tests/integration/fixtures/demo/registry.yml" > "$new_release/registry/fixture-app.yml"
+cp "$new_root/tests/integration/fixtures/fixture-app/docker-compose.prod.yml" "$new_release/apps/fixture-app/docker-compose.prod.yml"
+cp "$new_root/tests/integration/fixtures/fixture-app/registry.yml" "$new_release/registry/fixture-app.yml"
 install -d -m 0755 "$new_release/apps/demo" 
 cp "$new_root/tests/integration/fixtures/demo/registry.yml" "$new_release/registry/demo.yml"
 cp "$new_root/tests/integration/fixtures/demo/adapter.sh" "$new_root/tests/integration/fixtures/demo/docker-compose.prod.yml" "$new_release/apps/demo/"
@@ -266,6 +266,7 @@ host['ssh']['host_key'] = ' '.join(pathlib.Path(sys.argv[2]).read_text().split()
 host['ssh']['fingerprint'] = sys.argv[3]
 path.write_text(yaml.safe_dump(host, sort_keys=False))
 PY
+cp "$new_release/hosts/fixture-local.yml" "$release/hosts/fixture-local.yml"
 chown -R root:root "$new_release"
 chmod -R go-w "$new_release"
 install -d -m 0700 "$fixture/source/.deploy"

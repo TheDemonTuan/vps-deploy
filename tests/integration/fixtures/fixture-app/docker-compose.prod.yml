@@ -1,0 +1,36 @@
+services:
+  fixture-app-blue:
+    image: ${IMAGE_REF:-localhost:5000/fixture-app:first}
+    container_name: fixture-app-blue
+    environment:
+      DEPLOY_SLOT: blue
+      APP_PORT: "20128"
+      HEALTH_PATH: /api/health
+      PUBLIC_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-dashboard.platform-smoke.test}}
+      DASHBOARD_HOST: ${DASHBOARD_HOST:-dashboard.platform-smoke.test}
+      API_HOST: ${API_HOST:-api.platform-smoke.test}
+    volumes:
+      - fixture-app-data:/app/data
+    networks:
+      - edge
+  fixture-app-green:
+    image: ${IMAGE_REF:-localhost:5000/fixture-app:first}
+    container_name: fixture-app-green
+    environment:
+      DEPLOY_SLOT: green
+      APP_PORT: "20128"
+      HEALTH_PATH: /api/health
+      PUBLIC_URL: ${PUBLIC_URL:-https://${DASHBOARD_HOST:-dashboard.platform-smoke.test}}
+      DASHBOARD_HOST: ${DASHBOARD_HOST:-dashboard.platform-smoke.test}
+      API_HOST: ${API_HOST:-api.platform-smoke.test}
+    volumes:
+      - fixture-app-data:/app/data
+    networks:
+      - edge
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-edge-fixture-app}
+volumes:
+  fixture-app-data:
+    name: fixture-app-data
