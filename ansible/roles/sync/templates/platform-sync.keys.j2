@@ -1,0 +1,3 @@
+{% for host in groups['edge'] if host != inventory_hostname and sync_fleet[host]['sync_key.pub'] %}
+restrict,from="{{ hostvars[host].edge_ip }}" {{ sync_fleet[host]['sync_key.pub'] }}
+{% endfor %}

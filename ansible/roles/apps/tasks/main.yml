@@ -1,0 +1,46 @@
+# What the deploy engine needs before an app is enrolled on this node (install/installer.py, then
+# the app's CI): its lock directory after reboots, the GHCR login and each balanced app's runtime
+# env. Enrollment itself stays the reviewed installer run (platform/README.md "Add a node").
+- name: Deploy engine lock directory at boot
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../install/vps-deploy.conf"
+    dest: /etc/tmpfiles.d/vps-deploy.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Create tmpfiles
+
+- name: Docker config directory
+  ansible.builtin.file:
+    path: /root/.docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: GHCR login
+  ansible.builtin.include_role:
+    name: shared_secret
+  vars:
+    secret:
+      dest: /root/.docker/config.json
+
+- name: App directories
+  ansible.builtin.file:
+    path: "/opt/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop: "{{ balanced_apps | intersect(host_apps) }}"
+
+- name: App runtime env (the installer's source when /etc/vps-deploy/apps/<app>/runtime.env is absent)
+  ansible.builtin.include_role:
+    name: shared_secret
+  loop: "{{ balanced_apps | intersect(host_apps) }}"
+  loop_control:
+    loop_var: app
+  vars:
+    secret:
+      src: "/etc/vps-deploy/apps/{{ app }}/runtime.env"
+      dest: "/opt/{{ app }}/.env"

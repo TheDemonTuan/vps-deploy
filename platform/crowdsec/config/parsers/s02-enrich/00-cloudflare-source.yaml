@@ -1,0 +1,13 @@
+name: local/cloudflare-source
+description: Accept Cloudflare source IP only from the tunnel connector
+filter: "evt.Parsed.program == 'traefik'"
+nodes:
+  - whitelist:
+      reason: untrusted/missing/invalid CF client IP
+      expression:
+        - "not ((evt.Unmarshaled.traefik.ClientAddr ?? '') startsWith '172.31.250.2:') || not IsIP(evt.Unmarshaled.traefik['request_Cf-Connecting-Ip'] ?? '')"
+statics:
+  - meta: source_ip
+    expression: "evt.Unmarshaled.traefik['request_Cf-Connecting-Ip']"
+  - parsed: remote_addr
+    expression: "evt.Unmarshaled.traefik['request_Cf-Connecting-Ip']"

@@ -1,0 +1,11 @@
+tls:
+  certificates:
+    - certFile: /certs/cf-origin-20261005T063315Z.pem
+      keyFile: /certs/cf-origin-20261005T063315Z.key
+    - certFile: /certs/cf-origin-dev-20261119T092957Z.pem
+      keyFile: /certs/cf-origin-dev-20261119T092957Z.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/cf-origin-20261005T063315Z.pem
+        keyFile: /certs/cf-origin-20261005T063315Z.key

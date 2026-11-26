@@ -1,0 +1,55 @@
+- name: Docker CE repository
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/rhel/docker-ce.repo
+    dest: /etc/yum.repos.d/docker-ce.repo
+    mode: "0644"
+    force: false
+
+- name: Docker CE
+  ansible.builtin.dnf:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+    state: present
+
+- name: Docker daemon settings (read at the next Docker start; never restarted from here)
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/base/docker-daemon.json"
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Docker service
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Look for the platform networks
+  ansible.builtin.command: docker network inspect -f '{{ "{{" }}range .IPAM.Config{{ "}}" }}{{ "{{" }}.Subnet{{ "}}" }}{{ "{{" }}end{{ "}}" }} {{ "{{" }}.Internal{{ "}}" }}' {{ item.name }}
+  loop: "{{ edge_platform_networks }}"
+  register: docker_networks
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: A platform network has other settings than expected (fix by hand; containers use it)
+  ansible.builtin.assert:
+    that: item.stdout == item.item.subnet ~ ' ' ~ (item.item.internal | string | lower)
+    fail_msg: "{{ item.item.name }} is '{{ item.stdout }}', want '{{ item.item.subnet }} {{ item.item.internal | lower }}'"
+    quiet: true
+  loop: "{{ docker_networks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.rc == 0
+
+- name: Create missing platform networks
+  ansible.builtin.command: >-
+    docker network create --driver bridge --subnet {{ item.item.subnet }}
+    {{ '--internal' if item.item.internal else '' }}
+    {{ ('-o com.docker.network.bridge.name=' ~ item.item.bridge) if item.item.bridge is defined else '' }}
+    {{ item.item.name }}
+  loop: "{{ docker_networks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.rc != 0
+  changed_when: true

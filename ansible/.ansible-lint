@@ -1,0 +1,6 @@
+# Long lines carry one shell command or Jinja expression each; names say which node or file.
+skip_list:
+  - yaml[line-length]
+  - name[template]
+  # roles/shared_secret takes one argument, `secret`, from each caller.
+  - var-naming[no-role-prefix]

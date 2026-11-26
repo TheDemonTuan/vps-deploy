@@ -1,0 +1,13 @@
+name: local/mj12bot-bad-user-agent
+# User-Agent is not identity: never exempt this traffic from other scenarios or AppSec.
+filter: "evt.Overflow.Alert.GetScenario() == 'crowdsecurity/http-bad-user-agent'"
+whitelist:
+  reason: "MJ12bot public crawl on thedemontuan.dev (Bad User Agent only)"
+  expression:
+    - >-
+      len(evt.Overflow.Alert.Events) > 0 &&
+      all(evt.Overflow.Alert.Events, {
+        any(#.Meta, {#.Key == 'target_fqdn' && #.Value == 'thedemontuan.dev'}) &&
+        any(#.Meta, {#.Key == 'http_verb' && #.Value in ['GET', 'HEAD']}) &&
+        any(#.Meta, {#.Key == 'http_user_agent' && #.Value == 'Mozilla/5.0 (compatible; MJ12bot/v1.4.8; http://mj12bot.com/)'})
+      })

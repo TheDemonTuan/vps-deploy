@@ -1,0 +1,13 @@
+[Unit]
+Description=Rotate Traefik access log and reopen it outside logrotate
+
+[Service]
+Type=oneshot
+User=root
+StateDirectory=traefik-logrotate
+StateDirectoryMode=0700
+ExecStart=/usr/sbin/logrotate --state /var/lib/traefik-logrotate/status /etc/traefik-logrotate.conf
+ExecStartPost=/usr/bin/docker kill --signal=USR1 edge-traefik
+TimeoutStartSec=20s
+Nice=19
+IOSchedulingClass=idle

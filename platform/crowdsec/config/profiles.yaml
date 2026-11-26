@@ -1,0 +1,44 @@
+# Read by the LAPI only (crowdsec_lapi_host). An IP that is already banned earns no new ban: the
+# bouncers' own 403s would otherwise re-ban it through http-generic-403-bf on every node.
+name: already_banned
+filters:
+ - Alert.Remediation == true && Alert.GetScope() == "Ip" && GetActiveDecisionsCount(Alert.GetValue()) > 0
+on_success: break
+---
+name: appsec_no_global_ban
+filters:
+ - Alert.Remediation == true && Alert.GetScope() == "Ip" && Alert.GetScenario() startsWith "crowdsecurity/appsec-"
+on_success: break
+---
+name: default_ip_remediation
+#debug: true
+filters:
+ - Alert.Remediation == true && Alert.GetScope() == "Ip"
+decisions:
+ - type: ban
+   duration: 4h
+duration_expr: "Sprintf('%dh', (GetDecisionsSinceCount(Alert.GetValue(), '720h') >= 5 ? 6 : GetDecisionsSinceCount(Alert.GetValue(),\
+  \ '720h') + 1) * 4)"
+# notifications:
+#   - slack_default  # Set the webhook in /etc/crowdsec/notifications/slack.yaml before enabling this.
+#   - splunk_default # Set the splunk url and token in /etc/crowdsec/notifications/splunk.yaml before enabling this.
+#   - http_default   # Set the required http parameters in /etc/crowdsec/notifications/http.yaml before enabling this.
+#   - email_default  # Set the required email parameters in /etc/crowdsec/notifications/email.yaml before enabling this.
+notifications:
+  - http_telegram
+on_success: break
+---
+name: default_range_remediation
+#debug: true
+filters:
+ - Alert.Remediation == true && Alert.GetScope() == "Range"
+decisions:
+ - type: ban
+   duration: 4h
+#duration_expr: Sprintf('%dh', (GetDecisionsCount(Alert.GetValue()) + 1) * 4)
+# notifications:
+#   - slack_default  # Set the webhook in /etc/crowdsec/notifications/slack.yaml before enabling this.
+#   - splunk_default # Set the splunk url and token in /etc/crowdsec/notifications/splunk.yaml before enabling this.
+#   - http_default   # Set the required http parameters in /etc/crowdsec/notifications/http.yaml before enabling this.
+#   - email_default  # Set the required email parameters in /etc/crowdsec/notifications/email.yaml before enabling this.
+on_success: break

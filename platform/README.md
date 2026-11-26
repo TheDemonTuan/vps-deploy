@@ -73,21 +73,29 @@ flowchart LR
   to R2; a node missing a file fetches it from R2.
 - **SSR** stays on the node: mc-hub calls `http://edge-traefik:8082` (entrypoint `internal`,
   router `mc-hub-api-internal`).
-- **Per-node limits**: Traefik rate limits and CrowdSec run per node; with client affinity a
-  visitor's requests (except writes, which go to the primary) are seen by one node. `peer/`
+- **Per-node limits**: Traefik rate limits run per node; with client affinity a visitor's
+  requests (except writes, which go to the primary) are seen by one node. `peer/`
   (`platform-peer.timer`, every minute) renews the node's lease first (Telegram after two failed
-  renewals), then copies each node's HTTP bans to the other as `peer/<id>:<scenario>`, so the
-  CrowdSec → Cloudflare controller on n1 puts them on the edge list. On a replica it checks that
-  the follower keeps up, including when the primary's SFTP cannot be read at all (the follower
-  uses the same link); Telegram after two bad runs and on recovery.
-- **Unban once**: `cscli decisions delete -i <ip>` on either node, or the Telegram bot's unban
-  on n1. The node that removed a copy names the peer's ban in its `unbans.json` (`copies.jq`;
-  check with `bash platform/peer/copies.test.sh`), the peer drops it within about two minutes,
-  the controller takes the IP off Cloudflare. Before this, the removed copy came straight back.
-- **No self-renewing bans**: `crowdsec/platform-already-banned.yaml` (postoverflow whitelist) keeps
-  an IP this node already bans from earning a new ban; the bouncer's own 403s used to re-ban it
-  through `http-generic-403-bf`, and the peer copied that back.
-- **No ban for a missing User-Agent**: `crowdsec/local-no-ua-scope.yaml` (AppSec config, listed in
+  renewals). On a replica it checks that
+  the follower keeps up, including when the writer's SFTP cannot be read at all (the follower
+  uses the same link), and restarts the follower on the lease writer when it follows another
+  node; Telegram after two bad runs and on recovery. The fleet is `/etc/platform/nodes`
+  (`<id> <ip> <ECDSA host key>`, written by `ansible/`).
+- **One CrowdSec LAPI** (`crowdsec_lapi_host`, n1; CrowdSec's multi-server setup): every node
+  runs the agent (its own logs, AppSec on `172.31.254.1:7422`), the nftables bouncer and
+  Traefik's bouncer; their alerts become decisions on n1, so a ban detected anywhere blocks
+  everywhere, and the CrowdSec → Cloudflare controller on n1 is the only writer of the edge
+  list. The other nodes reach n1's `172.31.254.1:8080` through `crowdsec-lapi.service`, an SSH
+  forward as `crowdsec-lapi` (key per node, `from=` its address, `permitopen` that port only):
+  no new open port. Agents (machine `n2`) and bouncers (`traefik-n2`, `cs-firewall-bouncer-n2`)
+  are registered on n1 by `ansible/`. With n1 down, the other nodes keep serving with the
+  decisions they hold (Traefik's bouncer is fail-open, `updateMaxFailure: -1`) but add no ban.
+- **Unban once**: `cscli decisions delete -i <ip>` on n1, or the Telegram bot's unban; every
+  node drops it within a minute and the controller takes the IP off Cloudflare.
+- **No self-renewing bans**: the LAPI's first profile (`crowdsec/config/profiles.yaml`,
+  `already_banned`) gives an IP that already has a ban no new one; the bouncer's own 403s used
+  to re-ban it through `http-generic-403-bf`.
+- **No ban for a missing User-Agent**: `crowdsec/config/appsec-configs/local-no-ua-scope.yaml` (AppSec config, listed in
   `acquis.d/appsec.yaml`) drops the hub's out-of-band `crowdsecurity/experimental-no-user-agent`:
   six header-less API reads banned the owner's network for 16 h. That network leaves through
   three ISPs, each address banned on its own, so the site failed for some connections only.
@@ -125,95 +133,54 @@ with `weight: 0` (it still takes retries and pinned probes).
 3. Add `replica_hosts` and `balance` to `registry/<app>.yml`, render, release, install the app
    on the new hosts (below), point its caller workflow at every host (`host` first), apply.
 
-## Bootstrap a node (as done for oracle-sg2 / n2)
+## Add a node
 
-1. **Instance**: Oracle Linux, ingress only SSH 22 (security list and firewalld). Grow the boot
-   volume (`oci-growfs -y`). Record the host key fingerprint from the OCI console serial log,
-   not from a first connection. Oracle reclaims idle Always Free instances (over 7 days,
-   95th-percentile CPU, network and A1 memory all under 20 %), which a lightly loaded replica is:
-   install `keepalive/` (`platform-keepalive.service`, holds 1.5 GB resident) on a node under
-   20 % memory, or upgrade its tenancy to Pay As You Go (Always Free resources stay free).
-2. **Docker + CrowdSec**: Docker CE, CrowdSec and `crowdsec-firewall-bouncer-nftables` with
-   `/etc/crowdsec` copied from n1 (standalone LAPI on `172.31.254.1:8080`, AppSec `:7422`; add
-   every node's IP to `parsers/s02-enrich/03-self-whitelist.yaml` on every node: SFTP polling
-   looks like `ssh-bf`), bouncers `cs-firewall-bouncer-<node>` and `traefik`
-   (key in `/opt/platform/edge/secrets/crowdsec-bouncer-key`, root 0600),
-   `crowdsec-endpoint-guard.service` enabled. `crowdsec/platform-already-banned.yaml` into
-   `postoverflows/s01-whitelist/`, `crowdsec/local-no-ua-scope.yaml` and
-   `crowdsec/local-mc-hub-crs-scope.yaml` into `appsec-configs/` and listed in
-   `acquis.d/appsec.yaml` (part of n1's `/etc/crowdsec` already). Allowlists
-   (`cscli allowlists list`) must match on every node: a ban the other node refuses to copy leaves
-   an address blocked on one node only. Security updates: `dnf install dnf-automatic`,
-   `upgrade_type = security` and `apply_updates = yes` in `/etc/dnf/automatic.conf`, the timer at
-   a different hour per node (`systemctl edit dnf-automatic.timer`), `systemctl enable --now dnf-automatic.timer`.
-3. **Networks** (same addressing as n1): `edge-crowdsec` 172.31.254.0/28 internal,
-   `edge-cf-ingress` 172.31.250.0/28 internal, `edge-egress` 172.31.252.0/28, and each balanced
-   app's edge network (`edge-mc-hub` 172.25.0.0/16, `edge-mc-hub-api` 172.27.0.0/16 internal).
-4. **Edge stack**: copy `/opt/platform/edge` from n1 without `secrets/` and app routes
-   (`certs`, `cloudflare-ca`, `plugins-local`, `haproxy.cfg.template`, `dynamic/00-tls-origin.yml`,
-   `middlewares.yml`, `crowdsec.yml`), keep only the balanced apps' networks in `compose.yml`,
-   add `edge/internal.yml` and the `internal` entrypoint to `traefik.yml`:
+`hosts/<host>.yml` is the inventory; `ansible/` gives every node the same platform layer
+(packages, CrowdSec, networks, edge stack, sync, Litestream, peer, monitoring agent, deploy
+engine prerequisites) from this repository. Run it from the operator workstation (ssh-agent with
+the nodes' `opc` keys); CI only lints it.
 
-   ```yaml
-     web:
-       # … unchanged …
-       asDefault: true        # routers without entryPoints never land on "internal"
-     slot-probe:
-       address: "127.0.0.1:18080"
-       asDefault: true
-     internal:
-       address: ":8082"
-       http:
-         middlewares: [internal-only@file]
+1. **Instance**: Oracle Linux 9 or 10 (ARM), ingress only SSH 22 (security list and firewalld).
+   Grow the boot volume (`oci-growfs -y`). Record the ed25519 host key from the OCI console
+   serial log, not from a first connection. Oracle reclaims idle Always Free instances (over 7
+   days, 95th-percentile CPU, network and A1 memory all under 20 %), which a lightly loaded
+   replica is: `keepalive: true` in `ansible/host_vars/<host>.yml` on a node under 20 % memory, or
+   upgrade its tenancy to Pay As You Go (Always Free resources stay free).
+2. **Cloudflare** (dashboard): the node's IP in the IP filter of the R2 token in
+   `litestream.env` (else the mirror and uploads fail there), and a tunnel
+   `shared-edge-<host>` (remotely managed).
+3. **Registry**: `hosts/<host>.yml` with `ssh` (address, port, fingerprint and `host_key`),
+   `traefik`, `edge` (`id`, `tunnel`, `weight: 0`) and the balanced apps' bindings as on the
+   other nodes; the host in each balanced app's `replica_hosts`; render.
+4. **Platform**, from `ansible/` (the API token reads the new tunnel's token: Cloudflare Tunnel
+   Read):
+
+   ```sh
+   export CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=…
+   ansible-playbook site.yml --check --diff   # every node: the new one appears in their fleet files
+   ansible-playbook site.yml
    ```
 
-   Create the node's tunnel (`shared-edge-<host>`, remotely managed), write its token to
-   `secrets/tunnel-token` (opc 0600), `docker compose up -d`, enable `traefik-logrotate.timer`.
-5. **Registry**: `hosts/<host>.yml` (ssh pin, traefik, `edge`, apps), the host in each app's
-   `replica_hosts`, render; release.
-6. **Sync** (on every node, both directions): user `platform-sync`
-   (`useradd -r -M -d /srv/platform-sync -s /sbin/nologin`), `/srv/platform-sync` and
-   `/srv/platform-sync/crowdsec` root 0755, `/srv/platform-sync/litestream` 1000:1000 0755 with
-   `setfacl -R -m u:platform-sync:rX` and the same `-d` default ACL (Litestream writes 0750
-   directories); `sync/60-platform-sync.conf` in `/etc/ssh/sshd_config.d/` (root 0600),
-   `sshd -t`, reload. This node's client key `/etc/platform/sync_key` (ed25519, owner 1000, 0600);
-   its public key goes into each other node's `/etc/ssh/platform-sync.keys` as
-   `restrict,from="<this node's IP>" ssh-ed25519 …`. `/etc/platform/known_hosts`: the other
-   nodes' `<ip> ssh-ed25519 …` host keys, read over the pinned SSH session, not scanned.
-   `restorecon -R /etc/ssh /srv/platform-sync /etc/platform`.
-7. **Data**: `docker volume create mc-hub-api-data`, then
-   `chown 1000:1000 "$(docker volume inspect -f '{{.Mountpoint}}' mc-hub-api-data)"`; write
-   `/etc/platform/litestream.env` (root 0600) with `PRIMARY_SSH=<other node's ip>:22` and
-   `PRIMARY_HOST_KEY=<its ecdsa-sha2-nistp256 host key>` (Litestream's SSH client negotiates
-   ECDSA first and accepts only the pinned key; the primary has them too, for when it steps
-   down), copy `platform/litestream` to `/opt/platform/litestream` and start the follower there
-   (`--profile replica`). The first log line is `entering follow mode`.
-8. **Peer**: copy `platform/peer` to `/opt/platform/peer`, the units to `/etc/systemd/system`,
-   write `/etc/platform/peer.env` (`NODE`, `NODE_IP`, `PEER`, `PEER_IP`, `ROLE`,
-   `LEASE_URL=https://api.thedemontuan.dev/__edge/lease/mc-hub-api`, `TELEGRAM_CHAT_ID`),
-   `/etc/platform/telegram-token` (the CrowdSec controller's bot) and
-   `/etc/platform/edge-node-key` (the Worker's `NODE_KEY`), both root 0600,
-   `systemctl enable --now platform-peer.timer`. Create `/var/lib/node-exporter` (root 0755):
-   each run writes the lease, role and replica lag there for the monitoring agent (step 11).
-9. **Apps** (`dnf install git-core`; GHCR login in `/root/.docker/config.json` as on n1;
-   `install/vps-deploy.conf` in `/etc/tmpfiles.d/`, else the engine's lock directory is gone
-   after a reboot and every deploy and drain fails `UNTRUSTED_PATH`): put
-   `runtime.env` content in `/opt/<app>/.env` (root 0600; mc-hub-api: `TURNSTILE_*`,
-   `MEDIA_S3_*`), start `<app>-blue` from the release's Compose profile with the primary's
-   current image and `NODE_ROLE=replica`, publish the adapter-rendered route (slot `blue`, a new
+   Shared secrets (alert bot, the Worker's `NODE_KEY`, R2 keys, origin certificates, the
+   monitoring service token, GHCR login, app runtime env) are copied from `secrets_source`
+   (`group_vars/edge.yml`) to a node that lacks them, never overwritten and never on the
+   workstation; the sync and LAPI tunnel keys are generated on the node, its CrowdSec agent and
+   bouncer keys on the LAPI node. Within a
+   minute `peer.sh` starts `platform-role.service`, which follows the lease writer: the first
+   `docker logs litestream` line is `entering follow mode`.
+5. **Apps**: start `<app>-blue` from the release's Compose profile with the primary's current
+   image and `NODE_ROLE=replica`, publish the adapter-rendered route (slot `blue`, a new
    generation). Installer `--check`, then apply, with `--host <host>` and the same deploy public
-   key; `restorecon -R` the release.
-10. `cloudflare/edge_lb.py --operation apply` with the new node's weight at 0 first (pinned probes
+   key (`install/README.md`); `restorecon -R` the release.
+6. `cloudflare/edge_lb.py --operation apply` with the new node's weight at 0 first (pinned probes
    only), then `deployctl adopt --app <app>` on the node,
    `systemctl enable --now vps-deploy-drain@<app>.timer`, and apply again with the real weight.
    Add the host to the app's caller workflow (after the primary host).
-11. **Monitoring agent**: Traefik metrics (below), copy `platform/monitor` to
-   `/opt/platform/monitor`, write `/etc/platform/monitor.env` (root 0600: `NODE`,
-   `METRICS_URL=https://metrics.thedemontuan.dev/api/v1/write` and `remoteWrite_headers` with the
-   `monitor-vmagent` service token), `docker compose --env-file /etc/platform/monitor.env
-   --profile agent up -d`, then `chown 65534:65534` the `monitor_vmagent-buffer` volume's
-   mountpoint (vmagent runs as nobody; Docker creates volumes root-owned) and restart
-   `monitor-vmagent`. `restorecon -R /opt/platform/monitor /etc/platform`.
+
+The monitoring hub (`monitor_hub: true`, n2) keeps its own `/etc/platform/monitor.env` (below);
+Ansible writes only the agents'. Changing any node's platform files: edit them here, then the
+same two commands (`--limit <host>` for one node). App routes in `/opt/platform/edge/dynamic`
+belong to the deploy engine and are never touched.
 
 ## Fleet monitoring (replaced Beszel)
 
@@ -236,9 +203,13 @@ How it fits together (`platform/monitor/compose.yml`):
 - The hub (n2) also runs `hub`: VictoriaMetrics (90 days) and Grafana. Its own vmagent writes to
   `127.0.0.1:8428`; the others push to `metrics.thedemontuan.dev` (tunnel B, Access app
   "Fleet Metrics Ingest": service token `monitor-vmagent` only, expires 2027-11-25), whose
-  Traefik route only accepts `POST /api/v1/write`. The hub's `/etc/platform/monitor.env` also
-  holds `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` (user token `grafana-analytics-read`: Account
-  Analytics Read, IP-filtered to the hub) and `ACCESS_AUD` (the Grafana Access app's AUD).
+  Traefik route only accepts `POST /api/v1/write`. The hub's `/etc/platform/monitor.env` (root
+  0600, written by hand before `ansible/` runs there: it stops otherwise) is `NODE`,
+  `METRICS_URL=http://127.0.0.1:8428/api/v1/write`, `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` (user
+  token `grafana-analytics-read`: Account Analytics Read, IP-filtered to the hub) and
+  `ACCESS_AUD` (the Grafana Access app's AUD). The hub is one node: while it is down Grafana is
+  down and the other agents buffer; its VictoriaMetrics data lives only on its disk (lost with
+  n2's boot volume on 2026-11-26).
 - Traefik on each node: a `metrics` entrypoint `:8899` with `metrics.prometheus` (entryPoint
   `metrics`, `addServicesLabels`), published only on `127.0.0.1:18082`. On the hub Traefik also
   joins `edge-monitor`, and `platform/monitor/traefik-monitor.yml` is
@@ -247,7 +218,7 @@ How it fits together (`platform/monitor/compose.yml`):
   metrics.thedemontuan.dev]`. AppSec reads Grafana's query bodies (Analytics Engine SQL) and
   vmagent's binary remote-write bodies as SQL injection / HTTP violations and banned the owner's
   IP; both hosts only take requests Access already let through.
-- Another node: step 11 above; it shows up in every panel by its `NODE`. Moving the hub: a new
+- Another node: `ansible/` (agent); it shows up in every panel by its `NODE`. Moving the hub: a new
   `grafana-analytics-read` token for the new hub's IP, tunnel ingress for both hostnames on the
   new hub's tunnel, the other nodes' `METRICS_URL` unchanged.
 
@@ -272,7 +243,7 @@ change within about 5 minutes (each node's page cache).
 
 Reads keep working without action (the Worker retries the other node), readers' writes are
 queued at the edge, everything else that writes fails. The edge alerts once the writer has not
-renewed its lease for 3 minutes. If it stays down, on the other node:
+renewed its lease for 3 minutes. If it stays down, on a replica:
 
 ```sh
 sudo /opt/platform/peer/role.sh promote          # refused while the writer still renews

@@ -1,6 +1,6 @@
 [Unit]
-Description=Edge node peer: CrowdSec ban exchange and checks of the other node (platform/peer)
-After=network-online.target crowdsec.service
+Description=Edge node peer: edge lease, writer duties and follower checks (platform/peer)
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -15,4 +15,4 @@ ProtectHome=yes
 ProtectSystem=strict
 # node-exporter's textfile directory (platform/monitor) and the writer's daily backups; "-": the
 # unit still starts without them.
-ReadWritePaths=/srv/platform-sync/crowdsec -/var/lib/node-exporter -/var/lib/docker/volumes/mc-hub-api-data/_data/backups
+ReadWritePaths=-/var/lib/node-exporter -/var/lib/docker/volumes/mc-hub-api-data/_data/backups

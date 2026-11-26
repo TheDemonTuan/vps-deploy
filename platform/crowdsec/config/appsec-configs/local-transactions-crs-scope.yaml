@@ -1,0 +1,10 @@
+name: local/transactions-crs-scope
+pre_eval:
+  # ACB Transactions frontend polls payment-readiness & payment-qr APIs continuously.
+  # Browser cookies or client tokens trigger CRS rule 930120 (lfi-os-files.data) as false positive.
+  # Exclude out-of-band rule 930120 on transactions.tuannguyenviet.site.
+  # All other CRS rules and in-band virtual patches remain active.
+  - filter: |-
+      IsOutBand && req.Host == "transactions.tuannguyenviet.site"
+    apply:
+      - RemoveOutBandRuleByID(930120)

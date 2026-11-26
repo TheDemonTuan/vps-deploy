@@ -1,0 +1,158 @@
+# platform/edge: cloudflared (this node's tunnel), the Docker socket proxy and Traefik with the
+# CrowdSec bouncer plugin. App routes in dynamic/ belong to the deploy engine and are left alone.
+- name: Edge directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - {path: /opt/platform/edge}
+    - {path: /opt/platform/edge/dynamic}
+    - {path: /opt/platform/edge/cloudflare-ca}
+    - {path: /opt/platform/edge/certs, mode: "0700"}
+    - {path: /var/log/traefik, mode: "0750"}
+    - {path: /etc/systemd/system/traefik-logrotate.service.d}
+
+- name: Traefik static configuration (read at start)
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/edge/traefik.yml"
+    dest: /opt/platform/edge/traefik.yml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart traefik
+
+- name: Edge files (dynamic/ is watched by Traefik)
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/edge/{{ item }}"
+    dest: "/opt/platform/edge/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - haproxy.cfg.template
+    - cloudflare-ca/origin-ca.pem
+    - dynamic/00-tls-origin.yml
+    - dynamic/crowdsec.yml
+    - dynamic/middlewares.yml
+    - dynamic/internal.yml
+    - dynamic/zz-unrouted.yml
+
+- name: The monitoring hub's Traefik route (Grafana, the metrics ingest)
+  when: monitor_hub
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/monitor/traefik-monitor.yml"
+    dest: /opt/platform/edge/dynamic/monitor.yml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Cloudflare origin certificates
+  ansible.builtin.include_role:
+    name: shared_secret
+  loop: "{{ edge_origin_certs | product(['pem', 'key']) | list }}"
+  loop_control:
+    loop_var: cert
+    label: "{{ cert.0 }}.{{ cert.1 }}"
+  vars:
+    secret:
+      dest: "/opt/platform/edge/certs/{{ cert.0 }}.{{ cert.1 }}"
+      mode: "{{ '0644' if cert.1 == 'pem' else '0600' }}"
+
+- name: Look for the bouncer plugin (carries a local security patch, so it is copied, not fetched)
+  ansible.builtin.stat:
+    path: /opt/platform/edge/plugins-local/src
+  register: edge_plugin
+
+- name: Copy the bouncer plugin from {{ secrets_source }}
+  when: not edge_plugin.stat.exists
+  # One node at a time: they share the archive on secrets_source and in .cache/.
+  throttle: 1
+  block:
+    - name: Pack it on {{ secrets_source }}
+      ansible.builtin.command: tar czf /tmp/edge-plugins-local.tgz -C /opt/platform/edge plugins-local  # noqa: command-instead-of-module
+      delegate_to: "{{ secrets_source }}"
+      changed_when: false
+
+    - name: Fetch it
+      ansible.builtin.fetch:
+        src: /tmp/edge-plugins-local.tgz
+        dest: "{{ playbook_dir }}/.cache/edge-plugins-local.tgz"
+        flat: true
+      delegate_to: "{{ secrets_source }}"
+
+    - name: Unpack it
+      ansible.builtin.unarchive:
+        src: "{{ playbook_dir }}/.cache/edge-plugins-local.tgz"
+        dest: /opt/platform/edge
+
+- name: Look for the tunnel token
+  ansible.builtin.stat:
+    path: /opt/platform/edge/secrets/tunnel-token
+  register: edge_tunnel_token
+
+- name: Fetch this node's tunnel token from Cloudflare (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID)
+  when: not edge_tunnel_token.stat.exists
+  block:
+    - name: Ask the API
+      ansible.builtin.uri:
+        url: "https://api.cloudflare.com/client/v4/accounts/{{ lookup('env', 'CLOUDFLARE_ACCOUNT_ID') }}/cfd_tunnel/{{ edge_tunnel }}/token"
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'CLOUDFLARE_API_TOKEN') }}"
+        return_content: true
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      register: edge_tunnel_api
+      no_log: true
+
+    - name: Write it (cloudflared runs as uid 1000)
+      ansible.builtin.copy:
+        content: "{{ edge_tunnel_api.json.result }}"
+        dest: /opt/platform/edge/secrets/tunnel-token
+        owner: "1000"
+        group: "1000"
+        mode: "0600"
+      no_log: true
+
+- name: Edge stack definition
+  ansible.builtin.template:
+    src: "{{ platform_src }}/edge/compose.yml.j2"
+    dest: /opt/platform/edge/compose.yml
+    owner: root
+    group: root
+    mode: "0644"
+
+# Recreates only containers whose configuration changed (Compose's config hash).
+- name: Edge stack
+  ansible.builtin.command: docker compose up -d
+  args:
+    chdir: /opt/platform/edge
+  register: edge_up
+  changed_when: edge_up.stderr is search('Creat|Recreat|Start')
+
+- name: Traefik access log rotation
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/edge/logrotate/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: traefik-logrotate, dest: /usr/local/sbin/traefik-logrotate, mode: "0750"}
+    - {src: traefik-logrotate.conf, dest: /etc/traefik-logrotate.conf, mode: "0600"}
+    - {src: traefik-logrotate.service, dest: /etc/systemd/system/traefik-logrotate.service, mode: "0600"}
+    - {src: traefik-logrotate.timer, dest: /etc/systemd/system/traefik-logrotate.timer, mode: "0600"}
+    - {src: traefik-logrotate.service.conditional-reopen.conf, dest: /etc/systemd/system/traefik-logrotate.service.d/conditional-reopen.conf, mode: "0644"}
+  notify: Reload systemd
+
+- name: Flush systemd reload
+  ansible.builtin.meta: flush_handlers
+
+- name: Log rotation timer
+  ansible.builtin.systemd_service:
+    name: traefik-logrotate.timer
+    enabled: true
+    state: started

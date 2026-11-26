@@ -1,0 +1,217 @@
+name: edge-traefik
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.11.2
+    container_name: edge-cloudflared
+    restart: unless-stopped
+    user: 1000:1000
+    command: tunnel --no-autoupdate --metrics 127.0.0.1:20241 run --token-file /run/secrets/tunnel-token
+    secrets:
+    - tunnel-token
+    read_only: true
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 128m
+    cpus: 0.25
+    networks:
+      edge-egress:
+        gw_priority: 1
+      edge-cf-ingress:
+        ipv4_address: 172.31.250.2
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    healthcheck:
+      test:
+      - CMD
+      - cloudflared
+      - tunnel
+      - --metrics
+      - 127.0.0.1:20241
+      - ready
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    volumes:
+    - ./cloudflare-ca:/etc/cloudflare-origin-ca:ro,z
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:3.4@sha256:027f9fa5ee70be5836eeaa10ce889d7a83f34a8db16a7f412818b92997e0beab
+    container_name: edge-docker-socket-proxy
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 128m
+    cpus: 0.25
+    tmpfs:
+    - /run
+    - /tmp
+    environment:
+      CONTAINERS: 1
+      EVENTS: 1
+      PING: 1
+      VERSION: 1
+      POST: 0
+      EXEC: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      SECRETS: 0
+      SERVICES: 0
+      SWARM: 0
+      TASKS: 0
+      PLUGINS: 0
+      SYSTEM: 0
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    - ./haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
+    networks:
+      edge-management:
+        aliases:
+        - socket-proxy
+    healthcheck:
+      test:
+      - CMD
+      - wget
+      - -qO-
+      - --timeout=3
+      - http://127.0.0.1:2375/_ping
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  traefik:
+    image: traefik:v3.8.0
+    container_name: edge-traefik
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    pids_limit: 200
+    mem_limit: 256m
+    cpus: 0.5
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DOCKER_API_VERSION: '1.44'
+    volumes:
+    - ./traefik.yml:/etc/traefik/traefik.yml:ro
+    - /var/log/traefik:/var/log/traefik:Z
+    - ./dynamic:/etc/traefik/dynamic:ro
+    - ./plugins-local:/plugins-local:ro,Z
+    - ./certs:/certs:ro,Z
+    secrets:
+    - crowdsec-bouncer-key
+    tmpfs:
+    - /tmp:rw,noexec,nosuid,size=16m
+    networks:
+      edge-cf-ingress:
+        ipv4_address: 172.31.250.4
+      edge-management: null
+{% for net in edge_app_networks %}
+      {{ net.key }}: null
+{% endfor %}
+      edge-crowdsec:
+        ipv4_address: 172.31.254.2
+    depends_on:
+    - socket-proxy
+    healthcheck:
+      test:
+      - CMD
+      - wget
+      - -qO-
+      - --timeout=3
+      - http://127.0.0.1:18080/ping
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    ports:
+    - 127.0.0.1:18082:8899
+  probe-traefik:
+    image: curlimages/curl:8.23.0
+    container_name: edge-probe-traefik
+    network_mode: container:edge-traefik
+    restart: 'no'
+    profiles:
+    - probe
+    command:
+    - -sS
+    - http://127.0.0.1:18080/readyz
+    - -H
+    - 'Host: acb-blue.internal.invalid'
+  probe-cloudflared:
+    image: curlimages/curl:8.23.0
+    container_name: edge-probe-cloudflared
+    network_mode: container:edge-cloudflared
+    restart: 'no'
+    profiles:
+    - probe
+    volumes:
+    - ./cloudflare-ca:/etc/cloudflare-origin-ca:ro,z
+    command:
+    - --fail
+    - --silent
+    - --show-error
+    - --max-time
+    - '10'
+    - --noproxy
+    - '*'
+    - --cacert
+    - /etc/cloudflare-origin-ca/origin-ca.pem
+    - --resolve
+    - bank.tuannguyenviet.site:8080:172.31.250.4
+    - https://bank.tuannguyenviet.site:8080/readyz
+    - -H
+    - 'Host: bank.tuannguyenviet.site'
+    - -H
+    - 'CF-Connecting-IP: 203.0.113.10'
+    - -H
+    - 'X-Forwarded-Proto: https'
+    - --output
+    - /dev/null
+    - --write-out
+    - '%{http_code} %{ssl_verify_result}
+
+      '
+secrets:
+  tunnel-token:
+    file: ./secrets/tunnel-token
+  crowdsec-bouncer-key:
+    file: ./secrets/crowdsec-bouncer-key
+networks:
+  edge-management:
+    internal: true
+  edge-cf-ingress:
+    external: true
+    name: edge-cf-ingress
+  edge-egress:
+    external: true
+    name: edge-egress
+{% for net in edge_app_networks %}
+  {{ net.key }}:
+    external: true
+    name: {{ net.name }}
+{% endfor %}
+  edge-crowdsec:
+    external: true
+    name: edge-crowdsec

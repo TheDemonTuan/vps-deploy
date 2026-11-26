@@ -36,5 +36,20 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - name: Exercise adapted blue-green harness
         run: bash tests/blue-green-reconcile.test.sh
+      # ansible-core 2.22 needs Python 3.13; the other steps keep the runner's python3.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: '3.13'
+          update-environment: false
+      - name: Exercise node peer scripts and lint the fleet playbook
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          bash platform/peer/role.test.sh
+          "$PYTHON" -m venv "$RUNNER_TEMP/ansible"
+          "$RUNNER_TEMP/ansible/bin/pip" install --quiet ansible-core==2.22.0 ansible-lint==26.11.1
+          export PATH="$RUNNER_TEMP/ansible/bin:$PATH"
+          (cd ansible && ansible-playbook site.yml --syntax-check && ansible-lint --offline)
       - name: Exercise disposable Traefik and systemd integration
         run: sudo RUNNER_TEMP="$RUNNER_TEMP" bash tests/integration/platform-smoke.sh --migration-base "$RUNNER_TEMP/vps-deploy-baseline"

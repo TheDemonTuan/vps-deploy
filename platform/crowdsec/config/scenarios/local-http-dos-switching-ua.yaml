@@ -1,0 +1,25 @@
+type: leaky
+format: 2.0
+name: local/http-dos-switching-ua
+description: Detect DoS tools switching user-agent too fast
+filter: (evt.Meta.log_type in ["http_access-log", "http_error-log"]) && evt.Meta.log_type
+  == 'http_access-log' && (evt.Meta.target_fqdn in ['tuannguyenviet.site', 'transactions.tuannguyenviet.site'])
+  && evt.Meta.http_path != '' && evt.Meta.http_path != '/api' && !(evt.Meta.http_path
+  startsWith '/api/') && !(evt.Meta.http_path startsWith '/v1/') && !(evt.Meta.http_path
+  startsWith '/webhooks/') && !(evt.Meta.http_path startsWith '/assets/') && !(evt.Meta.http_path
+  startsWith '/_next/') && !(evt.Meta.http_path startsWith '/crowdsec-internal/')
+  && !(evt.Meta.http_path startsWith '/health')
+capacity: 10
+distinct: evt.Parsed.http_user_agent
+leakspeed: 8s
+groupby: evt.Meta.source_ip
+blackhole: 2m
+labels:
+  service: http
+  remediation: true
+  confidence: 2
+  spoofable: 0
+  classification:
+  - attack.T1498
+  behavior: http:dos
+  label: HTTP DOS with varying UA

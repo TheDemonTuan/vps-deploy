@@ -1,0 +1,30 @@
+{% if crowdsec_hub %}
+# The fleet's one LAPI (crowdsec_lapi_host): every node's agent and bouncers use it, the other
+# nodes through crowdsec-lapi.service (SSH), which arrives from 172.31.254.1 like local callers.
+api:
+  server:
+    listen_uri: 172.31.254.1:8080
+    online_client:
+      sharing: false
+      pull:
+        community: true
+        blocklists: false
+    disable_usage_metrics_export: true
+    trusted_ips:
+    - 127.0.0.1
+    - ::1
+    - 172.31.254.1
+db_config:
+  flush:
+    max_age: 744h
+    max_items: 20000
+  use_wal: true
+{% else %}
+# Agent only (log processor + AppSec on 172.31.254.1:7422): alerts go to the LAPI on
+# {{ crowdsec_lapi_host }} through crowdsec-lapi.service, which listens on 172.31.254.1:8080 here.
+api:
+  server:
+    enable: false
+{% endif %}
+prometheus:
+  level: aggregated

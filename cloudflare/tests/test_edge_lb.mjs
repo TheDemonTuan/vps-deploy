@@ -4,7 +4,10 @@ import { beforeEach, test } from 'node:test';
 import worker, { Lease, pickOrder, _test } from '../edge-lb/index.mjs';
 import config from '../edge-lb/config.mjs';
 
-// The committed config: thedemontuan.dev on n1 (primary, weight 30) and n2 (weight 70), lease mc-hub-api.
+// A fixed two-node fleet, whatever hosts/*.yml weigh now: thedemontuan.dev on n1 (primary,
+// weight 30) and n2 (weight 70), lease mc-hub-api. index.mjs reads this same object per request.
+config.nodes = { n1: { ...config.nodes.n1, weight: 30 }, n2: { ...config.nodes.n2, weight: 70 } };
+for (const site of Object.values(config.sites)) site.nodes = site.nodes.filter((n) => n in config.nodes);
 let calls, replies, cached, telegrams, queued, points, pending, env;
 globalThis.caches = {
   default: {

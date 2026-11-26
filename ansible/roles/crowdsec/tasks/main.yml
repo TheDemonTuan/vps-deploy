@@ -1,0 +1,156 @@
+# One LAPI for the fleet, on crowdsec_lapi_host (CrowdSec's multi-server setup): it holds every
+# decision, the allowlists, the profiles, the console/CAPI link and the Telegram notifications.
+# Every node runs the agent (its own logs and AppSec on 172.31.254.1:7422), the nftables firewall
+# bouncer and Traefik's bouncer; on the other nodes they reach the LAPI through
+# crowdsec-lapi.service, an SSH forward to the LAPI node's 172.31.254.1:8080. The endpoint guard
+# keeps 8080/7422 off every interface but lo and the edge-crowdsec bridge on every node.
+- name: CrowdSec repository
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/crowdsec/crowdsec.repo"
+    dest: /etc/yum.repos.d/crowdsec_crowdsec_rpm_any.repo
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: CrowdSec and the nftables firewall bouncer
+  ansible.builtin.dnf:
+    name: [crowdsec, crowdsec-firewall-bouncer-nftables]
+    state: present
+
+- name: CrowdSec unit drop-in directories
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [crowdsec, crowdsec-firewall-bouncer]
+
+- name: Endpoint guard
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/crowdsec/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {src: crowdsec-endpoint-guard.nft, dest: /etc/nftables/crowdsec-endpoint-guard.nft}
+    - {src: crowdsec-endpoint-guard.service, dest: /etc/systemd/system/crowdsec-endpoint-guard.service}
+    - {src: crowdsec.service.endpoint-guard.conf, dest: /etc/systemd/system/crowdsec.service.d/10-endpoint-guard.conf}
+  notify: Reload systemd
+
+- name: Flush systemd reload
+  ansible.builtin.meta: flush_handlers
+
+- name: Endpoint guard service
+  ansible.builtin.systemd_service:
+    name: crowdsec-endpoint-guard.service
+    enabled: true
+    state: started
+
+# Before the configuration that references them (acquis.d/appsec.yaml names hub AppSec configs).
+- name: Installed hub collections
+  ansible.builtin.command: cscli collections list -o json
+  register: crowdsec_hub_items
+  check_mode: false
+  changed_when: false
+
+- name: Install missing hub collections
+  vars:
+    installed: "{{ (crowdsec_hub_items.stdout | from_json).collections | map(attribute='name') | list }}"
+  ansible.builtin.command: "cscli collections install {{ item }}"
+  loop: "{{ crowdsec_collections | difference(installed) }}"
+  changed_when: true
+  notify: Reload crowdsec
+
+# Only the files in platform/crowdsec/config; hub files and the package's config.yaml stay.
+- name: CrowdSec configuration
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/crowdsec/config/"
+    dest: /etc/crowdsec/
+    owner: root
+    group: root
+    mode: u=rwX,g=rX,o=rX
+  notify: Reload crowdsec
+
+- name: Never ban a node of this fleet (SFTP polling looks like ssh-bf)
+  ansible.builtin.template:
+    src: "{{ platform_src }}/crowdsec/self-whitelist.yaml.j2"
+    dest: /etc/crowdsec/parsers/s02-enrich/03-self-whitelist.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload crowdsec
+
+- name: LAPI here, or agent only
+  ansible.builtin.template:
+    src: "{{ platform_src }}/crowdsec/config.yaml.local.j2"
+    dest: /etc/crowdsec/config.yaml.local
+    owner: root
+    group: root
+    mode: "0600"
+  register: crowdsec_local_config
+  notify: Reload crowdsec
+
+- name: The agent and cscli use the LAPI on 172.31.254.1:8080 (local, or the forward)
+  ansible.builtin.lineinfile:
+    path: /etc/crowdsec/local_api_credentials.yaml
+    regexp: '^url:'
+    line: "url: http://172.31.254.1:8080"
+  notify: Restart crowdsec
+
+- name: Tunnel user and key on the other nodes (the LAPI node reads the keys next)
+  when: not crowdsec_hub
+  block:
+    - name: Tunnel user
+      ansible.builtin.user:
+        name: crowdsec-lapi
+        system: true
+        create_home: false
+        home: /
+        shell: /sbin/nologin
+
+    - name: Tunnel key (the LAPI node allows it to forward to 172.31.254.1:8080 only)
+      ansible.builtin.command: ssh-keygen -q -t ed25519 -N '' -C crowdsec-lapi@{{ edge_id }} -f /etc/platform/lapi_key
+      args:
+        creates: /etc/platform/lapi_key
+
+    - name: Tunnel key owner
+      when: not ansible_check_mode  # the key and user exist only after a real run
+      ansible.builtin.file:
+        path: /etc/platform/lapi_key
+        owner: crowdsec-lapi
+        group: crowdsec-lapi
+        mode: "0600"
+
+# Imported, not included: in lockstep the LAPI node's tasks (sshd, keys) run before the others'.
+- name: The LAPI node
+  when: crowdsec_hub
+  ansible.builtin.import_tasks: hub.yml
+
+- name: The other nodes
+  when: not crowdsec_hub
+  ansible.builtin.import_tasks: spoke.yml
+
+- name: Firewall bouncer configuration
+  ansible.builtin.template:
+    src: "{{ platform_src }}/crowdsec/firewall-bouncer.yaml.j2"
+    dest: /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  diff: false
+  no_log: true
+  notify: Restart firewall bouncer
+
+- name: CrowdSec service
+  ansible.builtin.systemd_service:
+    name: crowdsec
+    enabled: true
+    state: started
+
+- name: Firewall bouncer service
+  ansible.builtin.systemd_service:
+    name: crowdsec-firewall-bouncer
+    enabled: true
+    state: started

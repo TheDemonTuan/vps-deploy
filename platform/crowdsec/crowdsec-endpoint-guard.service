@@ -1,0 +1,14 @@
+[Unit]
+Description=CrowdSec host endpoint ingress guard
+After=docker.service firewalld.service
+Requires=docker.service
+Before=crowdsec.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/docker network inspect edge-crowdsec
+ExecStart=/usr/sbin/nft -f /etc/nftables/crowdsec-endpoint-guard.nft
+
+[Install]
+WantedBy=multi-user.target
