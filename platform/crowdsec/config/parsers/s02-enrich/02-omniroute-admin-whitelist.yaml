@@ -1,0 +1,7 @@
+name: local/omniroute-admin-whitelist
+description: Exclude the OmniRoute admin dashboard from HTTP log-based decisions
+filter: "evt.Parsed.program == 'traefik' && evt.Meta.log_type == 'http_access-log'"
+whitelist:
+  reason: omniroute dashboard bypasses CrowdSec; Cloudflare Access and native authentication protect it
+  expression:
+    - "Lower(Split(evt.Meta.target_fqdn, ':')[0]) in ['omniroute.tuannguyenviet.site', 'omniroute.tuannguyenviet.site.']"

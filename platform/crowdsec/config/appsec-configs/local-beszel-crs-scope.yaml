@@ -1,0 +1,15 @@
+name: local/beszel-crs-scope
+pre_eval:
+  # Beszel/PocketBase subscriptions and stats filters contain SQL-like predicates.
+  # Only skip CRS libinjection SQLi (942100) on these exact API routes;
+  # other SQLi/CRS rules, virtual patches and all other hosts remain active.
+  - filter: |-
+      IsOutBand && req.Host == "beszel.tuannguyenviet.site" && (
+        (req.Method == "POST" && req.URL.Path == "/api/realtime") ||
+        (req.Method == "GET" && req.URL.Path in [
+          "/api/collections/system_stats/records",
+          "/api/collections/container_stats/records"
+        ])
+      )
+    apply:
+      - RemoveOutBandRuleByID(942100)

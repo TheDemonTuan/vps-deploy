@@ -1,0 +1,17 @@
+- name: Reload sshd
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: true
+  notify: Reload sshd service
+
+- name: Reload sshd service
+  ansible.builtin.systemd_service:
+    name: sshd
+    state: reloaded
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Flush journal
+  ansible.builtin.command: journalctl --flush
+  changed_when: true

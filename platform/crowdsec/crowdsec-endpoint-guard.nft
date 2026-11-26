@@ -1,0 +1,7 @@
+table inet crowdsec_endpoint_guard {
+    chain input {
+        type filter hook input priority -50; policy accept;
+        ip daddr 172.31.254.1 tcp dport { 8080, 7422 } iifname != "lo" iifname != "br-crowdsec" drop
+        ip daddr 172.31.254.1 tcp dport { 8080, 7422 } iifname "br-crowdsec" ip saddr != 172.31.254.2 drop
+    }
+}

@@ -1,0 +1,21 @@
+http:
+  middlewares:
+    crowdsec-ip:
+      plugin:
+        bouncer:
+          enabled: true
+          excludedHosts: [monitor.thedemontuan.dev, metrics.thedemontuan.dev]  # Access-gated; Grafana query bodies trip AppSec
+          crowdsecMode: stream
+          crowdsecLapiHost: 172.31.254.1:8080
+          crowdsecLapiKeyFile: /run/secrets/crowdsec-bouncer-key
+          forwardedHeadersTrustedIPs:
+            - "172.31.250.2/32"
+          forwardedHeadersCustomName: CF-Connecting-IP
+          updateIntervalSeconds: 60
+          updateMaxFailure: -1
+          crowdsecAppsecEnabled: true
+          crowdsecAppsecHost: 172.31.254.1:7422
+          crowdsecAppsecFailureBlock: false
+          crowdsecAppsecUnreachableBlock: false
+          crowdsecAppsecBodyLimit: 1048576
+          clientTrustedIPs: []

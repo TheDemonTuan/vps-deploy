@@ -1,0 +1,30 @@
+# One shared secret: copied from secrets_source when this node lacks it, never overwritten, never
+# logged. secret: {dest, src (default dest), owner, mode, keep (regex: lines to copy), node_line
+# (rewrite NODE= to this node's id)}.
+- name: "Look for {{ secret.dest }}"
+  ansible.builtin.stat:
+    path: "{{ secret.dest }}"
+  register: shared_secret_stat
+
+- name: "Copy {{ secret.dest }} from {{ secrets_source }}"
+  when: not shared_secret_stat.stat.exists
+  block:
+    - name: "Read {{ secret.src | default(secret.dest) }} on {{ secrets_source }}"
+      ansible.builtin.slurp:
+        src: "{{ secret.src | default(secret.dest) }}"
+      delegate_to: "{{ secrets_source }}"
+      register: shared_secret_value
+      no_log: true
+
+    - name: "Write {{ secret.dest }}"
+      vars:
+        lines: "{{ (shared_secret_value.content | b64decode).splitlines() }}"
+        kept: "{{ lines | select('match', secret.keep) | list if secret.keep is defined else lines }}"
+        text: "{{ kept | map('regex_replace', '^NODE=.*$', 'NODE=' ~ edge_id) | list if secret.node_line | default(false) else kept }}"
+      ansible.builtin.copy:
+        content: "{{ (text | join('\n') ~ '\n') if text else '' }}"
+        dest: "{{ secret.dest }}"
+        owner: "{{ secret.owner | default('root') }}"
+        group: "{{ secret.owner | default('root') }}"
+        mode: "{{ secret.mode | default('0600') }}"
+      no_log: true

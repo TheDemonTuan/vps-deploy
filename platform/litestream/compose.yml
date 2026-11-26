@@ -6,13 +6,15 @@
 #   /data/backups to R2 bucket mc-hub-db every hour (off-site; `litestream restore` reads it).
 #   The mirror never restarts by itself: platform/peer starts it only while the edge lease
 #   confirms this node as the writer, so an old primary cannot overwrite the new one's R2 copy.
-# replica (registry `replica_hosts`): follows the primary's directory over read-only SFTP into this
+# replica (registry `replica_hosts`): follows the writer's directory over read-only SFTP into this
 #   node's own /data/mc-hub.db, which mc-hub-api opens read-only (DB_ROLE=replica). A restart
-#   resumes from the last applied txid.
+#   resumes from the last applied txid. platform/peer/role.sh picks the writer (the edge lease)
+#   and writes it to /etc/platform/litestream-primary.env before starting this.
 # Replication makes no R2 requests: following R2 directly listed ~480 objects a minute.
 # /etc/platform/litestream.env (root, 0600): LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
-# (R2 token scoped to bucket mc-hub-db and the nodes' IPs), R2_ACCOUNT_ID; on a replica also
-# PRIMARY_SSH (<ip>:22) and PRIMARY_HOST_KEY (the primary's "ssh-ed25519 AAAA…" host key).
+# (R2 token scoped to bucket mc-hub-db and the nodes' IPs), R2_ACCOUNT_ID. On a replica also
+# /etc/platform/litestream-primary.env: PRIMARY_SSH (<ip>:22) and PRIMARY_HOST_KEY (the writer's
+# "ecdsa-sha2-nistp256 AAAA…" host key).
 # /etc/platform/sync_key: this node's SFTP client key (owner 1000, 0600), see platform/README.md.
 name: litestream
 x-hardening: &hardening
@@ -81,6 +83,7 @@ services:
   replica:
     <<: *litestream
     profiles: [replica]
+    env_file: [/etc/platform/litestream.env, /etc/platform/litestream-primary.env]
     command: [restore, -f, -follow-interval, 1s, -config, /etc/litestream.yml, /data/mc-hub.db]
     volumes:
       - mc-hub-api-data:/data

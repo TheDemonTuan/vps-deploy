@@ -1,0 +1,75 @@
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+  format: json
+
+ping:
+  entryPoint: slot-probe
+
+accessLog:
+  format: json
+  filePath: /var/log/traefik/access.log
+  fields:
+    defaultMode: keep
+    names:
+      ClientUsername: drop
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+        Cf-Connecting-Ip: keep
+    queryParameters:
+      defaultMode: drop
+
+entryPoints:
+  # Prometheus metrics for platform/monitor (published on host loopback only).
+  metrics:
+    address: ":8899"
+
+  web:
+    address: "172.31.250.4:8080"
+    forwardedHeaders:
+      trustedIPs:
+        - "172.31.250.2/32"
+    http:
+      middlewares:
+        - tunnel-only@file
+        - crowdsec-ip@file
+      tls: {}
+    # Routers without explicit entryPoints stay on web + slot-probe only, never on internal.
+    asDefault: true
+
+  slot-probe:
+    address: "127.0.0.1:18080"
+    asDefault: true
+
+  # Plain HTTP for same-node callers (SSR -> API, deploy probes); routers must opt in explicitly.
+  internal:
+    address: ":8082"
+    http:
+      middlewares:
+        - internal-only@file
+
+experimental:
+  localPlugins:
+    bouncer:
+      moduleName: github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+
+providers:
+  file:
+    directory: "/etc/traefik/dynamic"
+    watch: true
+
+  docker:
+    endpoint: "tcp://socket-proxy:2375"
+    exposedByDefault: false
+    watch: true
+    defaultRule: "Host(`{{ normalize .Name }}.internal.invalid`)"
+
+metrics:
+  prometheus:
+    entryPoint: metrics
+    addServicesLabels: true

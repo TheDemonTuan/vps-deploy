@@ -1,0 +1,5 @@
+# <id> <ip> <ECDSA host key>, every edge node (ansible, from hosts/*.yml): platform/peer.
+{% for host in groups['edge'] %}
+{{ hostvars[host].edge_id }} {{ hostvars[host].edge_ip }}{% if sync_fleet[host]['ssh_host_ecdsa_key.pub'] %} {{ sync_fleet[host]['ssh_host_ecdsa_key.pub'].split()[:2] | join(' ') }}{% endif %}
+
+{% endfor %}

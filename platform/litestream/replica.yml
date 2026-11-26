@@ -1,6 +1,6 @@
-# Replica: follow the primary's local replica directory over read-only SFTP (one SSH connection,
+# Replica: follow the writer's local replica directory over read-only SFTP (one SSH connection,
 # polled every second; no per-request cost). PRIMARY_SSH and PRIMARY_HOST_KEY come from
-# /etc/platform/litestream.env; the host key is pinned.
+# /etc/platform/litestream-primary.env (role.sh); the host key is pinned.
 dbs:
   - path: /data/mc-hub.db
     replica:

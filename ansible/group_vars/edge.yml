@@ -1,0 +1,68 @@
+ansible_user: opc
+platform_src: "{{ playbook_dir }}/../platform"
+
+# Shared secrets (bot token, Worker NODE_KEY, R2 keys, origin certificates, GHCR login, app
+# runtime env) are copied from this node to a node that lacks them, never overwritten and never
+# stored in git or on the workstation. Override with -e secrets_source=<host> if it is down.
+secrets_source: oracle-main
+
+# peer.env ROLE: the mc-hub-api writer before any failover (the lease decides after that).
+initial_writer: n1
+
+lease_url: https://api.thedemontuan.dev/__edge/lease/mc-hub-api
+
+# dnf-automatic applies security updates daily (no reboot) at this hour UTC plus the node's place
+# in the inventory, so two nodes never update at once.
+dnf_automatic_first_hour: 19
+
+# Docker networks every edge node has (platform/README.md); edge-management belongs to the edge
+# Compose project. bridge: the nftables endpoint guard matches the CrowdSec bridge by name.
+edge_platform_networks:
+  - {name: edge-crowdsec, subnet: 172.31.254.0/28, internal: true, bridge: br-crowdsec}
+  - {name: edge-cf-ingress, subnet: 172.31.250.0/28, internal: true}
+  - {name: edge-egress, subnet: 172.31.252.0/28, internal: false}
+  - {name: edge-mc-hub, subnet: 172.25.0.0/16, internal: false}
+  - {name: edge-mc-hub-api, subnet: 172.27.0.0/16, internal: true}
+# App networks Traefik joins, as Compose keys (key) of Docker networks (name): those of the
+# unbalanced apps a node also runs (host_vars), then the balanced apps', then the monitor hub's.
+edge_extra_networks: []
+edge_app_networks: >-
+  {{ edge_extra_networks
+     + [{'key': 'edge-mc-hub', 'name': 'edge-mc-hub'}, {'key': 'edge-mc-hub-api', 'name': 'edge-mc-hub-api'}]
+     + ([{'key': 'edge-monitor', 'name': 'edge-monitor'}] if monitor_hub else []) }}
+# The Cloudflare origin certificates platform/edge/dynamic/00-tls-origin.yml names (copied).
+edge_origin_certs: [cf-origin-20261005T063315Z, cf-origin-dev-20261119T092957Z]
+
+# Grafana and VictoriaMetrics run on one node (host_vars monitor_hub); every node runs the agent.
+monitor_hub: false
+# platform/keepalive: holds memory on a lightly loaded Always Free node so Oracle does not reclaim it.
+keepalive: false
+
+crowdsec_collections:
+  - crowdsecurity/appsec-bot-challenge
+  - crowdsecurity/appsec-bot-challenge-detections
+  - crowdsecurity/appsec-bot-challenge-exclude-paths
+  - crowdsecurity/appsec-bot-challenge-good-bots
+  - crowdsecurity/appsec-bot-challenge-scoring
+  - crowdsecurity/appsec-crs
+  - crowdsecurity/appsec-generic-rules
+  - crowdsecurity/appsec-virtual-patching
+  - crowdsecurity/base-http-scenarios
+  - crowdsecurity/http-cve
+  - crowdsecurity/http-extended-context
+  - crowdsecurity/linux
+  - crowdsecurity/sshd
+  - crowdsecurity/traefik
+  - crowdsecurity/whitelist-good-actors
+# The fleet's one CrowdSec LAPI (roles/crowdsec): decisions, allowlists, profiles, console.
+crowdsec_lapi_host: oracle-main
+crowdsec_hub: "{{ inventory_hostname == crowdsec_lapi_host }}"
+# On the LAPI only; it applies them to every node's alerts.
+crowdsec_allowlists:
+  - name: operator
+    description: TDT operator home IP
+    entries:
+      - {value: 113.161.34.3, expires: "2026-12-19T08:38:37Z", comment: "nguyenviettuan home (VNPT, dynamic)"}
+
+# Apps every edge node runs (registry balance): the `apps` role prepares their runtime env.
+balanced_apps: [mc-hub, mc-hub-api]

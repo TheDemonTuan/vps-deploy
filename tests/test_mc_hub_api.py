@@ -87,7 +87,7 @@ class McHubApi(unittest.TestCase):
         routers = parse_yaml(render('mc-hub-api'))['http']['routers']
         api_site_hosts = set(re.findall(r'Host\(`([^`]*)`\)', routers['mc-hub-api-site-router']['rule']))
         self.assertLessEqual(site_hosts, api_site_hosts)
-        scope = (ROOT / 'security/crowdsec/mc-hub-bot-scope.yaml').read_text()
+        scope = (ROOT / 'platform/crowdsec/config/appsec-configs/local-mc-hub-bot-scope.yaml').read_text()
         self.assertLessEqual(site_hosts, set(re.findall(r'"([a-z0-9.-]+\.[a-z]+)"', scope.split('ExemptFromChallenge("not-mc-hub")')[0])))
         # Compose files use anchors, which parse_yaml refuses; read the one line instead.
         def env(app, key):

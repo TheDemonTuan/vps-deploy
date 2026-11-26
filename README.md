@@ -438,14 +438,14 @@ UID 1000 with a read-only root, and deploy independently.
   owner's request; the collection `crowdsecurity/appsec-bot-challenge` (balanced) stays installed,
   and `appsec.yaml.pre-disable-bot-challenge-*` next to `/etc/crowdsec/acquis.d/appsec.yaml` on n1
   holds the config that loaded it. Re-enabling means listing the collection's configs plus
-  `security/crowdsec/mc-hub-bot-scope.yaml` (as `local/mc-hub-bot-scope`) in `appsec.yaml` on
+  `platform/crowdsec/config/appsec-configs/local-mc-hub-bot-scope.yaml` (as `local/mc-hub-bot-scope`) in `appsec.yaml` on
   every node and `systemctl reload crowdsec`. Its scoring config challenges every non-exempt
   request on every host, so the scope file must be loaded with it: it exempts every host but the
   two site domains and, there, non-GET, `/api/`, `/media/`, `/_astro/`, `/admin`, `/healthz` and
   crawler files. Googlebot, Bingbot, AdSense, social and monitoring bots pass when UA and
   forward-confirmed rDNS/IP agree (`cscli bot match --ip … --user-agent …`); a spoofed UA is
   challenged. Challenge pages are `no-store` (Cloudflare BYPASS). It only ever sees edge cache misses.
-- CRS scope `platform/crowdsec/local-mc-hub-crs-scope.yaml`: rule 930120 (OS file names) is off
+- CRS scope `platform/crowdsec/config/appsec-configs/local-mc-hub-crs-scope.yaml`: rule 930120 (OS file names) is off
   for out-of-band scoring on the site's `/api/`, where it matched readers' Turnstile tokens.
 - Enrollment follows the portfolio procedure per app: create `edge-<app>` and attach
   Traefik (live `docker network connect` plus the edge Compose file, no restart), stage

@@ -1,0 +1,14 @@
+# A host this node does not serve (an app not enrolled here yet) answers 503, not Traefik's 404:
+# the edge Worker retries a 503 on the next node (RETRY_STATUS) but passes a 404 to the visitor,
+# which made every client pinned to a freshly rebuilt n2 see "404 page not found".
+http:
+  routers:
+    unrouted:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      entryPoints: [web]
+      service: unrouted
+  services:
+    unrouted:
+      loadBalancer:
+        servers: []

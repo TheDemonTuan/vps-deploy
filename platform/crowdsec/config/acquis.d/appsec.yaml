@@ -1,0 +1,17 @@
+source: appsec
+listen_addr: 172.31.254.1:7422
+appsec_configs:
+- crowdsecurity/appsec-default
+- crowdsecurity/crs
+- local/body-scope
+- local/beszel-crs-scope
+- local/transactions-crs-scope
+- local/no-ua-scope
+- local/mc-hub-crs-scope
+labels:
+  type: appsec
+name: traefikAppSec
+routines: 1
+auth_cache_duration: 1m
+auth_timeout: 200ms
+body_read_timeout: 1s

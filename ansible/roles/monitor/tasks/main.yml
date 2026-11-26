@@ -1,0 +1,53 @@
+# platform/monitor: the agent on every node, the hub (VictoriaMetrics, Grafana) where monitor_hub.
+- name: Monitor files
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/monitor/"
+    dest: /opt/platform/monitor/
+    owner: root
+    group: root
+    mode: u=rwX,g=rX,o=rX
+
+# The hub's env (Analytics token, Access AUD) is not copied: platform/README.md "Fleet monitoring".
+- name: Look for the hub's settings
+  when: monitor_hub
+  ansible.builtin.stat:
+    path: /etc/platform/monitor.env
+  register: monitor_hub_env
+
+- name: The hub needs /etc/platform/monitor.env first
+  when: monitor_hub
+  ansible.builtin.assert:
+    that: monitor_hub_env.stat.exists
+    fail_msg: "write /etc/platform/monitor.env on {{ inventory_hostname }} (platform/README.md, Fleet monitoring), then run again"
+
+- name: Agent settings (the ingest service token, from {{ secrets_source }})
+  when: not monitor_hub
+  ansible.builtin.include_role:
+    name: shared_secret
+  vars:
+    secret:
+      dest: /etc/platform/monitor.env
+      node_line: true
+
+- name: Monitor stack
+  ansible.builtin.command: >-
+    docker compose --env-file /etc/platform/monitor.env --profile agent
+    {{ '--profile hub' if monitor_hub else '' }} up -d
+  args:
+    chdir: /opt/platform/monitor
+  register: monitor_up
+  changed_when: monitor_up.stderr is search('Creat|Recreat|Start')
+
+# vmagent and VictoriaMetrics run as nobody; Docker creates their volumes root-owned.
+- name: Volumes that belong to nobody
+  ansible.builtin.shell: |
+    dir=$(docker volume inspect -f '{{ "{{" }}.Mountpoint{{ "}}" }}' monitor_{{ item.volume }})
+    [ "$(stat -c %u "$dir")" = 65534 ] && exit 0
+    {{ 'echo missing; exit 0' if ansible_check_mode else '' }}
+    chown 65534:65534 "$dir" && docker restart monitor-{{ item.container }} >/dev/null && echo fixed
+  loop: "{{ [{'volume': 'vmagent-buffer', 'container': 'vmagent'}] + ([{'volume': 'victoriametrics', 'container': 'victoriametrics'}] if monitor_hub else []) }}"
+  loop_control:
+    label: "{{ item.volume }}"
+  register: monitor_volumes
+  check_mode: false
+  changed_when: monitor_volumes.stdout in ['fixed', 'missing']

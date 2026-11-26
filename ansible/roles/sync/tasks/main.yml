@@ -1,0 +1,87 @@
+# platform/sync: every node serves /srv/platform-sync read-only over SFTP to the other nodes (the
+# Litestream follower). Each node's client key is generated here;
+# the other nodes' keys and host keys are read over the pinned SSH session of this play.
+- name: SFTP-only user
+  ansible.builtin.user:
+    name: platform-sync
+    system: true
+    create_home: false
+    home: /srv/platform-sync
+    shell: /sbin/nologin
+
+- name: Sync directories (the chroot must be root-owned; Litestream's replica volume is uid 1000's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.owner | default('root') }}"
+    mode: "0755"
+  loop:
+    - {path: /srv/platform-sync}
+    - {path: /srv/platform-sync/litestream, owner: "1000"}
+    - {path: /etc/platform}
+  notify: Restore SELinux contexts
+
+- name: Read access for platform-sync to Litestream's 0750 directories, now and as they appear
+  ansible.builtin.shell: |
+    case "$(getfacl -p /srv/platform-sync/litestream)" in *default:user:platform-sync:r-x*) exit 0 ;; esac
+    {{ 'echo missing; exit 0' if ansible_check_mode else '' }}
+    setfacl -R -m u:platform-sync:rX,d:u:platform-sync:rX /srv/platform-sync/litestream && echo set
+  register: sync_acl
+  check_mode: false
+  changed_when: sync_acl.stdout in ['set', 'missing']
+
+- name: "Sshd: chrooted read-only SFTP for platform-sync"
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/sync/60-platform-sync.conf"
+    dest: /etc/ssh/sshd_config.d/60-platform-sync.conf
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Reload sshd
+
+- name: This node's sync client key (Litestream runs as uid 1000)
+  ansible.builtin.command: ssh-keygen -q -t ed25519 -N '' -C platform-sync@{{ edge_id }} -f /etc/platform/sync_key
+  args:
+    creates: /etc/platform/sync_key
+  notify: Restore SELinux contexts
+
+- name: Sync key owner
+  ansible.builtin.file:
+    path: "/etc/platform/{{ item.name }}"
+    owner: "1000"
+    group: "1000"
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: sync_key, mode: "0600"}
+    - {name: sync_key.pub, mode: "0644"}
+
+# From every node, also outside --limit: the fleet files list all of them.
+- name: Read each node's sync public key and ECDSA host key (Litestream's SSH client pins ECDSA)
+  ansible.builtin.slurp:
+    src: "{{ item.1 }}"
+  delegate_to: "{{ item.0 }}"
+  loop: "{{ groups['edge'] | product(['/etc/platform/sync_key.pub', '/etc/ssh/ssh_host_ecdsa_key.pub']) | list }}"
+  run_once: true
+  register: sync_public
+  failed_when: false
+
+- name: Keep them by node
+  ansible.builtin.set_fact:
+    sync_fleet: "{{ sync_fleet | default({}) | combine({item.item.0: {(item.item.1 | basename): (item.content | default('') | b64decode | trim)}}, recursive=true) }}"
+  loop: "{{ sync_public.results }}"
+  loop_control:
+    label: "{{ item.item.0 }} {{ item.item.1 | basename }}"
+
+- name: Fleet files (/etc/platform/nodes, the other nodes' host keys and sync keys)
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {src: nodes.j2, dest: /etc/platform/nodes}
+    - {src: known_hosts.j2, dest: /etc/platform/known_hosts}
+    - {src: platform-sync.keys.j2, dest: /etc/ssh/platform-sync.keys}
+  notify: Restore SELinux contexts

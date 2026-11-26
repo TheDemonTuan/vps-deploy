@@ -1,0 +1,5 @@
+# n1 also runs ACB, the portfolio and OmniRoute behind its Traefik (their own installers).
+edge_extra_networks:
+  - {key: edge-acb, name: edge-acb}
+  - {key: edge-portfolio, name: edge-tuan-portfolio}
+  - {key: edge-omniroute, name: edge-omniroute}

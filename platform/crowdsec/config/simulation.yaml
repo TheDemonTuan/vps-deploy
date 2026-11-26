@@ -1,0 +1,4 @@
+simulation: false
+exclusions:
+- local/http-dos-bypass-cache
+- local/http-dos-switching-ua

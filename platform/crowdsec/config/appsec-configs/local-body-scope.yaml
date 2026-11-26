@@ -1,0 +1,32 @@
+name: local/body-scope
+pre_eval:
+  # 1. AI gateway API (OmniRoute): Prompts contain arbitrary code, SQL, or shell snippets.
+  # Skip body inspection in both phases on AI completion/chat routes to prevent false positives.
+  - filter: |-
+      (
+        req.Host in [
+          "omniroute-api.tuannguyenviet.site",
+          "omniroute.tuannguyenviet.site"
+        ] && (
+          (req.URL.Path == "/v1" || req.URL.Path startsWith "/v1/") ||
+          (req.URL.Path == "/api/v1" || req.URL.Path startsWith "/api/v1/") ||
+          (req.URL.Path == "/v1beta" || req.URL.Path startsWith "/v1beta/")
+        )
+      )
+    apply:
+      - DisableBodyInspection()
+
+  # 2. OmniRoute Admin Dashboard (protected by Cloudflare Access + password):
+  # Form payloads, settings, provider configs, and OAuth tokens contain URLs/IPs/JSON that trigger CRS rules (e.g. 931100 RFI on redirectUri).
+  - filter: |-
+      req.Host == "omniroute.tuannguyenviet.site"
+    apply:
+      - DisableBodyInspection()
+      - RemoveOutBandRuleByID(931100)
+      - RemoveInBandRuleByID(931100)
+
+  # 3. Bark: Push notifications to phone can contain error traces, OTPs, or code.
+  - filter: |-
+      req.Host == "bark.tuannguyenviet.site"
+    apply:
+      - DisableBodyInspection()

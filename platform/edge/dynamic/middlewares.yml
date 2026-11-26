@@ -1,0 +1,78 @@
+http:
+  middlewares:
+    # Restrict ingress only to Cloudflare Tunnel connector IP
+    tunnel-only:
+      ipAllowList:
+        sourceRange:
+          - "172.31.250.2/32"
+        rejectStatusCode: 403
+
+    # Security headers
+    security-headers:
+      headers:
+        sslRedirect: false
+        customResponseHeaders:
+          X-Content-Type-Options: "nosniff"
+          X-Frame-Options: "DENY"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+          Content-Security-Policy: "default-src 'self'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'; object-src 'none'; script-src 'self' https://static.cloudflareinsights.com; script-src-elem 'self' https://static.cloudflareinsights.com 'unsafe-inline'; script-src-attr 'none'; connect-src 'self' ws: wss: https://cloudflareinsights.com; img-src 'self' data: blob: https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'"
+
+    # Higher-priority deny for internal/debug endpoints from edge ingress
+    deny-internal:
+      ipAllowList:
+        sourceRange:
+          - "127.0.0.1/32"
+        rejectStatusCode: 403
+
+    # Public API rate limiter: 10 req/s with burst of 20 per client IP via CF-Connecting-IP
+    public-api-rate-limit:
+      rateLimit:
+        average: 10
+        period: 1s
+        burst: 20
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
+
+    # Public REST per-IP concurrent limiter: max 32 concurrent requests per client IP
+    public-api-inflight-ip:
+      inFlightReq:
+        amount: 32
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
+
+    # Public REST global concurrent limiter: max 128 concurrent requests for hostname
+    public-api-inflight-global:
+      inFlightReq:
+        amount: 128
+        sourceCriterion:
+          requestHost: true
+
+    # Public SSE reconnect limiter: 2 connection attempts/s with burst of 5 per client IP
+    public-sse-rate-limit:
+      rateLimit:
+        average: 2
+        period: 1s
+        burst: 5
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
+
+    # Public SSE per-IP active connection cap: max 12 concurrent SSE connections per client IP
+    public-sse-inflight-ip:
+      inFlightReq:
+        amount: 12
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
+
+    # Public SSE global active connection cap: max 128 concurrent SSE connections for hostname
+    public-sse-inflight-global:
+      inFlightReq:
+        amount: 128
+        sourceCriterion:
+          requestHost: true
+
+    # Fix previous Caddy bug: Allow GET, POST, PUT, DELETE, HEAD, OPTIONS
+    # (Enabling voice settings PUT, notification channels PUT, and QR delete)
+    acb-method-filter:
+      headers:
+        allowedHosts:
+          - "bank.tuannguyenviet.site"

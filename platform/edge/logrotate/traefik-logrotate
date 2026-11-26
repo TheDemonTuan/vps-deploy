@@ -1,0 +1,13 @@
+#!/bin/sh
+# Rotate Traefik access log; signal Traefik to reopen it ONLY when a rotation happened.
+# Runs outside logrotate on purpose: SELinux confines logrotate_t postrotate scripts away from docker.sock.
+# Uses `docker exec ... kill`, never `docker kill`: the latter marks the container manually stopped,
+# so restart=unless-stopped skips it after a dockerd restart or reboot.
+# Extra args go to logrotate (e.g. -f to force a rotation when testing).
+set -eu
+log=/var/log/traefik/access.log
+before=$(stat -c %i "$log" 2>/dev/null || true)
+/usr/sbin/logrotate --state /var/lib/traefik-logrotate/status "$@" /etc/traefik-logrotate.conf
+after=$(stat -c %i "$log" 2>/dev/null || true)
+[ "$before" = "$after" ] && exit 0
+exec /usr/bin/docker exec edge-traefik kill -USR1 1

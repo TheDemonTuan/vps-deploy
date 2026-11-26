@@ -1,0 +1,128 @@
+- name: Packages the platform uses
+  ansible.builtin.dnf:
+    name: [jq, curl, openssh-clients, acl, git-core, nftables, policycoreutils-python-utils, dnf-automatic, logrotate, tar]
+    state: present
+
+# Both nodes rebooted with no record of why: journald keeps logs across boots once this exists.
+- name: Persistent journal
+  ansible.builtin.file:
+    path: /var/log/journal
+    state: directory
+    owner: root
+    group: systemd-journal
+    mode: "2755"
+  notify: Flush journal
+
+# kdump reserves 1 GB (crashkernel=…,8G-:1G) that the system never gets back; n1 runs without it.
+# The packages go first: kdump-utils' kernel-install hook puts crashkernel= back on new kernels.
+- name: No kdump
+  ansible.builtin.dnf:
+    name: [kdump-utils, kexec-tools, makedumpfile]
+    state: absent
+
+- name: No crashkernel= for the next kernels
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    regexp: ' crashkernel=\S+'
+    replace: ''
+  loop: [/etc/default/grub, /etc/kernel/cmdline]
+  failed_when: false
+
+- name: No crashkernel= on the installed kernels (memory comes back at the next reboot)
+  ansible.builtin.shell: |
+    case "$(grubby --info=ALL)" in *crashkernel=*) ;; *) exit 0 ;; esac
+    {{ 'echo missing; exit 0' if ansible_check_mode else '' }}
+    grubby --update-kernel=ALL --remove-args=crashkernel && echo removed
+  register: base_crashkernel
+  check_mode: false
+  changed_when: base_crashkernel.stdout in ['removed', 'missing']
+
+# Performance Co-Pilot (~100 MB, its own archives on disk) and OCI's log shipper (fluentd, ~90 MB)
+# duplicate platform/monitor; masked so package updates and the cloud agent cannot start them.
+- name: No PCP, no unified-monitoring-agent
+  ansible.builtin.shell: |
+    for u in pmcd.service pmlogger.service pmie.service pmproxy.service pmlogger_farm.service pmie_farm.service \
+             pmlogger_check.timer pmlogger_daily.timer pmie_check.timer pmie_daily.timer \
+             pmlogger_farm_check.timer pmie_farm_check.timer unified-monitoring-agent.service; do
+      systemctl cat "$u" >/dev/null 2>&1 || continue
+      [ "$(systemctl is-enabled "$u" 2>/dev/null)" = masked ] && continue
+      {{ 'echo "mask $u"; continue' if ansible_check_mode else '' }}
+      systemctl disable --now "$u" >/dev/null 2>&1; systemctl mask "$u" >/dev/null && echo "mask $u"
+    done
+  register: base_masked
+  check_mode: false
+  changed_when: base_masked.stdout | length > 0
+
+- name: SSH daemon hardening (keys only, no root login)
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/base/sshd-hardening.conf"
+    dest: /etc/ssh/sshd_config.d/99-hardening.conf
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Reload sshd
+
+- name: Security updates only, applied by dnf-automatic
+  ansible.builtin.lineinfile:
+    path: /etc/dnf/automatic.conf
+    regexp: '^{{ item.key }}\s*='
+    line: "{{ item.key }} = {{ item.value }}"
+  loop: "{{ {'upgrade_type': 'security', 'apply_updates': 'yes'} | dict2items }}"
+
+- name: Directory for the dnf-automatic timer drop-in
+  ansible.builtin.file:
+    path: /etc/systemd/system/dnf-automatic.timer.d
+    state: directory
+    mode: "0755"
+
+- name: This node's update hour
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dnf-automatic.timer.d/10-platform.conf
+    content: |
+      [Timer]
+      OnCalendar=
+      OnCalendar=*-*-* {{ '%02d' % (dnf_automatic_first_hour + groups['edge'].index(inventory_hostname)) }}:00:00 UTC
+      RandomizedDelaySec=15m
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Flush systemd reload
+  ansible.builtin.meta: flush_handlers
+
+- name: Daily security updates
+  ansible.builtin.systemd_service:
+    name: dnf-automatic.timer
+    enabled: true
+    state: started
+
+- name: Keepalive directory
+  when: keepalive
+  ansible.builtin.file:
+    path: /opt/platform/keepalive
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Keepalive files
+  when: keepalive
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/keepalive/{{ item.name }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {name: keepalive.py, dest: /opt/platform/keepalive/keepalive.py}
+    - {name: platform-keepalive.service, dest: /etc/systemd/system/platform-keepalive.service}
+  notify: Reload systemd
+
+- name: Keepalive service
+  when: keepalive
+  ansible.builtin.systemd_service:
+    name: platform-keepalive.service
+    enabled: true
+    state: started
+    daemon_reload: true

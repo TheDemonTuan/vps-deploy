@@ -3,16 +3,17 @@ host: oracle-sg2
 ssh:
   address: 217.142.186.194
   port: 22
-  fingerprint: SHA256:hHAz5U/RsAxCL1pjfSfmPXAyWK/flJ+dRGde4JdXOko
+  fingerprint: SHA256:u+b9eLA5R9xgnpDqqSq0ATqlFwUyntDqXLE07u41QyI
+  host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP90fnNOdAX9PtNIRruC3F3tP/2baNX8UEoAYPDgDYe5
 traefik:
   container: edge-traefik
   dynamic_dir: /opt/platform/edge/dynamic
   mount: /etc/traefik/dynamic
-# Second node (Oracle ap-singapore-2). It runs only balanced apps, so it takes most reads.
+# Second node (Oracle ap-singapore-2, 2 OCPU, 12 GB). Balanced apps and the monitoring hub.
 edge:
   id: n2
   tunnel: 2c0939e7-b73e-4d29-9c7f-ac30f59a3ebf
-  weight: 70
+  weight: 30
 apps:
   mc-hub:
     # Same bindings as on oracle-main: the edge load balancer serves both hosts from either node.

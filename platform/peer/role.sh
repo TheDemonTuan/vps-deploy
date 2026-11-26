@@ -5,11 +5,13 @@
 #   role.sh promote [--force]  take the lease, then become primary. Refused while the writer
 #                              renewed it in the last 3 minutes; --force takes it anyway.
 #   role.sh reconcile          become what the lease says (platform-role.service; peer.sh starts
-#                              it when its renewal shows the role changed)
+#                              it when its renewal shows the role changed, or that a replica
+#                              follows a node that is no longer the writer)
 # Promotion loses what the old primary had not replicated yet (normally about a second). The old
 # primary, once back, steps down by itself: its database moves aside to fenced-<time>/ in the
-# volume and it follows the new primary. A step-down whose restore does not finish leaves
-# stopped-apps behind: peer.sh runs it again, and the apps start once the copy is in place.
+# volume and it follows the new primary; so does every other replica (a new lineage). A step-down
+# whose restore does not finish leaves stopped-apps behind: peer.sh runs it again, and the apps
+# start once the copy is in place.
 set -euo pipefail
 . /etc/platform/peer.env
 # One switch at a time: a manual promote and the timer's reconcile would otherwise run together.
@@ -18,17 +20,25 @@ flock 9
 volume=/var/lib/docker/volumes/mc-hub-api-data/_data
 writer_file=/var/lib/platform-peer/writer
 stopped=/var/lib/platform-peer/stopped-apps
+# The writer a replica follows (PRIMARY_SSH, PRIMARY_HOST_KEY for platform/litestream/replica.yml),
+# from /etc/platform/nodes: "<id> <ip> <ecdsa host key>" (Litestream's SSH client pins ECDSA).
+follows=/etc/platform/litestream-primary.env
 
 litestream() {
   docker compose --env-file /etc/platform/litestream.env --project-directory /opt/platform/litestream \
     -f /opt/platform/litestream/compose.yml "$@"
 }
 
+# become primary | become replica <writer>
 become() {
-  local want=$1 current apps
+  local want=$1 current apps follow=""
   current=$(cat "$volume/role" 2>/dev/null || echo "$ROLE")
-  [ "$current" = "$want" ] && [ ! -e "$stopped" ] && return
-  echo "mc-hub-api: $current -> $want"
+  if [ "$want" = replica ]; then
+    follow=$(awk -v n="$2" '$1 == n && NF >= 4 {printf "PRIMARY_SSH=%s:22\nPRIMARY_HOST_KEY=%s %s\n", $2, $3, $4}' /etc/platform/nodes)
+    [ -n "$follow" ] || { echo "writer $2 is not in /etc/platform/nodes" >&2; exit 1; }
+  fi
+  [ "$current" = "$want" ] && [ ! -e "$stopped" ] && { [ "$want" = primary ] || [ "$(cat "$follows" 2>/dev/null)" = "$follow" ]; } && return
+  echo "mc-hub-api: $current -> $want${2:+ of $2}"
   apps=$(docker ps --format '{{.Names}}' | grep -E '^mc-hub-api-(blue|green)$' || true)
   # The follower check compares against the old lineage's position otherwise.
   rm -f /var/lib/platform-peer/primary-txid
@@ -42,6 +52,7 @@ become() {
     # A new lineage from this node's copy; the old primary's files would not continue it.
     find /srv/platform-sync/litestream -mindepth 1 -delete
     echo primary >"$volume/role"
+    rm -f "$follows"
     litestream --profile primary up -d
     # Also the apps an unfinished step-down left stopped (docker restart starts them).
     apps=$({ printf '%s\n' $apps; cat "$stopped" 2>/dev/null || true; } | sort -u)
@@ -52,10 +63,10 @@ become() {
     touch "$stopped"
     [ -z "$apps" ] || { printf '%s\n' $apps >>"$stopped"; docker stop $apps; }
     if [ -n "$(find "$volume" -maxdepth 1 -name 'mc-hub.db*' -print -quit)" ]; then
-      aside="$volume/fenced-$(date -u +%Y%m%dT%H%M%SZ)"
-      mkdir "$aside"
+      aside=$(mktemp -d "$volume/fenced-$(date -u +%Y%m%dT%H%M%SZ)-XXXX")
       find "$volume" -maxdepth 1 -name 'mc-hub.db*' -exec mv -t "$aside" {} +
     fi
+    printf '%s\n' "$follow" >"$follows.tmp" && mv -f "$follows.tmp" "$follows"
     litestream --profile replica up -d
     for _ in $(seq 300); do [ -s "$volume/mc-hub.db-txid" ] && break; sleep 1; done
     [ -s "$volume/mc-hub.db-txid" ] || { echo "replica restore did not finish; mc-hub-api stays stopped until the next try" >&2; exit 1; }
@@ -82,7 +93,7 @@ case "${1:-}" in
   reconcile)
     writer=$(cat "$writer_file" 2>/dev/null || true)
     [ -n "$writer" ] || exit 0
-    if [ "$writer" = "$NODE" ]; then become primary; else become replica; fi
+    if [ "$writer" = "$NODE" ]; then become primary; else become replica "$writer"; fi
     ;;
   *)
     echo "usage: $0 promote [--force] | reconcile" >&2

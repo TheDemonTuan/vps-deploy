@@ -1,0 +1,148 @@
+# A node without LAPI: crowdsec-lapi.service forwards 172.31.254.1:8080 to the LAPI node, so the
+# agent, cscli and both bouncers keep the same address as there. Registrations are made on the
+# LAPI node and checked against it on every run. The tunnel user and key come from main.yml.
+
+- name: Tunnel unit
+  ansible.builtin.template:
+    src: "{{ platform_src }}/crowdsec/crowdsec-lapi.service.j2"
+    dest: /etc/systemd/system/crowdsec-lapi.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: crowdsec_tunnel_unit
+
+- name: Agent and firewall bouncer start after the tunnel
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item }}.service.d/20-lapi.conf"
+    content: |
+      [Unit]
+      After=crowdsec-lapi.service
+      Wants=crowdsec-lapi.service
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [crowdsec, crowdsec-firewall-bouncer]
+
+# A LAPI that ran here before held 172.31.254.1:8080; the agent starts again in main.yml. Not a
+# handler: the tunnel needs the address now.
+- name: Stop a local LAPI
+  when: crowdsec_local_config.changed  # noqa: no-handler
+  ansible.builtin.systemd_service:
+    name: crowdsec
+    state: stopped
+    daemon_reload: true
+
+- name: Tunnel
+  ansible.builtin.systemd_service:
+    name: crowdsec-lapi.service
+    enabled: true
+    state: "{{ 'restarted' if crowdsec_tunnel_unit.changed else 'started' }}"
+    daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"  # the unit file is not written in check mode
+
+- name: Wait for the LAPI through the tunnel
+  ansible.builtin.uri:
+    url: http://172.31.254.1:8080/health
+  register: crowdsec_lapi_health
+  until: crowdsec_lapi_health.status == 200
+  retries: 12
+  delay: 5
+  check_mode: false
+
+- name: This node's agent can log in
+  ansible.builtin.command: cscli lapi status
+  register: crowdsec_lapi_status
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Register this node's agent as machine {{ edge_id }}
+  when: crowdsec_lapi_status.rc != 0
+  block:
+    - name: Forget an older registration of it
+      ansible.builtin.command: cscli machines delete {{ edge_id }}
+      delegate_to: "{{ crowdsec_lapi_host }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Register
+      ansible.builtin.command: cscli lapi register --machine {{ edge_id }} --url http://172.31.254.1:8080
+      changed_when: true
+      notify: Restart crowdsec
+
+    - name: Validate it on the LAPI
+      ansible.builtin.command: cscli machines validate {{ edge_id }}
+      delegate_to: "{{ crowdsec_lapi_host }}"
+      changed_when: true
+
+- name: Which bouncer keys the LAPI accepts (Traefik, firewall)
+  ansible.builtin.shell: |
+    for k in "$(cat /opt/platform/edge/secrets/crowdsec-bouncer-key 2>/dev/null)" \
+             "$(sed -n 's/^api_key: *//p' /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml)"; do
+      curl -s -o /dev/null -w '%{http_code} ' -m 10 -H "X-Api-Key: $k" 'http://172.31.254.1:8080/v1/decisions?ip=127.0.0.1'
+    done
+  register: crowdsec_bouncer_check
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Edge secrets directory
+  ansible.builtin.file:
+    path: /opt/platform/edge/secrets
+    state: directory
+    mode: "0755"
+
+- name: Key for Traefik's bouncer traefik-{{ edge_id }}
+  when: crowdsec_bouncer_check.stdout.split()[0] != '200'
+  block:
+    - name: Forget an older one
+      ansible.builtin.command: cscli bouncers delete traefik-{{ edge_id }}
+      delegate_to: "{{ crowdsec_lapi_host }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Create it on the LAPI
+      ansible.builtin.command: cscli bouncers add traefik-{{ edge_id }} -o raw
+      delegate_to: "{{ crowdsec_lapi_host }}"
+      register: crowdsec_traefik_new
+      changed_when: true
+      no_log: true
+
+    - name: Write it (Traefik reads it at start)
+      ansible.builtin.copy:
+        content: "{{ crowdsec_traefik_new.stdout | trim }}"
+        dest: /opt/platform/edge/secrets/crowdsec-bouncer-key
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      notify: Restart traefik
+
+- name: Key for the firewall bouncer cs-firewall-bouncer-{{ edge_id }}
+  when: crowdsec_bouncer_check.stdout.split()[1] != '200'
+  block:
+    - name: Forget an older one
+      ansible.builtin.command: cscli bouncers delete cs-firewall-bouncer-{{ edge_id }}
+      delegate_to: "{{ crowdsec_lapi_host }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Create it on the LAPI
+      ansible.builtin.command: cscli bouncers add cs-firewall-bouncer-{{ edge_id }} -o raw
+      delegate_to: "{{ crowdsec_lapi_host }}"
+      register: crowdsec_firewall_new
+      changed_when: true
+      no_log: true
+
+- name: Firewall bouncer configuration on this node
+  ansible.builtin.slurp:
+    src: /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+  register: crowdsec_firewall_config
+  no_log: true
+
+- name: Its key
+  ansible.builtin.set_fact:
+    crowdsec_firewall_key: >-
+      {{ crowdsec_firewall_new.stdout | default('') | trim
+         or (crowdsec_firewall_config.content | b64decode | regex_findall('(?m)^api_key: *(\S+) *$') | first | default('')) }}
+  no_log: true

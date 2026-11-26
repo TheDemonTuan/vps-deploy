@@ -1,0 +1,69 @@
+# platform/peer: edge lease, writer duties and follower checks, every minute.
+- name: Peer directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [/opt/platform/peer, /var/lib/node-exporter]
+
+- name: Peer scripts
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/peer/{{ item }}"
+    dest: "/opt/platform/peer/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [peer.sh, role.sh]
+
+- name: Peer units
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/peer/{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [platform-peer.service, platform-peer.timer, platform-role.service]
+  notify: Reload systemd
+
+- name: Shared peer secrets (alert bot, edge-lb NODE_KEY)
+  ansible.builtin.include_role:
+    name: shared_secret
+  loop: [/etc/platform/telegram-token, /etc/platform/edge-node-key]
+  loop_control:
+    loop_var: peer_secret
+  vars:
+    secret:
+      dest: "{{ peer_secret }}"
+
+- name: Alert chat (from {{ secrets_source }}; kept out of git)
+  ansible.builtin.slurp:
+    src: /etc/platform/peer.env
+  delegate_to: "{{ secrets_source }}"
+  register: peer_source_env
+  no_log: true
+
+- name: Peer settings
+  vars:
+    telegram_chat_id: "{{ peer_source_env.content | b64decode | regex_findall('(?m)^TELEGRAM_CHAT_ID=(.*)$') | first }}"
+  ansible.builtin.copy:
+    dest: /etc/platform/peer.env
+    content: |
+      NODE={{ edge_id }}
+      NODE_IP={{ edge_ip }}
+      ROLE={{ 'primary' if edge_id == initial_writer else 'replica' }}
+      TELEGRAM_CHAT_ID={{ telegram_chat_id }}
+      LEASE_URL={{ lease_url }}
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Flush systemd reload
+  ansible.builtin.meta: flush_handlers
+
+- name: Peer timer
+  ansible.builtin.systemd_service:
+    name: platform-peer.timer
+    enabled: true
+    state: started

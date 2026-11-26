@@ -1,0 +1,38 @@
+# platform/litestream: files and data volume only. Which profile runs (primary or the follower of
+# the lease writer) is platform/peer/role.sh's decision, started by platform-role.service.
+- name: Litestream directory
+  ansible.builtin.file:
+    path: /opt/platform/litestream
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Litestream files
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/litestream/{{ item }}"
+    dest: "/opt/platform/litestream/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [compose.yml, primary.yml, replica.yml]
+
+- name: R2 credentials (whom a replica follows is role.sh's, in litestream-primary.env)
+  ansible.builtin.include_role:
+    name: shared_secret
+  vars:
+    secret:
+      dest: /etc/platform/litestream.env
+      keep: '^(?!PRIMARY_)'
+
+- name: Look for the data volume
+  ansible.builtin.command: docker volume inspect -f '{{ "{{" }}.Mountpoint{{ "}}" }}' mc-hub-api-data
+  register: litestream_volume
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Create the data volume (mc-hub-api and Litestream run as 1000:1000)
+  when: litestream_volume.rc != 0
+  ansible.builtin.shell: chown 1000:1000 "$(docker volume create mc-hub-api-data >/dev/null && docker volume inspect -f '{{ "{{" }}.Mountpoint{{ "}}" }}' mc-hub-api-data)"
+  changed_when: true

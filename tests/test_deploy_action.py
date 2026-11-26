@@ -154,7 +154,7 @@ class DeployActionBoundary(unittest.TestCase):
                 cmd = self.root / f"{name}.cmd"
                 cmd.write_text(f"@\"{sys.executable}\" \"{target}\" %*\n")
         make_mock("ssh-keyscan", "print('target.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA754IShwuzQAEHyEvFSNs2b8NkkeO9SaeB2TVpNpVWw')")
-        make_mock("ssh", "import json, os, sys\nopen(os.environ['SSH_CAPTURE'], 'w').write(json.dumps(sys.argv[1:]))\nprint(json.dumps({'status':'complete','healthy':True,'image':'fixture','configured_generation':'fixture','active':'blue','draining':[]}))")
+        make_mock("ssh", "import json, os, sys\nopen(os.environ['SSH_CAPTURE'], 'w').write(json.dumps(sys.argv[1:]))\nknown = [a.split('=', 1)[1] for a in sys.argv if a.startswith('UserKnownHostsFile=')][0]\nopen(os.environ['SSH_CAPTURE'] + '.known', 'w').write(open(known).read())\nprint(json.dumps({'status':'complete','healthy':True,'image':'fixture','configured_generation':'fixture','active':'blue','draining':[]}))")
         captured = self.root / "ssh-argv"
         summary = self.root / "summary"
         key = self.root / "key"
@@ -188,14 +188,17 @@ class DeployActionBoundary(unittest.TestCase):
         self.assertIn("ForwardAgent=no", argv)
         self.assertNotIn("attacker", argv)
 
+        # oracle-main pins ssh.host_key: a different key from a scan is never trusted.
         make_mock("ssh-keyscan", "print('target.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP//////////////////////////////////////////')")
         res_mitm = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
                                    "--app", "9router", "--host", "oracle-main", "--operation", "status",
                                    "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
                                    "--config", self.caller["config"], "--request-id", "fixture-status"],
                                   cwd=self.root / "source", env=good_env, capture_output=True, text=True)
-        self.assertNotEqual(res_mitm.returncode, 0)
-        self.assertIn("fingerprint mismatch", res_mitm.stderr)
+        self.assertEqual(res_mitm.returncode, 0, res_mitm.stderr)
+        known = pathlib.Path(str(captured) + ".known").read_text()
+        self.assertIn("AAAAC3NzaC1lZDI1NTE5AAAAIA754IShwuzQAEHyEvFSNs2b8NkkeO9SaeB2TVpNpVWw", known)
+        self.assertNotIn("AAAAIP///", known)
 
 if __name__ == "__main__":
     unittest.main()

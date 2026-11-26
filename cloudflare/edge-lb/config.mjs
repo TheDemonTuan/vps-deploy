@@ -2,11 +2,15 @@ export default {
   "nodes": {
     "n1": {
       "ip": "134.185.89.192",
-      "weight": 30
+      "weight": 40
     },
     "n2": {
       "ip": "217.142.186.194",
-      "weight": 70
+      "weight": 30
+    },
+    "n3": {
+      "ip": "140.245.58.227",
+      "weight": 30
     }
   },
   "rules": {
@@ -76,7 +80,8 @@ export default {
       "lease": "mc-hub-api",
       "nodes": [
         "n1",
-        "n2"
+        "n2",
+        "n3"
       ],
       "primary": "n1",
       "rules": "mc-hub-api",
@@ -86,7 +91,8 @@ export default {
       "lease": "mc-hub-api",
       "nodes": [
         "n1",
-        "n2"
+        "n2",
+        "n3"
       ],
       "primary": "n1",
       "rules": "mc-hub",

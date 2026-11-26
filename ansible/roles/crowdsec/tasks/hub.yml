@@ -1,0 +1,114 @@
+# The LAPI node: its own bouncers register locally, and the other nodes' crowdsec-lapi.service
+# may forward to its 172.31.254.1:8080 (nothing else).
+# profiles.yaml notifies http_telegram (the CrowdSec controller on n1, its bearer key inside).
+- name: Ban notifications plugin config
+  ansible.builtin.include_role:
+    name: shared_secret
+  vars:
+    secret:
+      dest: /etc/crowdsec/notifications/http_telegram.yaml
+
+- name: Forward-only SSH user for the other nodes
+  ansible.builtin.user:
+    name: crowdsec-lapi
+    system: true
+    create_home: false
+    home: /
+    shell: /sbin/nologin
+
+- name: Their tunnel keys
+  ansible.builtin.slurp:
+    src: /etc/platform/lapi_key.pub
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['edge'] | difference([inventory_hostname]) }}"
+  register: crowdsec_tunnel_keys
+  failed_when: false
+
+- name: Keys allowed to forward, each only from its node's address
+  ansible.builtin.copy:
+    dest: /etc/ssh/crowdsec-lapi.keys
+    content: |
+      # ansible/roles/crowdsec: the other nodes' crowdsec-lapi.service keys.
+      {% for r in crowdsec_tunnel_keys.results if r.content is defined %}
+      restrict,port-forwarding,permitopen="172.31.254.1:8080",from="{{ hostvars[r.item].edge_ip }}" {{ r.content | b64decode | trim }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0644"
+  register: crowdsec_lapi_keys
+
+- name: "Sshd: the crowdsec-lapi user may only forward to the LAPI"
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/crowdsec/60-crowdsec-lapi.conf"
+    dest: /etc/ssh/sshd_config.d/60-crowdsec-lapi.conf
+    owner: root
+    group: root
+    mode: "0600"
+  register: crowdsec_lapi_sshd
+
+# Now, not as a handler: the other nodes connect a few tasks later.
+- name: Reload sshd for them
+  when: crowdsec_lapi_keys.changed or crowdsec_lapi_sshd.changed
+  ansible.builtin.shell: restorecon /etc/ssh/crowdsec-lapi.keys /etc/ssh/sshd_config.d/60-crowdsec-lapi.conf && /usr/sbin/sshd -t && systemctl reload sshd
+  changed_when: true
+
+- name: CrowdSec service
+  ansible.builtin.systemd_service:
+    name: crowdsec
+    enabled: true
+    state: started
+
+# Entries keep the same expiry instant wherever they were created; a missing list is created first.
+- name: Allowlist entries
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if cscli allowlists inspect {{ item.0.name }} -o json | jq -e --arg v {{ item.1.value }} '.items[]? | select(.value == $v)' >/dev/null 2>&1; then exit 0; fi
+    {{ 'echo missing; exit 0' if ansible_check_mode else '' }}
+    cscli allowlists inspect {{ item.0.name }} >/dev/null 2>&1 || cscli allowlists create {{ item.0.name }} -d '{{ item.0.description }}'
+    cscli allowlists add {{ item.0.name }} {{ item.1.value }} -e "$(( ($(date -d {{ item.1.expires }} +%s) - $(date +%s)) / 3600 ))h" -d '{{ item.1.comment }}'
+    echo added
+  loop: "{{ crowdsec_allowlists | subelements('entries') }}"
+  loop_control:
+    label: "{{ item.0.name }} {{ item.1.value }}"
+  register: crowdsec_allowlist_result
+  check_mode: false
+  changed_when: crowdsec_allowlist_result.stdout in ['added', 'missing']
+
+- name: Look for the Traefik bouncer key
+  ansible.builtin.stat:
+    path: /opt/platform/edge/secrets/crowdsec-bouncer-key
+  register: crowdsec_traefik_key
+
+- name: Edge secrets directory
+  ansible.builtin.file:
+    path: /opt/platform/edge/secrets
+    state: directory
+    mode: "0755"
+
+- name: Register the Traefik bouncer
+  when: not crowdsec_traefik_key.stat.exists
+  ansible.builtin.shell: umask 077 && cscli bouncers add traefik -o raw > /opt/platform/edge/secrets/crowdsec-bouncer-key
+  changed_when: true
+  no_log: true
+
+- name: Firewall bouncer configuration on this node
+  ansible.builtin.slurp:
+    src: /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+  register: crowdsec_firewall_config
+  no_log: true
+
+- name: Register this node's firewall bouncer when its key is missing
+  vars:
+    current: "{{ crowdsec_firewall_config.content | b64decode | regex_findall('(?m)^api_key: *([A-Za-z0-9+/=_-]{16,}) *$') }}"
+  when: not current
+  ansible.builtin.command: "cscli bouncers add cs-firewall-bouncer-{{ edge_id }} -o raw"
+  register: crowdsec_firewall_new
+  changed_when: true
+  no_log: true
+
+- name: Its key
+  ansible.builtin.set_fact:
+    crowdsec_firewall_key: >-
+      {{ (crowdsec_firewall_config.content | b64decode | regex_findall('(?m)^api_key: *([A-Za-z0-9+/=_-]{16,}) *$') | first | default(''))
+         or crowdsec_firewall_new.stdout | default('') | trim }}
+  no_log: true
