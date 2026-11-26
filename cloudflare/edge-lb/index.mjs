@@ -10,8 +10,10 @@
 // queue the `queue_paths` writes while it is down, are health-checked every minute (cron) with
 // Telegram alerts, and keep `edge_cache` reads in the Cache API (stale when every node fails).
 // The checks steer reads: a node that failed its last check, or a replica whose follower stopped
-// confirming it is current, is tried last; a writer failing PROMOTE_CHECKS checks in a row hands
-// the lease to a healthy replica that was current (its peer.sh then makes it the primary).
+// confirming it is current, is tried last. A writer failing PROMOTE_CHECKS checks in a row, or no
+// longer renewing the lease, hands it to the healthy replica holding the most data, and only if it
+// is at most PROMOTE_LAG_TXIDS behind the writer's last report (its peer.sh then makes it the
+// primary). The old writer stops taking writes by itself (mc-hub-api's writer-lease, platform/peer).
 import config from "./config.mjs";
 
 const RETRY_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
@@ -31,6 +33,11 @@ const PROMOTE_CHECKS = 3;
 // A replica qualifies when its last good follower check is at most this much older than the
 // writer's last good health check (peer.sh checks once a minute).
 const SYNC_SLACK_MS = 120_000;
+// Litestream positions (16 hex digits) the nodes send with each renewal. A replica this many
+// transactions behind the writer's last report may still take over by itself: a writer that dies
+// right after renewing leaves its newest second unreplicated, and waiting for a person costs more.
+const TXID = /^[0-9a-f]{16}$/;
+const PROMOTE_LAG_TXIDS = 5n;
 // While the writer renews, a replica without a good follower check for this long is read last.
 const SYNC_MS = 180_000;
 const QUEUE_MAX_BYTES = 64 * 1024;
@@ -38,11 +45,11 @@ const REPLAYED_HEADERS = ["content-type", "user-agent", "accept-language"];
 // Cache API copies carry the origin's Cache-Control and their store time in these headers.
 const ORIGIN_CC = "x-edge-origin-cache-control";
 const STORED = "x-edge-stored";
-// A node that has not sent response headers by then is treated as down and the read moves on.
-// Origins answer reads in under 0.5 s (p99.9), while one Cloudflare location's path to a tunnel
-// can stall a request for 10 s or more (EWR, 2026-11-26), so 3 s is the cost of such a stall.
+// A node that has not sent response headers by then is treated as down and the read moves on (the
+// last node gets no limit). Origins answer reads in under 0.5 s (p99.9), while one Cloudflare
+// location's path to a tunnel can stall a request for 10 s or more (EWR, 2026-11-26).
 // The lease (writer, cache version) is re-read from its Durable Object at most leaseMs apart.
-const timing = { ttfbMs: 3_000, leaseMs: 30_000 };
+const timing = { ttfbMs: 1_000, leaseMs: 30_000 };
 
 // Isolate-local passive health: a node that just failed is tried last for DOWN_MS.
 const downUntil = new Map();
@@ -84,8 +91,9 @@ export default {
         const replayed = new Headers(headers);
         replayed.set("x-edge-replay", await sign(env.REPLAY_KEY, ip, Math.floor(at / 1000)));
         const response = await send(new Request(url, { method, headers: replayed, body }), writer, site);
-        if (RETRY_STATUS.has(response.status)) throw new Error(`HTTP ${response.status}`);
-        // Anything else is final: a 4xx (an expired captcha, a removed post) will not improve.
+        // 429: Traefik counts every replay against the Worker's own address, so a backlog drains
+        // slowly. Anything else is final: a 4xx (a removed post) will not improve.
+        if (RETRY_STATUS.has(response.status) || response.status === 429) throw new Error(`HTTP ${response.status}`);
         message.ack();
       } catch {
         message.retry({ delaySeconds: Math.min(3600, 30 * 2 ** Math.min(message.attempts, 7)) });
@@ -169,17 +177,24 @@ async function route(request, url, site, env, ctx, meta) {
     let response;
     try {
       response = await send(request, state.writer, site);
-    } catch (error) {
-      if (!queueable) throw error;
+    } catch {
+      // no answer at all: handled as below
     }
-    if (queueable && (!response || RETRY_STATUS.has(response.status)) && body.byteLength <= QUEUE_MAX_BYTES) {
+    const failed = !response || RETRY_STATUS.has(response.status);
+    if (failed && queueable && body.byteLength <= QUEUE_MAX_BYTES) {
       const headers = {};
       for (const name of REPLAYED_HEADERS) if (request.headers.has(name)) headers[name] = request.headers.get(name);
       await env.WRITES.send({ url: request.url, method: request.method, headers, body: new TextDecoder().decode(body), ip: client, at: Date.now() });
       meta.outcome = "queued";
       return Response.json({ queued: true }, { status: 202 });
     }
-    if (!response) throw new Error("writer unreachable");
+    // No answer, or a gateway's error page (the tunnel, Traefik without a backend): JSON the site
+    // shows, and the reader keeps what they typed. The API's own 503s (READ_ONLY, QUEUE_FULL) pass.
+    if (failed && !(response?.headers.get("content-type") || "").startsWith("application/json")) {
+      meta.outcome = "unavailable";
+      return Response.json({ error: { code: "WRITER_UNAVAILABLE", message: "The site is switching servers. Please try again in a few minutes." } },
+        { status: 503, headers: { "retry-after": "60" } });
+    }
     if (fanout && response.ok) ctx.waitUntil(replay(request, body, fanout, site, state.writer).then(() => site.lease && lease(env, site, { op: "purge" })));
     // A 204 (a view count, a boost) has nothing to read back: no sticky cookie, so the reader keeps
     // the edge cache and failover to the other node for the next pages.
@@ -212,16 +227,19 @@ async function route(request, url, site, env, ctx, meta) {
 
   // A read that wants the writer (a session, an admin page, the client's own recent write) goes
   // there first; while the writer fails, another node's copy (about a second behind) beats a 502.
+  // One bound to it by its path waits for its headers: a replica refuses /api/dl, and a download's
+  // headers wait while a file the writer lacks comes from R2.
   let order = pickOrder(site.nodes, client, Date.now(), state.down);
   if (primary && !(downUntil.get(state.writer) > Date.now()) && !state.down?.includes(state.writer)) {
     order = [state.writer, ...order.filter((n) => n !== state.writer)];
   }
+  const patient = primary && rules.primary_paths.some((p) => new RegExp(p).test(url.pathname));
   let last;
   for (let i = 0; i < order.length; i++) {
     const final = i === order.length - 1;
     let failed = true;
     try {
-      const response = await send(request, order[i], site, final ? 0 : timing.ttfbMs, cf);
+      const response = await send(request, order[i], site, final || (patient && order[i] === state.writer) ? 0 : timing.ttfbMs, cf);
       meta.node = order[i];
       // A read is safe to repeat: a 500 there may be that node's alone (its database, its build).
       failed = RETRY_STATUS.has(response.status) || response.status === 500;
@@ -322,18 +340,18 @@ function lease(env, site, args) {
   return stub.fetch("https://lease/", { method: "POST", body: JSON.stringify({ ...args, primary: site.primary }) });
 }
 
-// POST /__edge/lease/<name> {"op": "beat" | "promote", "force"?: true, "synced"?: <unix seconds>}, only from a node's own
-// address with "Authorization: Bearer <NODE_KEY>"; the node is the one the address belongs to.
+// POST /__edge/lease/<name> {"op": "beat" | "promote", "force"?: true, "synced"?: <unix seconds>, "txid"?: <16 hex>},
+// only from a node's own address with "Authorization: Bearer <NODE_KEY>"; the node is the one the address belongs to.
 async function nodeLease(request, name, client, env) {
   const node = NODE_BY_IP.get(client);
   const site = Object.values(config.sites).find((s) => s.lease === name && s.nodes.includes(node));
   if (!site || request.method !== "POST" || !env.NODE_KEY || !same(request.headers.get("authorization") || "", `Bearer ${env.NODE_KEY}`)) {
     return new Response("Not Found", { status: 404 });
   }
-  const { op, force, synced } = await request.json().catch(() => ({}));
+  const { op, force, synced, txid } = await request.json().catch(() => ({}));
   if (op !== "beat" && op !== "promote") return new Response("Bad Request", { status: 400 });
   leases.delete(name);
-  return lease(env, site, { op, node, force: force === true, synced: Number(synced) || 0 });
+  return lease(env, site, { op, node, force: force === true, synced: Number(synced) || 0, txid: TXID.test(txid) ? txid : "" });
 }
 
 function same(a, b) {
@@ -419,8 +437,9 @@ async function fromBucket(request, url, bucket, ctx, r2) {
 }
 
 // One object per lease name: the writer, its epoch, the edge cache version, the nodes' last
-// renewal and the health checks' state. Telegram on promotion, on a node failing (or recovering
-// from) two checks in a row, and when the writer stopped renewing the lease.
+// renewal, Litestream position and the health checks' state. Telegram on promotion, on a node
+// failing (or recovering from) two checks in a row, when the writer stopped renewing the lease,
+// and when the writer is down but no replica may take over by itself.
 export class Lease {
   constructor(state, env) {
     this.storage = state.storage;
@@ -428,15 +447,19 @@ export class Lease {
   }
 
   async fetch(request) {
-    const { op, node, force, results, primary, synced } = await request.json();
+    const { op, node, force, results, primary, synced, txid } = await request.json();
     const s = (await this.storage.get("lease")) ?? { writer: primary, epoch: 0, version: 0, beats: {}, fails: {}, alerted: {} };
     s.synced ??= {};
     s.ok ??= {};
+    s.txid ??= {};
     const now = Date.now();
     const alerts = [];
     if (op === "beat") {
       s.beats[node] = now;
       if (synced > 0) s.synced[node] = Math.min(synced * 1000, now);
+      // A node that cannot tell its position (Litestream stopped) must not keep an old one.
+      if (txid) s.txid[node] = txid;
+      else delete s.txid[node];
     }
     if (op === "purge") s.version++;
     if (op === "promote" && s.writer !== node) {
@@ -452,7 +475,7 @@ export class Lease {
     }
     if (op === "check") {
       const age = now - (s.beats[s.writer] ?? 0);
-      results.lease = age < LEASE_MS ? "" : `writer ${s.writer} has not renewed the lease for ${Math.round(age / 60000)} min; if it stays down, run sudo /opt/platform/peer/role.sh promote on another node`;
+      results.lease = age < LEASE_MS ? "" : `writer ${s.writer} has not renewed the lease for ${Math.round(age / 60000)} min (it stopped taking writes after 150 s)`;
       for (const [check, detail] of Object.entries(results)) {
         s.fails[check] = detail ? (s.fails[check] ?? 0) + 1 : 0;
         if (detail && s.fails[check] >= 2 && !s.alerted[check]) {
@@ -467,17 +490,33 @@ export class Lease {
       const nodes = [...new Set(Object.keys(results).filter((check) => check.includes(" ")).map((check) => check.split(" ")[0]))];
       for (const n of nodes) if (!failing(n)) s.ok[n] = now;
       const writerFails = Math.max(0, ...Object.keys(s.fails).filter((check) => check.startsWith(`${s.writer} `)).map((check) => s.fails[check]));
-      if (writerFails >= PROMOTE_CHECKS && s.ok[s.writer]) {
+      // A writer that stopped renewing has fenced itself (writer-lease), checks or not; only a
+      // peer.sh that sends its position does that, so an older one is left to the checks.
+      const silent = s.beats[s.writer] > 0 && age >= LEASE_MS && TXID.test(s.txid[s.writer] ?? "");
+      if ((writerFails >= PROMOTE_CHECKS || silent) && s.ok[s.writer]) {
+        const at = (n) => (TXID.test(s.txid[n] ?? "") ? BigInt(`0x${s.txid[n]}`) : null);
+        const floor = at(s.writer);
+        const weight = (n) => config.nodes[n]?.weight ?? 0;
         const next = nodes
-          .filter((n) => n !== s.writer && !failing(n) && now - (s.beats[n] ?? 0) < LEASE_MS && (s.synced[n] ?? 0) >= s.ok[s.writer] - SYNC_SLACK_MS)
-          .sort((a, b) => (config.nodes[b]?.weight ?? 0) - (config.nodes[a]?.weight ?? 0) || s.synced[b] - s.synced[a])[0];
+          .filter((n) => n !== s.writer && !failing(n) && now - (s.beats[n] ?? 0) < LEASE_MS && (s.synced[n] ?? 0) >= s.ok[s.writer] - SYNC_SLACK_MS &&
+            (floor === null || (at(n) !== null && floor - at(n) <= PROMOTE_LAG_TXIDS)))
+          .sort((a, b) => (at(a) === at(b) ? 0 : (at(b) ?? -1n) > (at(a) ?? -1n) ? 1 : -1) || weight(b) - weight(a) || s.synced[b] - s.synced[a])[0];
+        const why = writerFails >= PROMOTE_CHECKS ? `failing ${writerFails} checks in a row` : `no lease renewal for ${Math.round(age / 60000)} min`;
         if (next) {
-          alerts.push(`${next} is now the writer (was ${s.writer}, failing ${writerFails} checks in a row); ${s.writer} steps down to replica when it is back.`);
+          const lag = floor === null ? "" : `, ${floor > at(next) ? floor - at(next) : 0n} transactions behind its last report`;
+          alerts.push(`${next} is now the writer (was ${s.writer}, ${why}${lag}); ${s.writer} steps down to replica when it is back.`);
           s.writer = next;
           s.epoch++;
           s.version++;
           s.beats[next] = now;
+          delete s.alerted.failover;
+        } else if (!s.alerted.failover) {
+          s.alerted.failover = true;
+          alerts.push(`PROBLEM: writer ${s.writer} is down (${why}) and no replica may take over by itself (each must pass its checks, renew the lease and hold the writer's data). ` +
+            "sudo /opt/platform/peer/role.sh promote --force on a replica takes it anyway, losing what that replica lacks.");
         }
+      } else {
+        delete s.alerted.failover;
       }
     }
     await this.storage.put("lease", s);

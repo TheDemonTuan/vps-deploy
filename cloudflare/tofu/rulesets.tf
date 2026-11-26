@@ -7,14 +7,17 @@ locals {
   mc_hub_api_host  = "api.thedemontuan.dev"
   mc_hub_api_alias = "minecraft-api.tuannguyenviet.site"
 
-  # The reads Traefik routes on an API host (mc-hub-api-router); it answers 403 to everything else.
-  api_host_paths    = ["/healthz", "/api/posts", "/api/settings", "/api/stats", "/api/auth/me"]
-  api_host_prefixes = ["/api/posts/", "/api/pages/"]
+  # The one route Traefik keeps on an API host (mc-hub-api-router); it answers 403 to everything
+  # else. Readers use the site's /api/, SSR the node's internal entrypoint.
+  api_host_paths    = ["/healthz"]
+  api_host_prefixes = []
   api_host_reads = join(" or ", concat(
     [for p in local.api_host_paths : "http.request.uri.path eq \"${p}\""],
     [for p in local.api_host_prefixes : "starts_with(http.request.uri.path, \"${p}\")"],
   ))
   api_host_refused = "not (http.request.method in {\"GET\" \"HEAD\"} and (${local.api_host_reads}))"
+  # Lease renewals (platform/peer) come from the nodes' own addresses; the Worker checks the key.
+  edge_node_ips = join(" ", sort([for host in values(local.edge_hosts) : host.ssh.address]))
 
   probe_paths    = "(http.request.uri.path contains \"/.\" and not starts_with(http.request.uri.path, \"/.well-known/\")) or ends_with(lower(http.request.uri.path), \".php\") or lower(http.request.uri.path) contains \"/wp-admin\" or lower(http.request.uri.path) contains \"/wp-includes\" or lower(http.request.uri.path) contains \"/wp-content\""
   scanner_probes = join(" or ", [for a in ["acunetix", "dirbuster", "feroxbuster", "fuzz faster u fool", "gobuster", "l9explore", "masscan", "netsparker", "nikto", "nmap scripting engine", "nuclei", "sqlmap", "wpscan", "zgrab"] : "lower(http.user_agent) contains \"${a}\""])
@@ -56,7 +59,7 @@ resource "cloudflare_ruleset" "thedemontuan_dev_custom_waf" {
       action      = "block"
       description = "mc-hub-api-host"
       enabled     = true
-      expression  = "http.host eq \"${local.mc_hub_api_host}\" and ${local.api_host_refused} and not (http.request.method eq \"POST\" and starts_with(http.request.uri.path, \"/__edge/lease/\"))"
+      expression  = "http.host eq \"${local.mc_hub_api_host}\" and ${local.api_host_refused} and not (http.request.method eq \"POST\" and starts_with(http.request.uri.path, \"/__edge/lease/\") and ip.src in {${local.edge_node_ips}})"
       ref         = "mc_hub_api_host"
     },
     {
@@ -130,11 +133,12 @@ resource "cloudflare_ruleset" "thedemontuan_dev_ratelimit" {
     {
       # Above what Traefik's per-visitor /api/ limit (10/s, burst 30) lets through, so it only sheds
       # floods. Replaces the leaked-credential rule: every password form sits behind Access.
-      # /api/admin/ is Access-only; vmagent (metrics.) flushes its disk buffer in bursts.
+      # /api/admin/ is Access-only; vmagent (metrics.) flushes its disk buffer in bursts. /healthz:
+      # all the API host still serves, and Traefik puts no per-IP limit on it.
       action      = "block"
       description = "mc-hub-api-flood"
       enabled     = true
-      expression  = "starts_with(http.request.uri.path, \"/api/\") and not starts_with(http.request.uri.path, \"/api/admin/\") and http.request.uri.path ne \"/api/v1/write\" and not cf.bot_management.verified_bot"
+      expression  = "(starts_with(http.request.uri.path, \"/api/\") or http.request.uri.path eq \"/healthz\") and not starts_with(http.request.uri.path, \"/api/admin/\") and http.request.uri.path ne \"/api/v1/write\" and not cf.bot_management.verified_bot"
       ref         = "mc_hub_api_flood"
       ratelimit = {
         characteristics     = ["ip.src", "cf.colo.id"]

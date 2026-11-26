@@ -19,8 +19,10 @@ flowchart LR
   reads go to a node chosen by weighted rendezvous hashing of the client IP
   (`hosts/<node>.yml` `edge.weight`; lower on a node that also runs unbalanced services), so a
   client always lands on the same node and nodes share clients by weight. A 5xx (a read's 500
-  too), a connect failure or no response headers within 3 s is retried once on the next node
-  and (except a 500) marks the failed node last for 30 s. The cron's checks (every minute) put a
+  too), a connect failure or no response headers within 1 s is retried once on the next node
+  and (except a 500) marks the failed node last for 30 s; a `primary_paths` read waits for the
+  writer instead (a replica refuses `/api/dl`, and a download's headers wait while a file the
+  writer lacks comes from R2). The cron's checks (every minute) put a
   node last for everyone while its last check failed, and a replica whose follower has not
   confirmed for 3 minutes that it is current (`peer.sh` sends `synced` with each renewal) while
   the writer renews; down nodes still serve when nothing else does. Writes (non-GET), `primary_paths`, `primary_cookies` and, for
@@ -28,17 +30,19 @@ flowchart LR
   client go to the writer: the registry `host`, or with `lease` the node its Durable Object names
   (re-read every 30 s; see Failover). Reads among them (a signed-in admin's pages, a sticky
   client's) fail over like any read while the writer fails, never through the edge cache; writes
-  do not (queued or an error).
+  do not (queued, or 503 `WRITER_UNAVAILABLE` JSON that the site shows while the reader keeps
+  the text; the API's own JSON errors, such as a fenced writer's `READ_ONLY`, pass as they are).
   `fanout` repeats a request (the admin cache purge) on the other nodes after a delay.
   `X-Edge-Node: <id>` pins a read to one node, honoured only from a node's own IP (its
   `ssh.address`): the deploy probe (`lib/route.py`) uses it.
 - **Edge features of leased sites** (mc-hub only):
-  - `queue_paths` (views, comments, compat and feedback votes, feedback): while the writer
-    answers 5xx or not at all, the write goes to Queue `edge-lb-writes` and the reader gets
-    202 `{"queued": true}`; the consumer replays it to the writer with backoff (30 s up to an
-    hour, 100 tries), signing the reader's address in `X-Edge-Replay` (Worker `REPLAY_KEY` =
-    `edge-replay-key` in the mc-hub-api volume). Comments and feedback carry a Turnstile token
-    that expires after 5 minutes: those are dropped (a 4xx) if the writer stays down longer.
+  - `queue_paths` (views, compat and feedback votes: each counts once per reader, so a copy
+    delivered twice changes nothing): while the writer answers 5xx or not at all, the write goes
+    to Queue `edge-lb-writes` and the reader gets 202 `{"queued": true}`; the consumer replays it
+    to the writer with backoff (30 s up to an hour, 100 tries; a 429 is retried too, since
+    Traefik counts every replay against the Worker's address), signing the reader's address in
+    `X-Edge-Replay` (Worker `REPLAY_KEY` = `edge-replay-key` in the mc-hub-api volume). Comments
+    and feedback are not queued: their Turnstile token lasts 5 minutes and a copy would post twice.
   - `edge_cache`: GETs of the listed paths without the session cookie stay in the Cache API
     for `ttl_seconds` and are served stale for `stale_seconds` when every node fails; only
     responses marked `public` or `no-cache`. The key carries the lease's version, bumped after
@@ -48,13 +52,14 @@ flowchart LR
     is cached.
   - Cron every minute: `/healthz` of every site on every node, and whether the writer renewed
     the lease in the last 3 minutes; Telegram (Worker secrets `TELEGRAM_TOKEN`,
-    `TELEGRAM_CHAT_ID`) after two failures in a row and on recovery.
+    `TELEGRAM_CHAT_ID`) after two failures in a row and on recovery, on a promotion, and when the
+    writer is down but no replica may take over by itself (Failover).
   - `WRITE_LIMIT` (Workers rate limit, every site): a reader address gets 60 writes a minute per
     Cloudflare location, then 429 `RATE_LIMITED` with `Retry-After: 60` from the edge (readers
     peaked at 28). Node addresses are not limited; the API's per-endpoint throttles stay the
     real limits. Approximate, and addresses behind one carrier NAT share it.
   - Workers Analytics Engine dataset `edge_lb`, a point per request: node, method, outcome
-    (origin, hit, stale, queued, bucket, limited), status, milliseconds.
+    (origin, hit, stale, queued, unavailable, bucket, limited), status, milliseconds.
     `edge_lb.py --operation stats` sums the last hour (token: Account Analytics Read).
 - **Edge WAF & Rulesets** (`cloudflare/tofu/rulesets.tf`, OpenTofu; Free plan: 5 custom rules and
   1 rate limiting rule per zone, no regex): what an origin refuses anyway stops at Cloudflare,
@@ -62,11 +67,13 @@ flowchart LR
   `/.well-known/`), `*.php`, WordPress paths and self-announcing scanners (sqlmap, nuclei, …);
   on the site also `/internal` and every file type it never serves outside `/_astro/`,
   `/media/`, `/cdn-cgi/` and `/.well-known/`. `mc-hub-api-host` keeps both API hosts to GET/HEAD
-  of the reads Traefik routes there (`tests/test_mc_hub_api.py` keeps the list equal to the
-  adapter) plus the nodes' lease POSTs; `mc-hub-methods` takes writes on the site only under
-  `/api/` and `/admin`. The rate limiting rule `mc-hub-api-flood` blocks an address for 10 s
-  after 150 `/api/` requests in 10 s at one Cloudflare location (verified bots exempt): looser
-  than Traefik's per-visitor limit, so it only sheds floods. On thedemontuan.dev
+  of `/healthz`, the one route Traefik keeps there (`tests/test_mc_hub_api.py` keeps the list
+  equal to the adapter), plus lease POSTs from the nodes' own addresses (`hosts/*.yml`
+  `ssh.address`); readers use the site's `/api/`, SSR the node's internal entrypoint.
+  `mc-hub-methods` takes writes on the site only under `/api/` and `/admin`. The rate limiting
+  rule `mc-hub-api-flood` blocks an address for 10 s after 150 `/api/` or `/healthz` requests in
+  10 s at one Cloudflare location (verified bots exempt): looser than Traefik's per-visitor
+  limit, so it only sheds floods. On thedemontuan.dev
   `edge-free-managed` runs Cloudflare's Free Managed Ruleset except on monitor./metrics;
   tuannguyenviet.site keeps its Free ruleset rule (OmniRoute hosts only) and API path rules.
   Traefik's limits and CrowdSec stay behind them. Blocks show in Security → Events.
@@ -74,7 +81,11 @@ flowchart LR
   changes to a local directory; each replica follows it over read-only SFTP (`sync/`) into its
   own file, and mc-hub-api opens that read-only (`DB_ROLE` = engine `NODE_ROLE`, or the volume's
   `role` file after a failover; writes there return 503 `READ_ONLY`, but the Worker never sends
-  them). The primary mirrors that directory
+  them). A primary also refuses writes (503 `READ_ONLY`) once `writer-lease` in its volume is
+  150 s old: `peer/` touches it every minute while the lease names the node and ages it at
+  once when another node holds it, so a writer cut off from the lease stops before the edge may
+  promote another (3 minutes); no such file, no fence (a node that never ran `peer/`). The
+  primary mirrors that directory
   and `/data/backups` to R2 hourly; the mirror container never restarts by itself: `peer/` starts
   it only while the lease confirms the node as writer and stops it after three failed renewals,
   so an old primary back from a reboot cannot replace the new primary's R2 copy. `peer/` also
@@ -253,13 +264,16 @@ change within about 5 minutes (each node's page cache).
 
 ## Failover (the writer is down)
 
-Reads keep working without action (the Worker retries the other nodes), readers' writes are
-queued at the edge, everything else that writes fails for a few minutes. Once the writer has
-failed 3 cron checks in a row (both its sites count), the edge gives the lease to the
-highest-weight replica that passes its checks, renewed within 3 minutes and whose follower last
-confirmed it current at most 2 minutes before the writer's last good check (when none
-qualifies nothing changes; the PROBLEM alerts stand). That node's next `peer/` run promotes it as below. By hand,
-on a replica:
+Reads keep working without action (the Worker retries the other nodes), readers' counters are
+queued at the edge, comments and other writes get 503 `WRITER_UNAVAILABLE` for a few minutes.
+The edge hands the lease to another node by itself once the writer has failed 3 cron checks in
+a row (both its sites count) or stopped renewing the lease for 3 minutes (it fenced itself after
+150 s, so it no longer writes). It picks the healthy replica that renewed within 3 minutes, whose
+follower last confirmed it current at most 2 minutes before the writer's last good check, and
+that is at most 5 Litestream transactions behind the position the writer last reported (each
+renewal carries the node's position); among those, the one with the most data, then the highest
+weight. When none qualifies, nothing changes and one Telegram says so; a person then decides.
+That node's next `peer/` run promotes it as below. By hand, on a replica:
 
 ```sh
 sudo /opt/platform/peer/role.sh promote          # refused while the writer still renews
@@ -268,16 +282,21 @@ sudo /opt/platform/peer/role.sh promote --force  # the writer is up but must sto
 
 The lease names this node; every colo sends writes here within 30 s, and the node keeps following
 the old primary for 35 s first, so writes a still-running old writer accepted in that window are
-kept (writes here return 503 `READ_ONLY` meanwhile; readers' writes are queued). The node then
-starts Litestream as primary with a new lineage from its copy (writes the old primary had not
-replicated, normally about a second, are lost), writes `role` into the mc-hub-api volume and
-restarts mc-hub-api, which then opens the database writable. The mirror replaces the R2 copy with
-the new lineage within the hour. The old primary, once it renews again, sees it lost the lease:
-`platform-role.service` stops its Litestream, mirror and mc-hub-api, moves its database to
-`fenced-<time>/` in the volume, follows the new primary and starts mc-hub-api read-only. If that
+kept (writes here return 503 `READ_ONLY` meanwhile). The old writer refuses writes from its next
+`peer/` run (a minute at most), or 150 s after its last renewal when it cannot reach the
+lease. The node then starts Litestream as primary with a new lineage from its copy (writes the
+old primary had not replicated, normally about a second, are lost), writes `role` and a fresh
+`writer-lease` into the mc-hub-api volume and restarts mc-hub-api, which then opens the database
+writable. The mirror replaces the R2 copy with the new lineage within the hour. The old primary,
+once it renews again, sees it lost the lease: `platform-role.service` stops its Litestream,
+mirror and mc-hub-api, moves its database to `fenced-<time>/` in the volume (what it never
+replicated stays there), follows the new primary and starts mc-hub-api read-only. If that
 restore does not finish within 5 minutes, mc-hub-api stays stopped and the next `peer/` run tries
 again (`/var/lib/platform-peer/stopped-apps` lists what to start). Switches never overlap
 (`/run/platform-role.lock`). Promote it back the same way.
+
+While the lease itself cannot be reached (the Worker down, every renewal failing), no node may
+write: the writer fences itself after 150 s and nobody can take over until renewals work.
 
 The deploy engine still follows the registry: until `host` and `replica_hosts` are swapped in
 the balanced apps' registries (render, release, `edge_lb.py --operation apply`), mc-hub-api's

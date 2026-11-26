@@ -55,8 +55,7 @@ export default {
         "strip": "/media/"
       },
       "queue_paths": [
-        "^/api/posts/[^/]+/(views|comments|compat)$",
-        "^/api/feedback$",
+        "^/api/posts/[^/]+/(views|compat)$",
         "^/api/feedback/[0-9]+/vote$"
       ],
       "sticky_seconds": 15
@@ -66,10 +65,7 @@ export default {
       "fanout": [],
       "immutable_paths": [],
       "primary_cookies": [],
-      "primary_paths": [
-        "^/api/(admin|auth|push)/",
-        "^/api/dl(/|$)"
-      ],
+      "primary_paths": [],
       "public_bucket": null,
       "queue_paths": [],
       "sticky_seconds": 0

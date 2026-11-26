@@ -23,9 +23,9 @@ globalThis.fetch = async (request, init = {}) => {
   const node = init.cf.resolveOverride.split('-origin.')[0];
   calls.push({ node, method: request.method, url: request.url, cf: init.cf, headers: request.headers });
   let reply = replies[node] ?? 200;
-  if (typeof reply === 'function') reply = reply(request);
+  if (typeof reply === 'function') reply = reply(request, init);
   if (reply instanceof Error) throw reply;
-  if (reply instanceof Response) return reply;
+  if (reply instanceof Response || reply instanceof Promise) return reply;
   // A hung origin: no headers until the caller gives up.
   if (reply === 'hang') return new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
   return new Response(node, { status: reply });
@@ -186,6 +186,19 @@ test('a node that sends no headers in time is abandoned for the other', async ()
   assert.ok(_test.downUntil.get('n2') > Date.now());
 });
 
+test('a primary_paths read (a download) waits for the writer past the header deadline; other reads move on', async () => {
+  _test.timing.ttfbMs = 20;
+  // Headers after 60 ms, unless the caller gives up first.
+  replies.n1 = (request, init) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(new Response('n1')), 60);
+    init.signal?.addEventListener('abort', () => (clearTimeout(timer), reject(new DOMException('aborted', 'AbortError'))));
+  });
+  assert.equal(await (await call('/api/dl?t=x')).text(), 'n1');
+  assert.equal(_test.downUntil.has('n1'), false);
+  assert.equal(await (await call('/', {}, clientOn('n1'))).text(), 'n2');
+  assert.ok(_test.downUntil.get('n1') > Date.now());
+});
+
 test('public images come from the bucket with the API headers; others fall through', async () => {
   const id = 'a'.repeat(32);
   env.MEDIA = { get: async (key) => (key === `media/${id}.jpg` ? { body: 'jpg', size: 3 } : null) };
@@ -229,26 +242,38 @@ test("a reader's write is queued while the writer is down and replayed with a si
   assert.equal(queued[0].ip, '203.0.113.9');
   assert.equal(points[0].blobs[3], 'queued');
 
-  // Not queued: other writes, admin writes (their session would not survive the replay).
-  assert.equal((await call('/api/comments', { method: 'POST', body: '{}' })).status, 530);
-  assert.equal((await call('/api/posts/a/comments', { method: 'POST', body: '{}', headers: { cookie: '__Host-mch_session=t' } })).status, 530);
-  assert.equal((await call('/api/posts/a/views', { method: 'POST', body: '{}', headers: { 'x-edge-replay': '1.2.3.4 1 ab' } })).status, 530);
+  // Not queued: comments and feedback (a captcha token and no dedupe), admin writes (their session
+  // would not survive the replay), replays. The reader gets JSON the site shows, and keeps the text.
+  for (const [path, headers] of [['/api/posts/a/comments', {}], ['/api/feedback', {}], ['/api/posts/a/comments', { cookie: '__Host-mch_session=t' }],
+    ['/api/posts/a/views', { 'x-edge-replay': '1.2.3.4 1 ab' }]]) {
+    const refused = await call(path, { method: 'POST', body: '{}', headers });
+    assert.equal(refused.status, 503);
+    assert.equal(refused.headers.get('retry-after'), '60');
+    assert.equal((await refused.json()).error.code, 'WRITER_UNAVAILABLE');
+  }
+  assert.equal(points.at(-1).blobs[3], 'unavailable');
+  // The API's own JSON errors pass (a fenced writer's READ_ONLY, a full push list).
+  replies = { n1: () => Response.json({ error: { code: 'QUEUE_FULL' } }, { status: 503 }) };
+  assert.equal((await (await call('/api/push/subscribe', { method: 'POST', body: '{}' })).json()).error.code, 'QUEUE_FULL');
   replies = { n1: new TypeError('connect') };
   assert.equal((await call('/api/feedback/7/vote', { method: 'POST', body: '{"vote":true}' })).status, 202);
   assert.equal(queued.length, 2);
 
-  // Replay: still down, then back.
+  // Replay: still down, then throttled (Traefik counts every replay against the Worker's address),
+  // then back.
   const outcomes = [];
   const batch = () => ({
     messages: queued.map((body) => ({ body, attempts: 1, ack: () => outcomes.push('ack'), retry: ({ delaySeconds }) => outcomes.push(delaySeconds) })),
   });
   replies = { n1: 502 };
   await worker.queue(batch(), env);
-  assert.deepEqual(outcomes, [60, 60]);
+  replies = { n1: 429 };
+  await worker.queue(batch(), env);
+  assert.deepEqual(outcomes, [60, 60, 60, 60]);
   calls = [];
   replies = { n1: 201 };
   await worker.queue(batch(), env);
-  assert.deepEqual(outcomes.slice(2), ['ack', 'ack']);
+  assert.deepEqual(outcomes.slice(4), ['ack', 'ack']);
   const replay = calls[0];
   assert.equal(replay.url, 'https://thedemontuan.dev/api/posts/a-post/views');
   const [ip, at, mac] = replay.headers.get('x-edge-replay').split(' ');
@@ -367,4 +392,30 @@ test('a writer failing three checks in a row hands the lease to a replica that w
   calls = [];
   await call('/api/comments', { method: 'POST', body: '{}' });
   assert.deepEqual(calls.map((c) => c.node), ['n2']);
+});
+
+test('a writer that stops renewing hands the lease to the replica holding its data, never to one too far behind', async () => {
+  const real = Date.now;
+  let offset = 0;
+  Date.now = () => real() + offset;
+  const beat = async (node, txid) => (await leaseCall(node, { op: 'beat', synced: Math.floor(Date.now() / 1000), txid })).json();
+  try {
+    await beat('n1', '0000000000000100');
+    await beat('n2', '00000000000000f0');
+    await worker.scheduled({}, env);
+    // n1 still answers its checks but no longer renews (its writer-lease fenced it after 150 s).
+    offset = 181_000;
+    await beat('n2', '00000000000000f0');
+    await worker.scheduled({}, env);
+    assert.equal((await beat('n2', '00000000000000f0')).writer, 'n1');
+    assert.ok(telegrams.some((t) => /PROBLEM: writer n1 is down \(no lease renewal for 3 min\) and no replica may take over/.test(t)));
+    // Within PROMOTE_LAG_TXIDS of what n1 last reported.
+    await beat('n2', '00000000000000fc');
+    await worker.scheduled({}, env);
+    const state = await beat('n2', '00000000000000fc');
+    assert.deepEqual([state.writer, state.epoch], ['n2', 1]);
+    assert.ok(telegrams.some((t) => /n2 is now the writer \(was n1, no lease renewal for 3 min, 4 transactions behind its last report\)/.test(t)));
+  } finally {
+    Date.now = real;
+  }
 });

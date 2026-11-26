@@ -4,8 +4,8 @@ set -euo pipefail
 slot="$1"; generation="$2"; dashboard="$3"; alias="$4"; api="$5"
 [[ $slot == blue || $slot == green ]] || exit 2
 [[ $generation =~ ^[0-9a-f]{32}$ ]] || exit 2
-# Hosts come from hosts/<host>.yml: $api is the SSR API host, $alias (optional) the previous one,
-# kept routed as a fallback (README: "Moving mc-hub to another domain").
+# Hosts come from hosts/<host>.yml: $api is the platform host (deploy probes, the edge's checks),
+# $alias (optional) the previous one, kept routed as a fallback (README: "Moving mc-hub to another domain").
 name='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
 [[ -z $dashboard && $api =~ $name && ( -z $alias || $alias =~ $name ) ]] || exit 2
 api_hosts="Host(\`$api\`)"
@@ -14,15 +14,14 @@ api_hosts="Host(\`$api\`)"
 site_hosts="Host(\`thedemontuan.dev\`) || Host(\`tuannguyenviet.site\`)"
 cat <<EOF
 # Managed by vps-deploy; mc-hub-api-owned routes only.
-# Also serves /api/ and /media/ on the mc-hub site host so the browser stays same-origin;
-# admin and login run only there, behind the "MC Hub Admin" Cloudflare Access app.
-# The API host keeps only the reads frontend SSR makes (and the session check its cache purge
-# needs) for health probes and fallback; everything else on it is denied. SSR itself calls the
-# same reads on this node through the plain-HTTP "internal" entrypoint (internal-only: loopback
-# and the mc-hub network), so it never leaves the VPS. Neither gets a per-IP limit. Browser
-# traffic on the site host does, keyed on CF-Connecting-IP (only cloudflared reaches "web");
-# public writes get a stricter budget and a 64 KiB body cap. The API keeps its own per-action
-# limits (comments, feedback, login).
+# Serves /api/ and /media/ on the mc-hub site host, the one public way in, so the browser stays
+# same-origin; admin and login run only there, behind the "MC Hub Admin" Cloudflare Access app.
+# The API host keeps only /healthz (deploy probes, the edge's checks; Cloudflare's flood rule
+# bounds it); everything else on it is denied. SSR calls the reads on this node through the
+# plain-HTTP "internal" entrypoint (internal-only: loopback and the mc-hub network), so it never
+# leaves the VPS and gets no per-IP limit. Browser traffic on the site host does, keyed on
+# CF-Connecting-IP (only cloudflared reaches "web"); public writes get a stricter budget and a
+# 64 KiB body cap. The API keeps its own per-action limits (comments, feedback, login).
 http:
   middlewares:
     mc-hub-api-route-generation:
@@ -66,7 +65,7 @@ http:
       middlewares: [deny-internal]
       service: mc-hub-api-service
     mc-hub-api-router:
-      rule: "($api_hosts) && (Path(\`/healthz\`) || Path(\`/api/posts\`) || PathPrefix(\`/api/posts/\`) || PathPrefix(\`/api/pages/\`) || Path(\`/api/settings\`) || Path(\`/api/stats\`) || Path(\`/api/auth/me\`))"
+      rule: "($api_hosts) && Path(\`/healthz\`)"
       entryPoints: [web]
       priority: 500
       middlewares: [mc-hub-api-route-generation, tunnel-only, mc-hub-api-security-headers]

@@ -24,7 +24,7 @@ def host_rule(app):
 
 
 class McHubApi(unittest.TestCase):
-    def test_api_host_routes_only_ssr_reads(self):
+    def test_api_host_serves_only_health_checks(self):
         registration = app_registration(ROOT, 'mc-hub-api')
         profile = dict(app='mc-hub-api', registration=registration)
         api = host_rule('mc-hub-api')
@@ -33,10 +33,9 @@ class McHubApi(unittest.TestCase):
             self.assertEqual(route_state(raw, profile), (slot, 'a' * 32))
             routers = parse_yaml(raw)['http']['routers']
             allowed = routers['mc-hub-api-router']
-            self.assertTrue(allowed['rule'].startswith('(' + api + ') && ('))
-            # Admin and login exist only on the site host, behind Cloudflare Access.
-            self.assertEqual(set(re.findall(r'Path(?:Prefix)?\(`([^`]*)`\)', allowed['rule'])),
-                             {'/healthz', '/api/posts', '/api/posts/', '/api/pages/', '/api/settings', '/api/stats', '/api/auth/me'})
+            self.assertTrue(allowed['rule'].startswith('(' + api + ') && '))
+            # Readers use the site host; admin and login exist only there, behind Cloudflare Access.
+            self.assertEqual(set(re.findall(r'Path(?:Prefix)?\(`([^`]*)`\)', allowed['rule'])), {'/healthz'})
             self.assertIn('tunnel-only', allowed['middlewares'])
             fallback = routers['mc-hub-api-fallback']
             self.assertEqual((fallback['rule'], fallback['middlewares']), (api, ['deny-internal']))
@@ -44,13 +43,13 @@ class McHubApi(unittest.TestCase):
             self.assertEqual(routers['mc-hub-api-deny-internal']['rule'], '(' + api + ') && PathPrefix(`/internal`)')
             sites = '(Host(`thedemontuan.dev`) || Host(`tuannguyenviet.site`))'
             self.assertTrue(routers['mc-hub-api-site-router']['rule'].startswith(sites + ' && '))
-            # SSR reads all come from the VPS: a per-IP limit there would throttle every reader at once.
+            # Probes and the edge's checks only; Cloudflare's flood rule bounds /healthz.
             self.assertFalse({'mc-hub-api-rate-limit', 'mc-hub-api-inflight'} & set(allowed['middlewares']))
-            # SSR on the same node: plain HTTP on "internal", the same reads, loopback/mc-hub only.
+            # SSR on the same node: plain HTTP on "internal", the public reads, loopback/mc-hub only.
             internal = routers['mc-hub-api-internal']
             self.assertEqual((internal['entryPoints'], internal['middlewares'][0]), (['internal'], 'internal-only'))
             self.assertEqual(set(re.findall(r'Path(?:Prefix)?\(`([^`]*)`\)', internal['rule'])),
-                             set(re.findall(r'Path(?:Prefix)?\(`([^`]*)`\)', allowed['rule'])) - {'/healthz'})
+                             {'/api/posts', '/api/posts/', '/api/pages/', '/api/settings', '/api/stats', '/api/auth/me'})
             self.assertNotIn('Host(', internal['rule'])
             reads, writes = routers['mc-hub-api-site-router'], routers['mc-hub-api-site-write']
             self.assertIn('mc-hub-api-rate-limit', reads['middlewares'])
