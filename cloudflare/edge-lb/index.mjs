@@ -9,6 +9,9 @@
 // Sites with a `lease` (one Durable Object per lease name) send writes to the lease's writer,
 // queue the `queue_paths` writes while it is down, are health-checked every minute (cron) with
 // Telegram alerts, and keep `edge_cache` reads in the Cache API (stale when every node fails).
+// The checks steer reads: a node that failed its last check, or a replica whose follower stopped
+// confirming it is current, is tried last; a writer failing PROMOTE_CHECKS checks in a row hands
+// the lease to a healthy replica that was current (its peer.sh then makes it the primary).
 import config from "./config.mjs";
 
 const RETRY_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
@@ -24,6 +27,12 @@ const NODE_BY_IP = new Map(Object.entries(config.nodes).map(([id, node]) => [nod
 // Nodes renew the lease every minute; promotion without --force waits until the writer missed this.
 const LEASE_MS = 180_000;
 const LEASE_PATH = /^\/__edge\/lease\/([a-z0-9-]+)$/;
+const PROMOTE_CHECKS = 3;
+// A replica qualifies when its last good follower check is at most this much older than the
+// writer's last good health check (peer.sh checks once a minute).
+const SYNC_SLACK_MS = 120_000;
+// While the writer renews, a replica without a good follower check for this long is read last.
+const SYNC_MS = 180_000;
 const QUEUE_MAX_BYTES = 64 * 1024;
 const REPLAYED_HEADERS = ["content-type", "user-agent", "accept-language"];
 // Cache API copies carry the origin's Cache-Control and their store time in these headers.
@@ -201,8 +210,10 @@ async function route(request, url, site, env, ctx, meta) {
 
   // A read that wants the writer (a session, an admin page, the client's own recent write) goes
   // there first; while the writer fails, another node's copy (about a second behind) beats a 502.
-  let order = pickOrder(site.nodes, client);
-  if (primary && !(downUntil.get(state.writer) > Date.now())) order = [state.writer, ...order.filter((n) => n !== state.writer)];
+  let order = pickOrder(site.nodes, client, Date.now(), state.down);
+  if (primary && !(downUntil.get(state.writer) > Date.now()) && !state.down?.includes(state.writer)) {
+    order = [state.writer, ...order.filter((n) => n !== state.writer)];
+  }
   let last;
   for (let i = 0; i < order.length; i++) {
     const final = i === order.length - 1;
@@ -210,7 +221,8 @@ async function route(request, url, site, env, ctx, meta) {
     try {
       const response = await send(request, order[i], site, final ? 0 : timing.ttfbMs, cf);
       meta.node = order[i];
-      failed = RETRY_STATUS.has(response.status);
+      // A read is safe to repeat: a 500 there may be that node's alone (its database, its build).
+      failed = RETRY_STATUS.has(response.status) || response.status === 500;
       if (!failed && !(immutable && response.status === 404)) {
         if (cached && storable(response)) store(ctx, key, response, cache.stale_seconds);
         return response;
@@ -219,7 +231,8 @@ async function route(request, url, site, env, ctx, meta) {
     } catch (error) {
       last = error;
     }
-    if (failed && !final) downUntil.set(order[i], Date.now() + DOWN_MS);
+    // A 500 does not mark the node down: it is more often that one request's.
+    if (failed && !final && last?.status !== 500) downUntil.set(order[i], Date.now() + DOWN_MS);
   }
   if (hit) {
     meta.outcome = "stale";
@@ -252,11 +265,12 @@ function needsPrimary(request, url, rules) {
 // Weighted rendezvous hashing on the client address: a client always lands on the same node, so
 // that node's Traefik rate limits and CrowdSec scenarios see all of its requests (not a share) and
 // its reads come from one replica; nodes get clients in proportion to weight, and a node leaving
-// moves only its own clients. Nodes marked down go last; weight 0 is last too (retries only).
-export function pickOrder(nodes, client, now = Date.now()) {
+// moves only its own clients. Nodes marked down (here, or by the cron's checks) go last; weight 0
+// is last too (retries only).
+export function pickOrder(nodes, client, now = Date.now(), down = []) {
   const score = (n) => (config.nodes[n].weight > 0 ? -config.nodes[n].weight / Math.log(unit(n + "|" + client)) : 0);
   return nodes
-    .map((n) => [n, score(n), downUntil.get(n) > now])
+    .map((n) => [n, score(n), downUntil.get(n) > now || down.includes(n)])
     .sort((a, b) => a[2] - b[2] || b[1] - a[1])
     .map(([n]) => n);
 }
@@ -306,7 +320,7 @@ function lease(env, site, args) {
   return stub.fetch("https://lease/", { method: "POST", body: JSON.stringify({ ...args, primary: site.primary }) });
 }
 
-// POST /__edge/lease/<name> {"op": "beat" | "promote", "force"?: true}, only from a node's own
+// POST /__edge/lease/<name> {"op": "beat" | "promote", "force"?: true, "synced"?: <unix seconds>}, only from a node's own
 // address with "Authorization: Bearer <NODE_KEY>"; the node is the one the address belongs to.
 async function nodeLease(request, name, client, env) {
   const node = NODE_BY_IP.get(client);
@@ -314,10 +328,10 @@ async function nodeLease(request, name, client, env) {
   if (!site || request.method !== "POST" || !env.NODE_KEY || !same(request.headers.get("authorization") || "", `Bearer ${env.NODE_KEY}`)) {
     return new Response("Not Found", { status: 404 });
   }
-  const { op, force } = await request.json().catch(() => ({}));
+  const { op, force, synced } = await request.json().catch(() => ({}));
   if (op !== "beat" && op !== "promote") return new Response("Bad Request", { status: 400 });
   leases.delete(name);
-  return lease(env, site, { op, node, force: force === true });
+  return lease(env, site, { op, node, force: force === true, synced: Number(synced) || 0 });
 }
 
 function same(a, b) {
@@ -412,11 +426,16 @@ export class Lease {
   }
 
   async fetch(request) {
-    const { op, node, force, results, primary } = await request.json();
+    const { op, node, force, results, primary, synced } = await request.json();
     const s = (await this.storage.get("lease")) ?? { writer: primary, epoch: 0, version: 0, beats: {}, fails: {}, alerted: {} };
+    s.synced ??= {};
+    s.ok ??= {};
     const now = Date.now();
     const alerts = [];
-    if (op === "beat") s.beats[node] = now;
+    if (op === "beat") {
+      s.beats[node] = now;
+      if (synced > 0) s.synced[node] = Math.min(synced * 1000, now);
+    }
     if (op === "purge") s.version++;
     if (op === "promote" && s.writer !== node) {
       const age = now - (s.beats[s.writer] ?? 0);
@@ -442,6 +461,22 @@ export class Lease {
           alerts.push(`OK again: ${check}`);
         }
       }
+      const failing = (n) => Object.keys(results).some((check) => check.startsWith(`${n} `) && results[check]);
+      const nodes = [...new Set(Object.keys(results).filter((check) => check.includes(" ")).map((check) => check.split(" ")[0]))];
+      for (const n of nodes) if (!failing(n)) s.ok[n] = now;
+      const writerFails = Math.max(0, ...Object.keys(s.fails).filter((check) => check.startsWith(`${s.writer} `)).map((check) => s.fails[check]));
+      if (writerFails >= PROMOTE_CHECKS && s.ok[s.writer]) {
+        const next = nodes
+          .filter((n) => n !== s.writer && !failing(n) && now - (s.beats[n] ?? 0) < LEASE_MS && (s.synced[n] ?? 0) >= s.ok[s.writer] - SYNC_SLACK_MS)
+          .sort((a, b) => (config.nodes[b]?.weight ?? 0) - (config.nodes[a]?.weight ?? 0) || s.synced[b] - s.synced[a])[0];
+        if (next) {
+          alerts.push(`${next} is now the writer (was ${s.writer}, failing ${writerFails} checks in a row); ${s.writer} steps down to replica when it is back.`);
+          s.writer = next;
+          s.epoch++;
+          s.version++;
+          s.beats[next] = now;
+        }
+      }
     }
     await this.storage.put("lease", s);
     if (alerts.length && this.env.TELEGRAM_TOKEN) {
@@ -451,8 +486,18 @@ export class Lease {
         body: JSON.stringify({ chat_id: this.env.TELEGRAM_CHAT_ID, text: `[edge] ${alerts.join("\n")}` }),
       }).catch(() => {});
     }
-    return Response.json({ writer: s.writer, epoch: s.epoch, version: s.version });
+    return Response.json({ writer: s.writer, epoch: s.epoch, version: s.version, down: downNodes(s, now) });
   }
+}
+
+// Read last: nodes whose last check failed and, while the writer renews, replicas whose follower
+// has not confirmed for SYNC_MS that their copy is current.
+function downNodes(s, now) {
+  const down = new Set(Object.keys(s.fails).filter((check) => check.includes(" ") && s.fails[check] > 0).map((check) => check.split(" ")[0]));
+  if (now - (s.beats[s.writer] ?? 0) < LEASE_MS) {
+    for (const [n, at] of Object.entries(s.synced)) if (n !== s.writer && now - at > SYNC_MS) down.add(n);
+  }
+  return [...down];
 }
 
 export const _test = { downUntil, leases, timing };
