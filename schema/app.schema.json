@@ -85,68 +85,12 @@
                     "const": 30
                 }
             }
-        },
-        "rtk": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "image"
-            ],
-            "properties": {
-                "image": {
-                    "type": "string",
-                    "pattern": "^ghcr\\.io/[a-z0-9./_-]+$"
-                }
-            }
-        },
-        "cgw": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "image"
-            ],
-            "properties": {
-                "image": {
-                    "const": "ghcr.io/thedemontuan/9router-cgw-runtime"
-                }
-            }
         }
     },
     "allOf": [
         {
             "required": ["image"],
             "properties": {"health": {"properties": {"timeout_seconds": {"const": 60}}}}
-        },
-        {
-            "if": {
-                "required": [
-                    "rtk"
-                ]
-            },
-            "then": {
-                "properties": {
-                    "strategy": {
-                        "const": "blue-green"
-                    }
-                }
-            }
-        },
-        {
-            "if": {
-                "required": [
-                    "cgw"
-                ]
-            },
-            "then": {
-                "properties": {
-                    "strategy": {
-                        "const": "blue-green"
-                    },
-                    "app": {
-                        "const": "9router"
-                    }
-                }
-            }
         }
     ]
 }

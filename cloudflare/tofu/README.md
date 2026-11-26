@@ -6,12 +6,11 @@ This directory declares the Cloudflare infrastructure for `vps-deploy` using Ope
 
 - **DNS Records**: All 29 authoritative DNS records across `thedemontuan.dev` and `tuannguyenviet.site` (apex CNAMEs, per-node origin CNAMEs `<id>-origin.<zone>`, app CNAMEs, MX email routing, verification TXT, DKIM, SPF, and status AAAA).
 - **Zero Trust Cloudflared Tunnels**: Tunnels (`shared-edge-vps` for n1, `shared-edge-vps-n2` for n2, and `shared-edge-<host>` for any new nodes) and their complete ingress configurations.
-- **Zero Trust Access Applications**: 6 production Access applications and their attached policies:
+- **Zero Trust Access Applications**: 5 production Access applications and their attached policies:
   - `Fleet Monitor (Grafana)`
   - `Fleet Metrics Ingest`
   - `MC Hub Admin`
   - `OmniRoute Admin Dashboard`
-  - `9router Admin Dashboard`
   - `Bank Event Gateway Dashboard`
 - **Zone Rulesets**:
   - `thedemontuan.dev`: Custom WAF (`Edge IP bans`, `edge-probe-paths`), Rate limiting (`Leaked credential check`), Managed WAF (`edge-free-managed`).

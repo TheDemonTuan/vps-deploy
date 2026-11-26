@@ -46,18 +46,15 @@ class RetiredDeployment(unittest.TestCase):
         with self.assertRaisesRegex(Failure, 'APP_NOT_REGISTERED'):
             app_registration(ROOT, 'opendesign')
 
-
     def test_retired_strategy_is_rejected_by_registry_and_schema(self):
-        value = copy.deepcopy(app_registration(ROOT, '9router'))
-        for key in ('rtk', 'cgw'):
-            value['manifest'].pop(key, None)
+        value = copy.deepcopy(app_registration(ROOT, 'omniroute'))
         value['manifest']['strategy'] = 'recreate'
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             (root / 'registry').mkdir()
-            (root / 'registry/9router.yml').write_text(json.dumps(value))
+            (root / 'registry/omniroute.yml').write_text(json.dumps(value))
             with self.assertRaisesRegex(Failure, 'REGISTRY_POLICY'):
-                app_registration(root, '9router')
+                app_registration(root, 'omniroute')
         schema = json.loads((ROOT / 'schema/app.schema.json').read_text())
         self.assertEqual(schema['properties']['strategy']['const'], 'blue-green')
     def test_retired_strategy_never_falls_through_to_gateway_route_or_probe(self):

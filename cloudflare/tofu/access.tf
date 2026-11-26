@@ -136,42 +136,6 @@ import {
   id = "accounts/${var.account_id}/8f36d303-f247-40c4-b20e-11bb954e6e2d"
 }
 
-resource "cloudflare_zero_trust_access_application" "nine_router_admin" {
-  account_id                 = var.account_id
-  name                       = "9router Admin Dashboard"
-  domain                     = "9router-admin.tuannguyenviet.site"
-  type                       = "self_hosted"
-  app_launcher_visible       = true
-  allowed_idps               = ["dc16ea82-1aa4-438a-8778-964be748df75"]
-  session_duration           = "24h"
-  enable_binding_cookie      = false
-  http_only_cookie_attribute = true
-  options_preflight_bypass   = false
-  auto_redirect_to_identity  = true
-
-  destinations = [
-    {
-      type = "public"
-      uri  = "9router-admin.tuannguyenviet.site"
-    }
-  ]
-
-  policies = [
-    {
-      id         = "07494cea-4083-4df8-978b-cf9f0eb4a2a8"
-      precedence = 1
-    },
-    {
-      id         = "6cec55ac-4d13-4643-aac2-d308fdb85683"
-      precedence = 2
-    }
-  ]
-}
-
-import {
-  to = cloudflare_zero_trust_access_application.nine_router_admin
-  id = "accounts/${var.account_id}/cc1dc3d5-cfcc-43bf-a2c5-28d9cfcf9d35"
-}
 
 resource "cloudflare_zero_trust_access_application" "bank_event_gateway" {
   account_id                 = var.account_id

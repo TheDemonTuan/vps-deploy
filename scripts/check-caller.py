@@ -56,7 +56,7 @@ def main():
         raise ValueError("caller binding mismatch")
     policy = registration["manifest"]
     if workflow == 'build-docker.yml':
-        if env['OPERATION'] != 'build' or env['COMPONENT'] not in ('app', 'cgw') or (env['COMPONENT'] == 'cgw' and 'cgw' not in policy) or env['IMAGE_REF']:
+        if env['OPERATION'] != 'build' or env['COMPONENT'] != 'app' or env['IMAGE_REF']:
             raise ValueError('invalid build inputs')
         callers = registration['caller']['build_workflows']
         pin = 'TheDemonTuan/vps-deploy/.github/workflows/build-docker.yml@' + platform_sha
@@ -69,23 +69,19 @@ def main():
         if mode == "image":
             image = env.get("IMAGE_REF", "")
             allowed_images = [policy['image']]
-            if "rtk" in policy:
-                allowed_images.append(policy["rtk"]["image"])
-            if 'cgw' in policy:
-                allowed_images.append(policy['cgw']['image'])
             if not any(re.fullmatch(re.escape(repo) + r"@sha256:[0-9a-f]{64}", image) for repo in allowed_images):
                 raise ValueError("invalid scan image reference")
         callers = registration["caller"].get("security_workflows") or registration["caller"]["build_workflows"]
         pin = "TheDemonTuan/vps-deploy/.github/workflows/security-trivy.yml@" + platform_sha
     else:
         component, operation, image = env["COMPONENT"], env["OPERATION"], env["IMAGE_REF"]
-        if component not in ('app', 'rtk', 'cgw') or (component != 'app' and component not in policy):
+        if component != 'app':
             raise ValueError("unregistered component")
         if operation == 'deploy':
-            repository = policy['image'] if component == 'app' else policy[component]['image']
+            repository = policy['image']
             if not re.fullmatch(re.escape(repository) + r'@sha256:[0-9a-f]{64}', image):
                 raise ValueError('invalid image')
-        elif operation not in ('status', 'reconcile', 'rollback') or image or (operation == 'rollback' and component != 'app'):
+        elif operation not in ('status', 'reconcile', 'rollback') or image:
             raise ValueError('invalid operation')
         callers = registration["caller"]["deploy_workflows"]
         pin = "TheDemonTuan/vps-deploy/.github/actions/deploy@" + platform_sha

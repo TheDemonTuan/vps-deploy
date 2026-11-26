@@ -7,12 +7,11 @@ from pathlib import Path
 
 from core import Failure, atomic, command, container, digest, docker, fault, image_id, lock, require, save, trusted_path
 import route
-from cgw import deploy as cgw_deploy, diagnostics as cgw_diagnostics
 
 
-def environment(profile, config, image, rtk=False):
+def environment(profile, config, image):
     values = {}
-    if config is not None and not rtk:
+    if config is not None:
         runtime = trusted_path(config / 'runtime.env')
         require(runtime.stat().st_mode & 0o777 == 0o600, 'UNSAFE_RUNTIME_ENV')
         allowed = set(profile['registration']['runtime']['allowed_env'])
@@ -26,22 +25,14 @@ def environment(profile, config, image, rtk=False):
     policy = profile['registration']['manifest']
     # The registry's `host` runs the single writer; every replica host gets a read-only role.
     node = profile.get('host_registration', {}).get('host', profile['registration']['host'])
-    values.update(IMAGE_REF=image, APP_ID=profile['app'], APP_PORT=str(policy['runtime']['port']), HEALTH_PATH=policy['health']['path'], HEALTH_TIMEOUT=str(policy['health']['timeout_seconds']), COMPOSE_PROJECT=profile['compose_project'], DASHBOARD_HOST=profile['dashboard_host'], API_HOST=profile['api_host'], EDGE_NETWORK=profile['edge_network'], RTK_IMAGE=image if rtk else (profile['rtk_image_repository'] or ''), RTK_NETWORK=profile.get('rtk_network', ''), RTK_PROJECT=profile['app'] + '-rtk', CGW_NETWORK=profile.get('cgw_network', ''), CGW_CONFIG_DIR=str(config) if config else '', NODE_ROLE='primary' if node == profile['registration']['host'] else 'replica')
+    values.update(IMAGE_REF=image, APP_ID=profile['app'], APP_PORT=str(policy['runtime']['port']), HEALTH_PATH=policy['health']['path'], HEALTH_TIMEOUT=str(policy['health']['timeout_seconds']), COMPOSE_PROJECT=profile['compose_project'], DASHBOARD_HOST=profile['dashboard_host'], API_HOST=profile['api_host'], EDGE_NETWORK=profile['edge_network'], NODE_ROLE='primary' if node == profile['registration']['host'] else 'replica')
     return dict(PATH='/usr/bin:/bin', HOME='/root', LANG='C', **values)
 
 
-def compose(release, profile, config, image, slot=None, rtk=False, *args, timeout=300):
+def compose(release, profile, config, image, slot=None, *args, timeout=300):
     base = release / 'apps' / profile['app']
-    if rtk:
-        require(profile['rtk_image_repository'] is not None, 'INVALID_COMPONENT')
-        files = ['-p', profile['app'] + '-rtk', '-f', str(trusted_path(base / 'docker-compose.rtk.yml'))]
-    else:
-        files = ['--env-file', str(trusted_path(config / 'runtime.env')), '-p', profile['compose_project'], '-f', str(trusted_path(base / 'docker-compose.prod.yml'))]
-        if profile.get('cgw_network'):
-            from cgw import network
-            network(profile)
-            files += ['-f', str(trusted_path(base / 'docker-compose.chatgpt-web.yml'))]
-    return command('/usr/bin/docker', 'compose', *files, '--ansi=never', '--progress=plain', *args, env=environment(profile, config, image, rtk), timeout=timeout)
+    files = ['--env-file', str(trusted_path(config / 'runtime.env')), '-p', profile['compose_project'], '-f', str(trusted_path(base / 'docker-compose.prod.yml'))]
+    return command('/usr/bin/docker', 'compose', *files, '--ansi=never', '--progress=plain', *args, env=environment(profile, config, image), timeout=timeout)
 
 
 def health(profile, slot, ref=None, idle=False):
@@ -83,43 +74,17 @@ def anonymous_image(ref):
     except (OSError, KeyError, ValueError):
         raise Failure('ANONYMOUS_IMAGE_REQUIRED') from None
 
-def pull(release, profile, cfg, ref, slot, rtk=False):
-    require(type(ref) is str and ref.startswith(profile['rtk_image_repository'] if rtk else profile['image_repository']), 'INVALID_IMAGE')
+def pull(release, profile, cfg, ref, slot):
+    require(type(ref) is str and ref.startswith(profile['image_repository']), 'INVALID_IMAGE')
     try:
         return image_id(ref)
     except Failure:
         pass
-    # A private app image is pulled with root's registry login; sidecars always stay anonymous.
-    if rtk or profile['registration'].get('image_access', 'public') != 'private':
+    # A private app image is pulled with root's registry login.
+    if profile['registration'].get('image_access', 'public') != 'private':
         anonymous_image(ref)
-    if not rtk:
-        command('/usr/bin/bash', str(Path(__file__).with_name('bluegreen.sh')), 'pull', str(release), str(cfg), slot, env=environment(profile, cfg, ref), timeout=650)
-        return image_id(ref)
-    for attempt in range(2):
-        try:
-            compose(release, profile, cfg, ref, slot, rtk, 'pull', 'rtk', timeout=300)
-            return image_id(ref)
-        except (Failure, subprocess.TimeoutExpired):
-            if attempt:
-                raise Failure('IMAGE_PULL_FAILED') from None
-            time.sleep(5)
-
-
-def rtk_health(profile, name):
-    container(name, running=True)
-    command('/usr/bin/bash', str(Path(__file__).with_name('bluegreen.sh')), 'rtk', name, env=environment(profile, None, ''), timeout=10)
-
-
-def rtk_wait(profile, name, ref, timeout=30):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            container(name, ref, running=True)
-            rtk_health(profile, name)
-            return
-        except Failure:
-            time.sleep(1)
-    raise Failure('RTK_UNHEALTHY')
+    command('/usr/bin/bash', str(Path(__file__).with_name('bluegreen.sh')), 'pull', str(release), str(cfg), slot, env=environment(profile, cfg, ref), timeout=650)
+    return image_id(ref)
 
 
 def state_phase(state, phase, **kwargs):
@@ -162,16 +127,9 @@ def finish(state, state_dir, target_entry, gen):
     save(state_dir / 'state.json', state)
 
 
-def rtk_network(profile):
-    network = json.loads(docker('network', 'inspect', profile['rtk_network']))[0]
-    labels = network.get('Labels') or {}
-    require(network.get('Internal') is True and network.get('Driver') == 'bridge' and labels.get('com.docker.compose.project') == profile['app'] + '-rtk' and labels.get('com.docker.compose.network') == 'rtk', 'RTK_NETWORK')
-
 def transaction(req, state, state_dir, cfg, release, profile, locks):
     old = state['active']
     require(old and state['operation'] is None, 'RECOVERY_REQUIRED')
-    if profile['rtk_image_repository'] is not None:
-        rtk_network(profile)
     previous = state['previous']
     require(req['op'] == 'deploy' or previous and previous['slot'] != old['slot'], 'PREVIOUS_INVALID')
     target = ('green' if old['slot'] == 'blue' else 'blue') if req['op'] == 'deploy' else previous['slot']
@@ -257,71 +215,9 @@ def transaction(req, state, state_dir, cfg, release, profile, locks):
             pass
 
 
-def rtk_deploy(req, state, state_dir, cfg, release, profile):
-    ref = req['image']
-    require(profile['rtk_image_repository'] is not None, 'INVALID_COMPONENT')
-    rtk_network(profile)
-    previous = state['rtk']['current']
-    name = profile['app'] + '-rtk-rtk-1'
-    if previous == ref:
-        rtk_wait(profile, name, ref)
-        return
-    old_id = image_id(previous) if previous else None
-    if previous:
-        container(name, previous)
-    state['operation'] = {'request_id': req['request_id'], 'component': 'rtk', 'phase': 'rtk_prepared', 'previous': previous, 'previous_id': old_id, 'image': ref}
-    state_phase(state, 'rtk_prepared')
-    save(state_dir / 'state.json', state)
-    pull(release, profile, cfg, ref, None, True)
-    try:
-        compose(release, profile, cfg, ref, None, True, 'up', '-d', '--no-deps', '--pull', 'never', 'rtk')
-        rtk_network(profile)
-        state_phase(state, 'rtk_started')
-        save(state_dir / 'state.json', state)
-        fault(profile, 'rtk_started')
-        rtk_wait(profile, name, ref)
-    except Failure:
-        if not previous:
-            recovered(state, state_dir, 'RTK_NO_PREVIOUS')
-        require(image_id(previous) == old_id, 'RTK_PREVIOUS_ID')
-        compose(release, profile, cfg, previous, None, True, 'up', '-d', '--no-deps', '--pull', 'never', 'rtk')
-        rtk_network(profile)
-        rtk_wait(profile, name, previous)
-        state['operation'] = None
-        state['revision'] += 1
-        save(state_dir / 'state.json', state)
-        raise Failure('RTK_UPGRADE_FAILED') from None
-    state['rtk'] = {'current': ref, 'previous': previous}
-    state['operation'] = None
-    state['revision'] += 1
-    save(state_dir / 'state.json', state)
-
 
 def reconcile(req, state, state_dir, cfg, release, profile, locks):
     intent = state['operation']
-    if req['component'] == 'cgw':
-        from cgw import reconcile as cgw_reconcile
-        return cgw_reconcile(req, state, state_dir, cfg, release, profile)
-    if req['component'] == 'rtk':
-        if intent and intent['component'] == 'rtk':
-            name = profile['app'] + '-rtk-rtk-1'
-            try:
-                rtk_wait(profile, name, intent['image'])
-                state['rtk'] = {'current': intent['image'], 'previous': intent['previous']}
-            except Failure:
-                previous = intent['previous']
-                require(previous and image_id(previous) == intent['previous_id'], 'RECOVERY_REQUIRED')
-                try:
-                    rtk_wait(profile, name, previous)
-                except Failure:
-                    compose(release, profile, cfg, previous, None, True, 'up', '-d', '--no-deps', '--pull', 'never', 'rtk')
-                    rtk_wait(profile, name, previous)
-            state['operation'] = None
-            state['revision'] += 1
-            save(state_dir / 'state.json', state)
-        else:
-            rtk_wait(profile, profile['app'] + '-rtk-rtk-1', state['rtk']['current'])
-        return
     with lock(locks / 'traefik.lock', 60):
         if not intent:
             matching(state, profile)

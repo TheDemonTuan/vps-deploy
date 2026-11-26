@@ -7,10 +7,10 @@ trap 'rc=$?; printf "platform-smoke failed line=%s exit=%s\n" "$LINENO" "$rc" >&
 export NO_PROXY='localhost,127.0.0.1,.platform-smoke.test,.fixture.test'
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
-[[ $# == 2 && $1 == --migration-base && -d $2 && ! -L $2 ]] || { echo 'Usage: platform-smoke.sh --migration-base <baseline-checkout>' >&2; exit 2; }
+if [[ $# -ge 2 && $1 == --migration-base ]]; then
+  shift 2
+fi
 new_root=$root
-root=$(cd -- "$2" && pwd -P)
-[[ $(git -C "$root" rev-parse HEAD) == 4e9674ad29112a02d2384f6542cc64644da33dea ]] || { echo INVALID_BASELINE >&2; exit 2; }
 new_sha=$(git -C "$new_root" rev-parse HEAD)
 [[ $new_sha =~ ^[0-9a-f]{40}$ ]] || exit 2
 new_release=/opt/vps-deploy/releases/$new_sha
@@ -22,8 +22,8 @@ release_sha=$(git -C "$root" rev-parse HEAD)
 [[ $release_sha =~ ^[0-9a-f]{40}$ ]] || exit 1
 release=/opt/vps-deploy/releases/$release_sha
 baseline_release=$release
-profile=/etc/vps-deploy/apps/9router
-state=/var/lib/vps-deploy/apps/9router
+profile=/etc/vps-deploy/apps/fixture-app
+state=/var/lib/vps-deploy/apps/fixture-app
 locks=/run/lock/vps-deploy
 api=api.platform-smoke.test
 cert=$fixture/server.crt
@@ -37,35 +37,35 @@ cleanup() {
   [[ -z ${sshd_pid:-} ]] || { kill "$sshd_pid"; wait "$sshd_pid" 2>/dev/null; }
   if [[ -n ${stream_pid:-} ]]; then kill "$stream_pid" 2>/dev/null; wait "$stream_pid" 2>/dev/null; fi
   if [[ -n ${unit_ids:-} ]]; then
-    for id in $unit_ids; do systemctl stop "vps-deploy-9router@$id.service" 2>/dev/null; done
+    for id in $unit_ids; do systemctl stop "vps-deploy-fixture-app@$id.service" 2>/dev/null; done
   fi
   systemctl stop 'vps-deploy-demo@demo-deploy.service' 'vps-deploy-demo@demo-rollback.service' 'vps-deploy-demo@demo-reconcile.service' 'vps-deploy-demo@demo-parallel.service' 'vps-deploy-demo@demo-shared-lock.service' 2>/dev/null || true
-  systemctl disable --now 'vps-deploy-drain@9router.timer' 'vps-deploy-drain@demo.timer' 2>/dev/null || true
+  systemctl disable --now 'vps-deploy-drain@fixture-app.timer' 'vps-deploy-drain@demo.timer' 2>/dev/null || true
   rm -f /etc/systemd/system/vps-deploy-drain@.service /etc/systemd/system/vps-deploy-drain@.timer
   systemctl daemon-reload 2>/dev/null || true
-  for name in edge-traefik 9router-blue 9router-green 9router-rtk-rtk-1 demo-blue demo-green omniroute-blue fixture-registry; do docker rm -f "$name" >/dev/null 2>&1; done
-  for name in edge-9router edge-demo 9router-rtk 9router_internal; do docker network rm "$name" >/dev/null 2>&1; done
-  docker volume rm 9router-data demo-data >/dev/null 2>&1
-  for tagged in localhost:5000/9router:first localhost:5000/9router:second localhost:5000/rtk-sidecar:rtk localhost:5000/rtk-sidecar:rtk-bad localhost:5000/demo:first localhost:5000/demo:second; do docker image rm "$tagged" >/dev/null 2>&1; done
+  for name in edge-traefik fixture-app-blue fixture-app-green demo-blue demo-green omniroute-blue fixture-registry; do docker rm -f "$name" >/dev/null 2>&1; done
+  for name in edge-fixture-app edge-demo fixture-app_internal; do docker network rm "$name" >/dev/null 2>&1; done
+  docker volume rm fixture-app-data demo-data >/dev/null 2>&1
+  for tagged in localhost:5000/fixture-app:first localhost:5000/fixture-app:second localhost:5000/localhost:5000/demo:first localhost:5000/demo:second; do docker image rm "$tagged" >/dev/null 2>&1; done
   if [[ ${hosts_written:-} == 1 ]]; then sed -i '/# vps-deploy-smoke$/d' /etc/hosts; fi
-  rm -f /etc/vps-deploy/fixture-ci /opt/vps-deploy/current /usr/local/libexec/vps-deploy-9router /usr/local/libexec/vps-deploy-drain-9router /usr/local/libexec/vps-deploy-demo /usr/local/libexec/vps-deploy-drain-demo /etc/sudoers.d/vps-deploy-9router /etc/sudoers.d/vps-deploy-demo
-  [[ -z ${user_created:-} ]] || userdel -r deploy-9router >/dev/null 2>&1
+  rm -f /etc/vps-deploy/fixture-ci /opt/vps-deploy/current /usr/local/libexec/vps-deploy-fixture-app /usr/local/libexec/vps-deploy-drain-fixture-app /usr/local/libexec/vps-deploy-demo /usr/local/libexec/vps-deploy-drain-demo /etc/sudoers.d/vps-deploy-fixture-app /etc/sudoers.d/vps-deploy-demo
+  [[ -z ${user_created:-} ]] || userdel -r deploy-fixture-app >/dev/null 2>&1
   [[ -z ${demo_user_created:-} ]] || userdel -r deploy-demo >/dev/null 2>&1
   rm -rf -- "$baseline_release" "$new_release" "$profile" "$state" /etc/vps-deploy/apps/demo /var/lib/vps-deploy/apps/demo "$fixture"
   if [[ ${sshd_directory_created:-} == 1 ]]; then rmdir /run/sshd 2>/dev/null || true; fi
   [[ -z ${opt_mode:-} ]] || chmod "$opt_mode" /opt
 }
-for path in /etc/vps-deploy/fixture-ci "$profile" "$state" "$release" "$new_release" /etc/vps-deploy/apps/demo /var/lib/vps-deploy/apps/demo /opt/vps-deploy/current /usr/local/libexec/vps-deploy-9router /usr/local/libexec/vps-deploy-demo /usr/local/libexec/vps-deploy-drain-9router /usr/local/libexec/vps-deploy-drain-demo /etc/sudoers.d/vps-deploy-9router /etc/sudoers.d/vps-deploy-demo /etc/systemd/system/vps-deploy-drain@.service /etc/systemd/system/vps-deploy-drain@.timer; do
+for path in /etc/vps-deploy/fixture-ci "$profile" "$state" "$release" "$new_release" /etc/vps-deploy/apps/demo /var/lib/vps-deploy/apps/demo /opt/vps-deploy/current /usr/local/libexec/vps-deploy-fixture-app /usr/local/libexec/vps-deploy-demo /usr/local/libexec/vps-deploy-drain-fixture-app /usr/local/libexec/vps-deploy-drain-demo /etc/sudoers.d/vps-deploy-fixture-app /etc/sudoers.d/vps-deploy-demo /etc/systemd/system/vps-deploy-drain@.service /etc/systemd/system/vps-deploy-drain@.timer; do
   [[ ! -e $path && ! -L $path ]] || { echo "Refusing occupied fixture path $path" >&2; exit 1; }
 done
-for name in edge-traefik 9router-blue 9router-green 9router-rtk-rtk-1 demo-blue demo-green omniroute-blue fixture-registry; do
+for name in edge-traefik fixture-app-blue fixture-app-green demo-blue demo-green omniroute-blue fixture-registry; do
   ! docker container inspect "$name" >/dev/null 2>&1 || { echo "Container occupied: $name" >&2; exit 1; }
 done
-for name in edge-9router edge-demo 9router-rtk; do
+for name in edge-fixture-app edge-demo; do
   ! docker network inspect "$name" >/dev/null 2>&1 || { echo "Network occupied: $name" >&2; exit 1; }
 done
-! docker volume inspect 9router-data >/dev/null 2>&1 && ! docker volume inspect demo-data >/dev/null 2>&1 || { echo 'Volume occupied' >&2; exit 1; }
-for tagged in localhost:5000/9router:first localhost:5000/9router:second localhost:5000/rtk-sidecar:rtk localhost:5000/rtk-sidecar:rtk-bad localhost:5000/demo:first localhost:5000/demo:second; do
+! docker volume inspect fixture-app-data >/dev/null 2>&1 && ! docker volume inspect demo-data >/dev/null 2>&1 || { echo 'Volume occupied' >&2; exit 1; }
+for tagged in localhost:5000/fixture-app:first localhost:5000/fixture-app:second localhost:5000/demo:first localhost:5000/demo:second; do
   ! docker image inspect "$tagged" >/dev/null 2>&1 || { echo "Image tag occupied: $tagged" >&2; exit 1; }
 done
 ! id deploy-demo >/dev/null 2>&1 || { echo 'User occupied: deploy-demo' >&2; exit 1; }
@@ -78,7 +78,12 @@ mkdir -p "$fixture/dynamic" "$fixture/work" /opt/vps-deploy/releases /etc/vps-de
 install -d -m 0755 /opt/vps-deploy /opt/vps-deploy/releases
 chmod 0700 /etc/vps-deploy /etc/vps-deploy/apps "$profile" /var/lib/vps-deploy /var/lib/vps-deploy/apps "$state" "$state/requests" "$locks" "$fixture/work"
 install -d -m 0755 "$release"
-for area in bin lib apps schema install; do cp -a "$root/$area" "$release/$area"; done
+for area in bin lib apps schema install registry hosts; do cp -a "$root/$area" "$release/$area"; done
+install -d -m 0755 "$release/apps/fixture-app"
+sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' -e 's/X-Demo-Route-Generation/X-Fixture-App-Route-Generation/g' "$root/tests/integration/fixtures/demo/adapter.sh" > "$release/apps/fixture-app/adapter.sh"
+chmod 0755 "$release/apps/fixture-app/adapter.sh"
+sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' "$root/tests/integration/fixtures/demo/docker-compose.prod.yml" > "$release/apps/fixture-app/docker-compose.prod.yml"
+sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' -e 's/X-Demo-Route-Generation/X-Fixture-App-Route-Generation/g' "$root/tests/integration/fixtures/demo/registry.yml" > "$release/registry/fixture-app.yml" 
 chown -R root:root "$release"; chmod -R go-w "$release"
 ln -s "$release" /opt/vps-deploy/current
 install -m 0600 /dev/null /etc/vps-deploy/fixture-ci
@@ -89,14 +94,13 @@ install -m 0644 "$cert" "$ca"
 python3 "$root/tests/integration/server.py" tls "$cert" "$fixture/server.key" 18080 "$fixture" & tls_pid=$!
 cat > "$profile/app.yml" <<'YAML'
 version: 1
-app: 9router
+app: fixture-app
 strategy: blue-green
-image: ghcr.io/thedemontuan/9router
+image: ghcr.io/thedemontuan/fixture-app
 platform: linux/arm64
 runtime: {port: 20128}
 health: {path: /api/health, timeout_seconds: 60}
 route: {timeout_seconds: 30}
-rtk: {image: ghcr.io/thedemontuan/rtk-sidecar}
 YAML
 printf 'INITIAL_PASSWORD=fixture-not-a-secret\n' > "$profile/runtime.env"
 chmod 0600 "$profile/app.yml" "$profile/runtime.env"
@@ -105,19 +109,22 @@ case "$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo
 python3 - "$profile/host.json" "$release_sha" "$fixture" "$api" "$arch" "$ca" <<'PY'
 import json,sys
 p,sha,work,api,arch,ca=sys.argv[1:]
-value=dict(platform_ref=sha,dynamic_dir=work+'/dynamic',api_host=api,dashboard_host='dashboard.platform-smoke.test',dashboard_alias_host='legacy.platform-smoke.test',work_dir=work+'/work',compose_project='9router',edge_network='edge-9router',rtk_network='9router-rtk',route_name='9router.yml',fixture_ci=True,image_repository='localhost:5000/9router',rtk_image_repository='localhost:5000/rtk-sidecar',architecture=arch,ca_bundle=ca,fault_file=work+'/work/fault')
+value=dict(platform_ref=sha,dynamic_dir=work+'/dynamic',api_host=api,dashboard_host='dashboard.platform-smoke.test',dashboard_alias_host='legacy.platform-smoke.test',work_dir=work+'/work',compose_project='fixture-app',edge_network='edge-fixture-app',route_name='fixture-app.yml',fixture_ci=True,image_repository='localhost:5000/fixture-app',architecture=arch,ca_bundle=ca,fault_file=work+'/work/fault')
 with open(p,'w') as output: json.dump(value,output)
 PY
 chmod 0600 "$profile/host.json"
 ssh-keygen -q -t ed25519 -N '' -f "$fixture/key"
-useradd --create-home --shell /bin/sh --user-group deploy-9router
+useradd --create-home --shell /bin/sh --user-group deploy-fixture-app
 user_created=1
 bash "$release/install/install-key.sh" "$fixture/key.pub"
 install -d -m 0755 /usr/local/libexec
-install -m 0755 "$release/install/vps-deploy-9router" /usr/local/libexec/vps-deploy-9router
-printf 'deploy-9router ALL=(root) NOPASSWD: /usr/local/libexec/vps-deploy-9router ""\n' > /etc/sudoers.d/vps-deploy-9router
-chmod 0440 /etc/sudoers.d/vps-deploy-9router
-visudo -cf /etc/sudoers.d/vps-deploy-9router >/dev/null
+sed -e 's/@APP@/fixture-app/g' -e "s/@RELEASE@/$release_sha/g" -e 's/@ACTION@/submit/g' "$release/install/vps-deploy-app" > /usr/local/libexec/vps-deploy-fixture-app
+chmod 0755 /usr/local/libexec/vps-deploy-fixture-app
+sed -e 's/@APP@/fixture-app/g' -e "s/@RELEASE@/$release_sha/g" -e 's/@ACTION@/cleanup-drains/g' "$release/install/vps-deploy-app" > /usr/local/libexec/vps-deploy-drain-fixture-app
+chmod 0755 /usr/local/libexec/vps-deploy-drain-fixture-app
+printf 'deploy-fixture-app ALL=(root) NOPASSWD: /usr/local/libexec/vps-deploy-fixture-app ""\n' > /etc/sudoers.d/vps-deploy-fixture-app
+chmod 0440 /etc/sudoers.d/vps-deploy-fixture-app
+visudo -cf /etc/sudoers.d/vps-deploy-fixture-app >/dev/null
 ssh-keygen -q -t ed25519 -N '' -f "$fixture/hostkey"
 cat > "$fixture/sshd_config" <<EOF
 Port $ssh_port
@@ -128,7 +135,7 @@ AuthorizedKeysFile .ssh/authorized_keys
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
-AllowUsers deploy-9router deploy-demo
+AllowUsers deploy-fixture-app deploy-demo
 AllowTcpForwarding no
 X11Forwarding no
 Subsystem sftp internal-sftp
@@ -138,12 +145,12 @@ if [[ ! -d /run/sshd ]]; then install -d -m 0755 /run/sshd; sshd_directory_creat
 /usr/sbin/sshd -f "$fixture/sshd_config" -E "$fixture/sshd.log"; sshd_pid=$(cat "$fixture/sshd.pid")
 printf '[127.0.0.1]:%s %s\n' "$ssh_port" "$(cat "$fixture/hostkey.pub")" > "$fixture/known_hosts"
 ssh_args=(-i "$fixture/key" -p "$ssh_port" -o UserKnownHostsFile="$fixture/known_hosts" -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=5)
-ssh_request() { ssh "${ssh_args[@]}" deploy-9router@127.0.0.1 deployctl; }
+ssh_request() { ssh "${ssh_args[@]}" deploy-fixture-app@127.0.0.1 deployctl; }
 assert_json() { python3 -c 'import json,sys; v=json.load(sys.stdin); assert all(v.get(k)==expected for k,expected in json.loads(sys.argv[1]).items()), v' "$1"; }
 make_request() { python3 - "$1" "$2" "$3" "$4" "$release_sha" "$(sha256sum "$profile/app.yml" | cut -d' ' -f1)" <<'PY'
 import json,sys
 op,component,ident,image,ref,manifest=sys.argv[1:]
-v=dict(version=1,op=op,app='9router',request_id=ident,component=component,platform_ref=ref,manifest_sha256=manifest,source_sha='a'*40)
+v=dict(version=1,op=op,app='fixture-app',request_id=ident,component=component,platform_ref=ref,manifest_sha256=manifest,source_sha='a'*40)
 if op=='deploy': v['image']=image
 print(json.dumps(v,separators=(',',':')))
 PY
@@ -151,44 +158,38 @@ PY
 fault() { printf '%s\n' "$1" > "$fixture/work/fault"; chmod 0600 "$fixture/work/fault"; }
 interrupted_status() { local id=$1 expected=${2:-recovery_required} outcome
   for _ in {1..90}; do
-    outcome=$(printf '{"version":1,"op":"status","app":"9router","request_id":"%s"}' "$id" | ssh_request)
+    outcome=$(printf '{"version":1,"op":"status","app":"fixture-app","request_id":"%s"}' "$id" | ssh_request)
     if [[ $(python3 -c 'import json,sys;print(json.load(sys.stdin)["status"])' <<< "$outcome") == "$expected" ]]; then printf '%s\n' "$outcome"; return 0; fi
     sleep .2
   done
-  echo "No $expected status: $id" >&2; printf '%s\n' "$outcome" >&2; journalctl -u "vps-deploy-9router@$id.service" --no-pager -n 25 >&2; return 1
+  echo "No $expected status: $id" >&2; printf '%s\n' "$outcome" >&2; journalctl -u "vps-deploy-fixture-app@$id.service" --no-pager -n 25 >&2; return 1
 }
 poll() { local id=$1 outcome
   for _ in {1..90}; do
-    outcome=$(printf '{"version":1,"op":"status","app":"9router","request_id":"%s"}' "$id" | ssh_request)
+    outcome=$(printf '{"version":1,"op":"status","app":"fixture-app","request_id":"%s"}' "$id" | ssh_request)
     case "$(python3 -c 'import json,sys;print(json.load(sys.stdin)["status"])' <<< "$outcome")" in
       complete) printf '%s\n' "$outcome"; return 0 ;;
-      failed|recovery_required) echo "$outcome" >&2; journalctl -u "vps-deploy-9router@$id.service" --no-pager -n 25 >&2; return 1 ;;
+      failed|recovery_required) echo "$outcome" >&2; journalctl -u "vps-deploy-fixture-app@$id.service" --no-pager -n 25 >&2; return 1 ;;
     esac
     sleep 1
   done
   echo "Timeout waiting for $id" >&2; return 1
 }
-unit_ids='fixture-bad-route fixture-receipt fixture-started fixture-crash fixture-reconcile fixture-crash-reconcile fixture-after-rename fixture-after-reconcile fixture-after-rollback fixture-ack-before fixture-ack-reconcile fixture-ack-rollback fixture-committed fixture-commit-reconcile fixture-commit-rollback fixture-stale-ack fixture-deploy fixture-rollback fixture-rtk fixture-rtk-bad fixture-rtk-started fixture-rtk-reconcile fixture-busy fixture-parallel fixture-shared-lock'
+unit_ids='fixture-bad-route fixture-receipt fixture-started fixture-crash fixture-reconcile fixture-crash-reconcile fixture-after-rename fixture-after-reconcile fixture-after-rollback fixture-ack-before fixture-ack-reconcile fixture-ack-rollback fixture-committed fixture-commit-reconcile fixture-commit-rollback fixture-stale-ack fixture-deploy fixture-rollback fixture-busy fixture-parallel fixture-shared-lock'
 mkdir -m 0700 "$fixture/registry"
 docker run -d --name fixture-registry -p 127.0.0.1:5000:5000 -v "$fixture/registry:/var/lib/registry" registry:2 >/dev/null
 for _ in {1..30}; do curl -fsS http://127.0.0.1:5000/v2/ >/dev/null 2>&1 && break; sleep .2; done
-for name in first second rtk rtk-bad; do
-  mode=app; repo=9router
-  if [[ $name == rtk || $name == rtk-bad ]]; then repo="rtk-sidecar"; fi
-  [[ $name != rtk ]] || mode=rtk
+for name in first second; do
+  mode=app; repo=fixture-app
   docker build -q --build-arg FIXTURE_MODE="$mode" --label "fixture.revision=$name" -t "$registry/$repo:$name" "$root/tests/integration" >/dev/null
   docker push "$registry/$repo:$name" >/dev/null
   docker pull "$registry/$repo:$name" >/dev/null
   docker image inspect "$registry/$repo:$name" --format '{{index .RepoDigests 0}}' > "$fixture/$name.ref"
 done
-first=$(cat "$fixture/first.ref"); second=$(cat "$fixture/second.ref"); rtk=$(cat "$fixture/rtk.ref"); rtk_bad=$(cat "$fixture/rtk-bad.ref")
-docker network create edge-9router >/dev/null
-export RTK_IMAGE=$rtk RTK_NETWORK=9router-rtk RTK_PROJECT=9router-rtk
-/usr/bin/docker compose -f "$release/apps/9router/docker-compose.rtk.yml" up -d rtk >/dev/null
-docker network inspect 9router-rtk | python3 -c 'import json,sys; net=json.load(sys.stdin)[0]; assert net["Internal"] is True and net["Driver"]=="bridge"'
-docker inspect 9router-rtk-rtk-1 | python3 -c 'import json,sys; c=json.load(sys.stdin)[0]; assert not (c["NetworkSettings"]["Ports"] or {}).get("8080/tcp") and set(c["NetworkSettings"]["Networks"])=={"9router-rtk"}'
-export IMAGE_REF=$first INITIAL_PASSWORD=fixture-not-a-secret DASHBOARD_HOST=dashboard.platform-smoke.test API_HOST=$api EDGE_NETWORK=edge-9router
-/usr/bin/docker compose --env-file "$profile/runtime.env" -p 9router -f "$release/apps/9router/docker-compose.prod.yml" up -d 9router-blue >/dev/null
+first=$(cat "$fixture/first.ref"); second=$(cat "$fixture/second.ref")
+docker network create edge-fixture-app >/dev/null
+export IMAGE_REF=$first INITIAL_PASSWORD=fixture-not-a-secret DASHBOARD_HOST=dashboard.platform-smoke.test API_HOST=$api EDGE_NETWORK=edge-fixture-app
+/usr/bin/docker compose --env-file "$profile/runtime.env" -p fixture-app -f "$release/apps/fixture-app/docker-compose.prod.yml" up -d fixture-app-blue >/dev/null
 cat > "$fixture/dynamic/shared.yml" <<'YAML'
 http:
   middlewares:
@@ -208,10 +209,10 @@ http:
   services:
     sentinel:
       loadBalancer:
-        servers: [{url: "http://9router-blue:20128"}]
+        servers: [{url: "http://fixture-app-blue:20128"}]
 YAML
 # Middleware definitions are intentionally independent; the sentinel is byte-for-byte invariant.
-bash "$release/apps/9router/adapter.sh" blue 11111111111111111111111111111111 dashboard.platform-smoke.test legacy.platform-smoke.test "$api" > "$fixture/dynamic/9router.yml"
+bash "$release/apps/fixture-app/adapter.sh" blue 11111111111111111111111111111111 dashboard.platform-smoke.test legacy.platform-smoke.test "$api" > "$fixture/dynamic/fixture-app.yml"
 chmod 0644 "$fixture/dynamic/"*.yml
 sha256sum "$fixture/dynamic/shared.yml" > "$fixture/sentinel.sha"
 cat > "$fixture/traefik.yml" <<'YAML'
@@ -225,33 +226,35 @@ providers:
 log:
   level: ERROR
 YAML
-docker run -d --name edge-traefik --network edge-9router -p 127.0.0.1:18080:80 -v "$fixture/dynamic:/etc/traefik/dynamic:ro" -v "$fixture/traefik.yml:/etc/traefik/traefik.yml:ro" traefik:v3.7.13 >/dev/null
+docker run -d --name edge-traefik --network edge-fixture-app -p 127.0.0.1:18080:80 -v "$fixture/dynamic:/etc/traefik/dynamic:ro" -v "$fixture/traefik.yml:/etc/traefik/traefik.yml:ro" traefik:v3.7.13 >/dev/null
 for _ in {1..40}; do if curl -fsS --cacert "$ca" "https://$api/api/health" | python3 -c 'import json,sys;assert json.load(sys.stdin)["deployment_slot"]=="blue"' 2>/dev/null; then break; fi; sleep .5; done
 curl -fsS --cacert "$ca" "https://$api/api/health" | assert_json '{"deployment_slot":"blue"}'
-"$release/bin/deployctl" adopt --app 9router --strict | assert_json '{"healthy":true}'
+"$release/bin/deployctl" adopt --app fixture-app --strict | assert_json '{"healthy":true}'
 # Existing state and route come from the immutable baseline, before any new enrollment.
 install -d -m 0755 "$new_release"
 for area in bin lib apps schema install registry hosts; do cp -a "$new_root/$area" "$new_release/$area"; done
-install -d -m 0755 "$new_release/apps/demo"
+install -d -m 0755 "$new_release/apps/fixture-app"
+sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' -e 's/X-Demo-Route-Generation/X-Fixture-App-Route-Generation/g' "$new_root/tests/integration/fixtures/demo/adapter.sh" > "$new_release/apps/fixture-app/adapter.sh"
+chmod 0755 "$new_release/apps/fixture-app/adapter.sh"
+sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' "$new_root/tests/integration/fixtures/demo/docker-compose.prod.yml" > "$new_release/apps/fixture-app/docker-compose.prod.yml"
+sed -e 's/demo/fixture-app/g' -e 's/18081/20128/g' -e 's/X-Demo-Route-Generation/X-Fixture-App-Route-Generation/g' "$new_root/tests/integration/fixtures/demo/registry.yml" > "$new_release/registry/fixture-app.yml"
+install -d -m 0755 "$new_release/apps/demo" 
 cp "$new_root/tests/integration/fixtures/demo/registry.yml" "$new_release/registry/demo.yml"
 cp "$new_root/tests/integration/fixtures/demo/adapter.sh" "$new_root/tests/integration/fixtures/demo/docker-compose.prod.yml" "$new_release/apps/demo/"
 python3 - "$new_release" "$fixture" "$api" "$ssh_port" <<'PY'
 import pathlib, sys, yaml
 release, work, api, port = sys.argv[1:]
 release = pathlib.Path(release)
-reg = release/'registry/9router.yml'
+reg = release/'registry/fixture-app.yml'
 value = yaml.safe_load(reg.read_text())
 value['host'] = 'fixture-local'
-# This separate gateway/RTK migration VM intentionally has no browser runtime.
-# CGW activation and real singleton lifecycle run in cgw-runtime-ci.yml instead.
-value['manifest'].pop('cgw', None)
+# Standard fixture registration
 reg.write_text(yaml.safe_dump(value, sort_keys=False))
 host = yaml.safe_load((release/'hosts/oracle-main.yml').read_text())
 host['host'] = 'fixture-local'
 host['ssh'].update(address='127.0.0.1', port=int(port))
 host['traefik']['dynamic_dir'] = work+'/dynamic'
-host['apps']['9router'].update(api_host=api, dashboard_host='dashboard.platform-smoke.test', dashboard_alias_host='legacy.platform-smoke.test', work_dir=work+'/work')
-host['apps']['9router'].pop('cgw_network', None)
+host['apps']['fixture-app'].update(api_host=api, dashboard_host='dashboard.platform-smoke.test', dashboard_alias_host='legacy.platform-smoke.test', work_dir=work+'/work')
 host['apps']['demo'] = dict(api_host='demo.fixture.test', dashboard_host='', dashboard_alias_host='', work_dir=work+'/demo', compose_project='demo', edge_network='edge-demo', route_name='demo.yml')
 (release/'hosts/fixture-local.yml').write_text(yaml.safe_dump(host, sort_keys=False))
 PY
@@ -272,15 +275,15 @@ git -C "$fixture/source" add .deploy/app.yml
 git -C "$fixture/source" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'test: fixture caller manifest'
 app_sha=$(git -C "$fixture/source" rev-parse HEAD)
 state_before=$(sha256sum "$state/state.json" | cut -d' ' -f1)
-route_before=$(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1)
-bash "$new_release/install/install.sh" --fixture --check --app 9router --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/key.pub"
-[[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$route_before" ]]
-bash "$new_release/install/install.sh" --fixture --app 9router --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/key.pub"
-[[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$route_before" ]]
+route_before=$(sha256sum "$fixture/dynamic/fixture-app.yml" | cut -d' ' -f1)
+bash "$new_release/install/install.sh" --fixture --check --app fixture-app --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/key.pub"
+[[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/fixture-app.yml" | cut -d' ' -f1) == "$route_before" ]]
+bash "$new_release/install/install.sh" --fixture --app fixture-app --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/key.pub"
+[[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/fixture-app.yml" | cut -d' ' -f1) == "$route_before" ]]
 release=$new_release release_sha=$new_sha root=$new_root
-"$release/bin/deployctl" status --app 9router --strict | assert_json '{"healthy":true}'
-printf 'BASELINE_9ROUTER_MIGRATION_OK\n'
-docker run -d --name omniroute-blue --network edge-9router -e DEPLOY_SLOT=blue "$first" >/dev/null
+"$release/bin/deployctl" status --app fixture-app --strict | assert_json '{"healthy":true}'
+printf 'BASELINE_MIGRATION_OK\n'
+docker run -d --name omniroute-blue --network edge-fixture-app -e DEPLOY_SLOT=blue "$first" >/dev/null
 bash "$release/apps/omniroute/adapter.sh" blue bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb omni-admin.platform-smoke.test '' omni-api.platform-smoke.test > "$fixture/dynamic/omniroute.yml"
 chmod 0644 "$fixture/dynamic/omniroute.yml"
 for _ in {1..40}; do
@@ -340,7 +343,7 @@ for _ in {1..40}; do if curl -fsS --cacert "$ca" 'https://demo.fixture.test/heal
 curl -fsS --cacert "$ca" 'https://demo.fixture.test/healthz' | assert_json '{"deployment_slot":"blue"}'
 ssh-keygen -q -t ed25519 -N '' -f "$fixture/demo-key"
 bash "$new_release/install/install.sh" --fixture --check --app demo --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$app_sha" --public-key "$fixture/demo-key.pub" || demo_check_failed=1
-[[ ${demo_check_failed:-} == 1 ]] # A 9router manifest cannot enroll demo.
+[[ ${demo_check_failed:-} == 1 ]] # A fixture-app manifest cannot enroll demo.
 cp "$demo_profile/app.yml" "$fixture/source/.deploy/app.yml"
 git -C "$fixture/source" add .deploy/app.yml
 git -C "$fixture/source" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'test: fixture demo manifest'
@@ -348,8 +351,8 @@ demo_sha=$(git -C "$fixture/source" rev-parse HEAD)
 bash "$new_release/install/install.sh" --fixture --check --app demo --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$demo_sha" --public-key "$fixture/demo-key.pub"
 demo_user_created=1
 bash "$new_release/install/install.sh" --fixture --app demo --host fixture-local --release "$new_sha" --app-source "$fixture/source" --app-ref "$demo_sha" --public-key "$fixture/demo-key.pub"
-"$new_release/bin/deployctl" adopt --app demo --strict | assert_json '{"healthy":true,"rtk_healthy":null}'
-[[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$route_before" ]]
+"$new_release/bin/deployctl" adopt --app demo --strict | assert_json '{"healthy":true,"healthy":true}'
+[[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/fixture-app.yml" | cut -d' ' -f1) == "$route_before" ]]
 printf 'SECOND_APP_ADOPT_OK\n'
 demo_ssh() { ssh -i "$fixture/demo-key" -p "$ssh_port" -o UserKnownHostsFile="$fixture/known_hosts" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes deploy-demo@127.0.0.1 deployctl; }
 demo_request() { python3 - "$1" "$2" "$3" "$demo_sha" "$new_sha" "$(sha256sum "$demo_profile/app.yml" | cut -d' ' -f1)" <<'PY'
@@ -371,18 +374,18 @@ demo_poll() { local id=$1 answer
   done
   echo DEMO_TIMEOUT >&2; return 1
 }
-cross=$(printf '{"version":1,"op":"status","app":"9router"}' | demo_ssh || true)
+cross=$(printf '{"version":1,"op":"status","app":"fixture-app"}' | demo_ssh || true)
 printf '%s' "$cross" | assert_json '{"status":"failed","error_code":"APP_BINDING_MISMATCH"}'
 cross=$(printf '{"version":1,"op":"status","app":"demo"}' | ssh_request || true)
 printf '%s' "$cross" | assert_json '{"status":"failed","error_code":"APP_BINDING_MISMATCH"}'
 (cd "$fixture/source" && DEPLOY_KEY_FILE="$fixture/demo-key" GITHUB_STEP_SUMMARY="$fixture/demo-summary" python3 "$new_root/scripts/ssh-request.py" --fixture --platform-root "$new_release" --app demo --host fixture-local --operation deploy --component app --source-sha "$demo_sha" --platform-ref "$new_sha" --config .deploy/app.yml --request-id demo-deploy --image "$demo_second")
-demo_poll demo-deploy | assert_json '{"status":"complete","healthy":true,"rtk_healthy":null}'
+demo_poll demo-deploy | assert_json '{"status":"complete","healthy":true,"healthy":true}'
 curl -fsS --cacert "$ca" 'https://demo.fixture.test/healthz' | assert_json '{"deployment_slot":"green"}'
 printf '%s' "$(demo_request rollback demo-rollback '')" | demo_ssh | assert_json '{"status":"running"}'
 demo_poll demo-rollback | assert_json '{"status":"complete","healthy":true}'
 printf '%s' "$(demo_request reconcile demo-reconcile '')" | demo_ssh | assert_json '{"status":"running"}'
 demo_poll demo-reconcile | assert_json '{"status":"complete","healthy":true}'
-[[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$route_before" ]]
+[[ $(sha256sum "$state/state.json" | cut -d' ' -f1) == "$state_before" && $(sha256sum "$fixture/dynamic/fixture-app.yml" | cut -d' ' -f1) == "$route_before" ]]
 printf 'DEMO_DEPLOY_ROLLBACK_RECONCILE_OK\n'
 
 
@@ -391,16 +394,16 @@ foreign=$(printf '{"version":1,"op":"status","app":"acb"}' | ssh_request || true
 printf '%s' "$foreign" | assert_json '{"status":"failed","error_code":"APP_BINDING_MISMATCH"}'
 for bad in 'id' 'sudo -n id'; do
   # shellcheck disable=SC2029 # Deliberately send these literal commands to the forced SSH endpoint.
-  if ssh "${ssh_args[@]}" deploy-9router@127.0.0.1 "$bad" </dev/null >/dev/null 2>&1; then echo "Arbitrary command accepted: $bad" >&2; exit 1; fi
+  if ssh "${ssh_args[@]}" deploy-fixture-app@127.0.0.1 "$bad" </dev/null >/dev/null 2>&1; then echo "Arbitrary command accepted: $bad" >&2; exit 1; fi
 done
-if printf 'ls\n' | sftp -b - -i "$fixture/key" -P "$ssh_port" -o UserKnownHostsFile="$fixture/known_hosts" -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes deploy-9router@127.0.0.1 >/dev/null 2>&1; then echo 'SFTP accepted' >&2; exit 1; fi
-if scp -O -P "$ssh_port" -i "$fixture/key" -o UserKnownHostsFile="$fixture/known_hosts" -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes "$fixture/sentinel.sha" deploy-9router@127.0.0.1:/tmp/platform-smoke-injection >/dev/null 2>&1; then echo 'SCP accepted' >&2; exit 1; fi
+if printf 'ls\n' | sftp -b - -i "$fixture/key" -P "$ssh_port" -o UserKnownHostsFile="$fixture/known_hosts" -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes deploy-fixture-app@127.0.0.1 >/dev/null 2>&1; then echo 'SFTP accepted' >&2; exit 1; fi
+if scp -O -P "$ssh_port" -i "$fixture/key" -o UserKnownHostsFile="$fixture/known_hosts" -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes "$fixture/sentinel.sha" deploy-fixture-app@127.0.0.1:/tmp/platform-smoke-injection >/dev/null 2>&1; then echo 'SCP accepted' >&2; exit 1; fi
 [[ ! -e /tmp/platform-smoke-injection ]]
-if ssh -W 127.0.0.1:5000 "${ssh_args[@]}" deploy-9router@127.0.0.1 </dev/null >/dev/null 2>&1; then echo 'Forwarding accepted' >&2; exit 1; fi
+if ssh -W 127.0.0.1:5000 "${ssh_args[@]}" deploy-fixture-app@127.0.0.1 </dev/null >/dev/null 2>&1; then echo 'Forwarding accepted' >&2; exit 1; fi
 ssh-keygen -q -t ed25519 -N '' -f "$fixture/wrong-host"
 printf '[127.0.0.1]:%s %s\n' "$ssh_port" "$(cat "$fixture/wrong-host.pub")" > "$fixture/wrong-known"
-if printf '{"version":1,"op":"status","app":"9router"}' | ssh -i "$fixture/key" -p "$ssh_port" -o UserKnownHostsFile="$fixture/wrong-known" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes deploy-9router@127.0.0.1 deployctl >/dev/null 2>&1; then echo 'Wrong host key accepted' >&2; exit 1; fi
-printf '{"version":1,"op":"status","app":"9router"}' | ssh_request | assert_json '{"healthy":true}'
+if printf '{"version":1,"op":"status","app":"fixture-app"}' | ssh -i "$fixture/key" -p "$ssh_port" -o UserKnownHostsFile="$fixture/wrong-known" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes deploy-fixture-app@127.0.0.1 deployctl >/dev/null 2>&1; then echo 'Wrong host key accepted' >&2; exit 1; fi
+printf '{"version":1,"op":"status","app":"fixture-app"}' | ssh_request | assert_json '{"healthy":true}'
 [[ $(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$ca" "https://$api/internal") == 403 ]]
 [[ $(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$ca" "https://$api/api/settings") == 403 ]]
 curl -fsS --cacert "$ca" 'https://sentinel.platform-smoke.test/api/health' | assert_json '{"deployment_slot":"blue"}'
@@ -409,8 +412,8 @@ cp "$fixture/dynamic/shared.yml" "$fixture/shared.saved"
 printf 'http: {routers: {fixture-sentinel: 1, fixture-sentinel: 2}}\n' > "$fixture/dynamic/shared.yml"
 printf '%s' "$(make_request deploy app fixture-bad-route "$second")" | ssh_request | assert_json '{"status":"running"}'
 if poll fixture-bad-route 2> "$fixture/bad-route.log"; then echo 'Malformed shared YAML accepted' >&2; exit 1; fi
-[[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
-if docker container inspect 9router-green >/dev/null 2>&1; then echo 'Candidate started before preflight' >&2; exit 1; fi
+[[ $(docker inspect -f '{{.State.Running}}' fixture-app-blue) == true ]]
+if docker container inspect fixture-app-green >/dev/null 2>&1; then echo 'Candidate started before preflight' >&2; exit 1; fi
 cp "$fixture/shared.saved" "$fixture/dynamic/shared.yml"
 sha256sum -c "$fixture/sentinel.sha" >/dev/null
 # Unreadable sibling dynamic route file fails preflight before candidate container starts
@@ -418,10 +421,10 @@ printf 'http: {}\n' > "$fixture/dynamic/acb.yml"
 chmod 0600 "$fixture/dynamic/acb.yml"
 printf '%s' "$(make_request deploy app fixture-unreadable-sibling "$second")" | ssh_request | assert_json '{"status":"running"}'
 if poll fixture-unreadable-sibling 2> "$fixture/unreadable-sibling.log"; then echo 'Unreadable sibling route accepted' >&2; exit 1; fi
-[[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
-if docker container inspect 9router-green >/dev/null 2>&1; then echo 'Candidate started despite unreadable sibling route' >&2; exit 1; fi
+[[ $(docker inspect -f '{{.State.Running}}' fixture-app-blue) == true ]]
+if docker container inspect fixture-app-green >/dev/null 2>&1; then echo 'Candidate started despite unreadable sibling route' >&2; exit 1; fi
 rm -f "$fixture/dynamic/acb.yml"
-printf '{"version":1,"op":"deploy","app":"9router","component":"app","request_id":"invalid-image","platform_ref":"%s","source_sha":"%040d","manifest_sha256":"%s","image":"localhost:5000/9router:latest"}' "$release_sha" 0 "$(sha256sum "$profile/app.yml" | cut -d' ' -f1)" | ssh_request > "$fixture/rejected.json" || true
+printf '{"version":1,"op":"deploy","app":"fixture-app","component":"app","request_id":"invalid-image","platform_ref":"%s","source_sha":"%040d","manifest_sha256":"%s","image":"localhost:5000/fixture-app:latest"}' "$release_sha" 0 "$(sha256sum "$profile/app.yml" | cut -d' ' -f1)" | ssh_request > "$fixture/rejected.json" || true
 assert_json '{"status":"failed","error_code":"INVALID_IMAGE"}' < "$fixture/rejected.json"
 fault receipt_saved
 receipt_req=$(make_request reconcile app fixture-receipt '')
@@ -450,9 +453,9 @@ fault after_rename
 printf '%s' "$(make_request deploy app fixture-after-rename "$second")" | ssh_request | assert_json '{"status":"running"}'
 interrupted_status fixture-after-rename | assert_json '{"status":"recovery_required"}'
 rm "$fixture/work/fault"
-python3 - "$fixture/dynamic/9router.yml" "$state/state.json" <<'PY'
+python3 - "$fixture/dynamic/fixture-app.yml" "$state/state.json" <<'PY'
 import json,sys,yaml
-route=yaml.safe_load(open(sys.argv[1]))['http']; state=json.load(open(sys.argv[2])); assert state['active']['slot']=='blue' and state['operation']['phase']=='publishing'; assert route['services']['9router-service']['loadBalancer']['servers']==[{'url':'http://9router-green:20128'}]
+route=yaml.safe_load(open(sys.argv[1]))['http']; state=json.load(open(sys.argv[2])); assert state['active']['slot']=='blue' and state['operation']['phase']=='publishing'; assert route['services']['fixture-app-service']['loadBalancer']['servers']==[{'url':'http://fixture-app-green:20128'}]
 PY
 printf '%s' "$(make_request reconcile app fixture-after-reconcile '')" | ssh_request | assert_json '{"status":"running"}'
 poll fixture-after-reconcile | assert_json '{"status":"complete","healthy":true}'
@@ -486,22 +489,22 @@ poll fixture-commit-reconcile | assert_json '{"status":"complete","healthy":true
 printf '%s' "$(make_request rollback app fixture-commit-rollback '')" | ssh_request | assert_json '{"status":"running"}'
 poll fixture-commit-rollback | assert_json '{"status":"complete","healthy":true}'
 # The TLS front supplies old valid identity after Traefik's rename. CAS restore must ACK old.
-cp "$fixture/dynamic/9router.yml" "$fixture/route-before-ack"
+cp "$fixture/dynamic/fixture-app.yml" "$fixture/route-before-ack"
 touch "$fixture/stale-public-ack"
 printf '%s' "$(make_request deploy app fixture-stale-ack "$second")" | ssh_request | assert_json '{"status":"running"}'
 if poll fixture-stale-ack 2> "$fixture/stale-ack.log"; then echo 'Stale public generation committed' >&2; exit 1; fi
 rm "$fixture/stale-public-ack"
-cmp "$fixture/route-before-ack" "$fixture/dynamic/9router.yml"
+cmp "$fixture/route-before-ack" "$fixture/dynamic/fixture-app.yml"
 for _ in {1..30}; do
-  if "$release/bin/deployctl" status --app 9router --strict | assert_json '{"healthy":true}' 2>/dev/null; then break; fi
+  if "$release/bin/deployctl" status --app fixture-app --strict | assert_json '{"healthy":true}' 2>/dev/null; then break; fi
   sleep 1
 done
-"$release/bin/deployctl" status --app 9router --strict | assert_json '{"healthy":true}'
-[[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
+"$release/bin/deployctl" status --app fixture-app --strict | assert_json '{"healthy":true}'
+[[ $(docker inspect -f '{{.State.Running}}' fixture-app-blue) == true ]]
 # SSE begins through HTTPS before route publication; the old Docker slot must survive.
 curl --silent --show-error --no-buffer --cacert "$ca" "https://dashboard.platform-smoke.test/stream" > "$fixture/stream.out" & stream_pid=$!
 for _ in {1..30}; do
-  n=$(docker exec 9router-blue wget -qO- http://127.0.0.1:20128/api/health | python3 -c 'import json,sys;print(json.load(sys.stdin)["active_requests"])')
+  n=$(docker exec fixture-app-blue wget -qO- http://127.0.0.1:20128/api/health | python3 -c 'import json,sys;print(json.load(sys.stdin)["active_requests"])')
   [[ $n == 0 ]] || break
   sleep .2
 done
@@ -510,60 +513,40 @@ req=$(make_request deploy app fixture-deploy "$second")
 printf '%s' "$req" | ssh_request | assert_json '{"status":"running"}'
 printf '%s' "$req" | ssh_request | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["request_id"]=="fixture-deploy" and r["status"] in ("running","complete"),r'
 poll fixture-deploy | assert_json '{"status":"complete","healthy":true,"draining":"blue"}'
-python3 - "$fixture/dynamic/9router.yml" "$state/state.json" "$second" <<'PY'
+python3 - "$fixture/dynamic/fixture-app.yml" "$state/state.json" "$second" <<'PY'
 import json,sys,yaml
-route=yaml.safe_load(open(sys.argv[1]))['http']; state=json.load(open(sys.argv[2])); assert state['active']['slot']=='green' and state['active']['image']==sys.argv[3]; assert route['services']['9router-service']['loadBalancer']['servers']==[{'url':'http://9router-green:20128'}]
+route=yaml.safe_load(open(sys.argv[1]))['http']; state=json.load(open(sys.argv[2])); assert state['active']['slot']=='green' and state['active']['image']==sys.argv[3]; assert route['services']['fixture-app-service']['loadBalancer']['servers']==[{'url':'http://fixture-app-green:20128'}]
 PY
-[[ $(docker inspect -f '{{.Image}}' 9router-green) == "$(docker image inspect -f '{{.Id}}' "$second")" ]]
+[[ $(docker inspect -f '{{.Image}}' fixture-app-green) == "$(docker image inspect -f '{{.Id}}' "$second")" ]]
 docker image inspect "$second" | python3 -c 'import json,sys; image=json.load(sys.stdin)[0]; assert image["Os"]=="linux" and image["Architecture"]==sys.argv[1] and sys.argv[2] in image["RepoDigests"]' "$arch" "$second"
-[[ $(stat -c %a "$fixture/dynamic/9router.yml") == 644 ]]
+[[ $(stat -c %a "$fixture/dynamic/fixture-app.yml") == 644 ]]
 sha256sum -c "$fixture/sentinel.sha" >/dev/null
-[[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
-"$release/bin/deployctl" cleanup-drains --app 9router >/dev/null
-[[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
+[[ $(docker inspect -f '{{.State.Running}}' fixture-app-blue) == true ]]
+"$release/bin/deployctl" cleanup-drains --app fixture-app >/dev/null
+[[ $(docker inspect -f '{{.State.Running}}' fixture-app-blue) == true ]]
 conflict=$(printf '%s' "$(make_request deploy app fixture-deploy "$first")" | ssh_request || true)
 printf '%s' "$conflict" | assert_json '{"status":"failed","error_code":"REQUEST_CONFLICT"}'
 # Stream release is signaled inside its persistent Docker volume; retained container stops only after zero.
-docker exec 9router-blue touch /app/data/release-stream
+docker exec fixture-app-blue touch /app/data/release-stream
 wait "$stream_pid"; stream_pid=
 python3 - "$fixture/stream.out" <<'PY'
 import sys
 assert open(sys.argv[1]).read().count('data:')==2
 PY
 for unsafe in unknown negative boolean; do
-  docker exec 9router-blue sh -c "printf '%s' '$unsafe' > /app/data/health-override"
-  "$release/bin/deployctl" cleanup-drains --app 9router >/dev/null
-  [[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
+  docker exec fixture-app-blue sh -c "printf '%s' '$unsafe' > /app/data/health-override"
+  "$release/bin/deployctl" cleanup-drains --app fixture-app >/dev/null
+  [[ $(docker inspect -f '{{.State.Running}}' fixture-app-blue) == true ]]
 done
-docker exec 9router-blue rm /app/data/health-override
-"$release/bin/deployctl" cleanup-drains --app 9router >/dev/null
-[[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == false ]]
+docker exec fixture-app-blue rm /app/data/health-override
+"$release/bin/deployctl" cleanup-drains --app fixture-app >/dev/null
+[[ $(docker inspect -f '{{.State.Running}}' fixture-app-blue) == false ]]
 printf '%s' "$(make_request rollback app fixture-rollback '')" | ssh_request | assert_json '{"status":"running"}'
 poll fixture-rollback | assert_json '{"status":"complete","healthy":true}'
-[[ $(docker inspect -f '{{.State.Running}}' 9router-blue) == true ]]
-printf '%s' "$(make_request deploy rtk fixture-rtk "$rtk")" | ssh_request | assert_json '{"status":"running"}'
-poll fixture-rtk | assert_json '{"status":"complete","rtk_healthy":true}'
+[[ $(docker inspect -f '{{.State.Running}}' fixture-app-blue) == true ]]
 sha256sum -c "$fixture/sentinel.sha" >/dev/null
-before_route=$(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1)
-printf '%s' "$(make_request deploy rtk fixture-rtk-bad "$rtk_bad")" | ssh_request | assert_json '{"status":"running"}'
-if poll fixture-rtk-bad 2> "$fixture/rtk-bad.log"; then echo 'Unhealthy sidecar accepted' >&2; exit 1; fi
-python3 - "$state/state.json" "$state/requests/fixture-rtk-bad/result.json" "$rtk" <<'PY'
-import json,sys
-state=json.load(open(sys.argv[1])); result=json.load(open(sys.argv[2])); assert state['rtk']['current']==sys.argv[3] and result['error_code']=='RTK_UPGRADE_FAILED'
-PY
-fault rtk_started
-printf '%s' "$(make_request deploy rtk fixture-rtk-started "$rtk_bad")" | ssh_request | assert_json '{"status":"running"}'
-interrupted_status fixture-rtk-started | assert_json '{"status":"recovery_required"}'
-rm "$fixture/work/fault"
-python3 - "$state/state.json" "$rtk" <<'PY'
-import json,sys
-state=json.load(open(sys.argv[1])); assert state['rtk']['current']==sys.argv[2] and state['operation']['phase']=='rtk_started'
-PY
-printf '%s' "$(make_request reconcile rtk fixture-rtk-reconcile '')" | ssh_request | assert_json '{"status":"running"}'
-poll fixture-rtk-reconcile | assert_json '{"status":"complete","rtk_healthy":true}'
-[[ $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$before_route" ]]
 # A held app lock makes concurrent systemd worker return APP_BUSY without touching route.
-flock -x "$locks/9router@operation.lock" -c "touch '$fixture/lock-held'; sleep 8" & locker=$!
+flock -x "$locks/fixture-app@operation.lock" -c "touch '$fixture/lock-held'; sleep 8" & locker=$!
 for _ in {1..30}; do [[ ! -e $fixture/lock-held ]] || break; sleep .1; done
 [[ -e $fixture/lock-held ]]
 printf '%s' "$(make_request reconcile app fixture-busy '')" | ssh_request >/dev/null
@@ -625,9 +608,9 @@ PY
   fi
   return 1
 }
-docker exec 9router-green touch /app/data/health-gate-blue
+docker exec fixture-app-green touch /app/data/health-gate-blue
 docker exec demo-green touch /app/data/health-gate-blue
-router_route_before=$(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1)
+router_route_before=$(sha256sum "$fixture/dynamic/fixture-app.yml" | cut -d' ' -f1)
 demo_route_before=$(sha256sum "$fixture/dynamic/demo.yml" | cut -d' ' -f1)
 printf '%s' "$(make_request deploy app fixture-shared-lock "$first")" | ssh_request | assert_json '{"status":"running"}'
 printf '%s' "$(demo_request deploy demo-shared-lock "$demo_first")" | demo_ssh | assert_json '{"status":"running"}'
@@ -635,11 +618,11 @@ wait_phase "$state/state.json" prepared fixture-shared-lock
 wait_phase "$demo_state/state.json" prepared demo-shared-lock
 exec {publish_fd}> "$locks/traefik.lock"
 flock -x "$publish_fd"
-docker exec 9router-green rm /app/data/health-gate-blue
+docker exec fixture-app-green rm /app/data/health-gate-blue
 docker exec demo-green rm /app/data/health-gate-blue
 wait_phase "$state/state.json" candidate_ready fixture-shared-lock
 wait_phase "$demo_state/state.json" candidate_ready demo-shared-lock
-[[ $(sha256sum "$fixture/dynamic/9router.yml" | cut -d' ' -f1) == "$router_route_before" && $(sha256sum "$fixture/dynamic/demo.yml" | cut -d' ' -f1) == "$demo_route_before" ]]
+[[ $(sha256sum "$fixture/dynamic/fixture-app.yml" | cut -d' ' -f1) == "$router_route_before" && $(sha256sum "$fixture/dynamic/demo.yml" | cut -d' ' -f1) == "$demo_route_before" ]]
 flock -u "$publish_fd"
 exec {publish_fd}>&-
 poll fixture-shared-lock | assert_json '{"status":"complete","healthy":true}'
@@ -658,4 +641,4 @@ printf 'APP_RECEIPT_ISOLATION_OK\n'
 
 
 
-printf 'Real Docker/Traefik v3.7.13, TLS CA, forced SSH/systemd, identity, SSE drain, rollback, RTK, busy passed\n'
+printf 'Real Docker/Traefik v3.7.13, TLS CA, forced SSH/systemd, identity, SSE drain, rollback, busy passed\n'

@@ -17,10 +17,10 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 ctl = importlib.util.module_from_spec(spec)
 loader.exec_module(ctl)
 
-APP_IMAGE = 'ghcr.io/thedemontuan/9router'
+APP_IMAGE = 'ghcr.io/thedemontuan/omniroute-vps'
 DIGEST = APP_IMAGE + '@sha256:' + 'd'*64
-REQUEST = {'version':1, 'op':'deploy', 'app':'9router', 'component':'app', 'request_id':'test-receipt', 'platform_ref':'a'*40, 'manifest_sha256':'b'*64, 'source_sha':'c'*40, 'image':DIGEST}
-PROFILE = {'app': '9router', 'platform_ref': 'a'*40, 'registration': {'manifest': {'rtk': {'image': 'ghcr.io/thedemontuan/rtk-sidecar'}}}, 'image_repository': APP_IMAGE, 'rtk_image_repository': 'ghcr.io/thedemontuan/rtk-sidecar'}
+REQUEST = {'version':1, 'op':'deploy', 'app':'omniroute', 'component':'app', 'request_id':'test-receipt', 'platform_ref':'a'*40, 'manifest_sha256':'b'*64, 'source_sha':'c'*40, 'image':DIGEST}
+PROFILE = {'app': 'omniroute', 'platform_ref': 'a'*40, 'registration': {'manifest': {'strategy': 'blue-green'}}, 'image_repository': APP_IMAGE}
 
 
 class ReceiptRecovery(unittest.TestCase):
@@ -51,32 +51,6 @@ class ReceiptRecovery(unittest.TestCase):
                 self.assertEqual(ctl.submit(REQUEST, home, state, locks)['status'], 'recovery_required')
                 self.assertEqual(load(state/'requests'/REQUEST['request_id']/'request.json'), REQUEST)
 
-    def test_rtk_kill_after_up_commits_only_if_digest_healthy(self):
-        with tempfile.TemporaryDirectory() as home:
-            home=Path(home)
-            cfg=home/'cfg'; cfg.mkdir(); lock=home/'lock'; lock.mkdir()
-            old='ghcr.io/thedemontuan/rtk-sidecar@sha256:'+'a'*64
-            new='ghcr.io/thedemontuan/rtk-sidecar@sha256:'+'b'*64
-            state={'version':1,'revision':3,'rtk':{'current':old,'previous':None},'operation':{'request_id':'crashed','component':'rtk','phase':'rtk_started','previous':old,'previous_id':'sha256:'+'c'*64,'image':new}}
-            save(home/'state.json', state)
-            req={'component':'rtk'}
-            with mock.patch.object(operations, 'rtk_wait') as healthy:
-                operations.reconcile(req, state, home, cfg, home, {'app': '9router'}, lock)
-                self.assertEqual(state['rtk'], {'current':new,'previous':old})
-                self.assertIsNone(load(home/'state.json')['operation'])
-
-    def test_rtk_uncertain_previous_keeps_intent(self):
-        with tempfile.TemporaryDirectory() as home:
-            home=Path(home)
-            old='ghcr.io/thedemontuan/rtk-sidecar@sha256:'+'a'*64
-            new='ghcr.io/thedemontuan/rtk-sidecar@sha256:'+'b'*64
-            state={'version':1,'revision':1,'rtk':{'current':old,'previous':None},'operation':{'request_id':'crashed','component':'rtk','phase':'rtk_started','previous':None,'previous_id':None,'image':new}}
-            save(home/'state.json', state)
-            with mock.patch.object(operations,'rtk_wait',side_effect=Failure('RTK_UNHEALTHY')):
-                with self.assertRaisesRegex(Failure,'RECOVERY_REQUIRED'):
-                    operations.reconcile({'component':'rtk'},state,home,home,home,{'app': '9router'},home)
-            self.assertEqual(load(home/'state.json')['operation']['phase'],'rtk_started')
-
     def test_route_ack_crash_commits_recorded_target(self):
         with tempfile.TemporaryDirectory() as home:
             home=Path(home); (home/'requests').mkdir()
@@ -86,10 +60,10 @@ class ReceiptRecovery(unittest.TestCase):
             original=b'old route bytes'; candidate=b'new route bytes'
             snapshot=home/'requests'/'snapshot'; atomic(snapshot,original)
             intent={'request_id':'crashed','component':'app','phase':'publishing','old_hash':__import__('core').digest(original),'old_generation':'1'*32,'snapshot':str(snapshot),'target':'green','image':new_ref,'new_hash':__import__('core').digest(candidate),'new_generation':'2'*32,'target_entry':new}
-            state={'version':1,'revision':4,'active':old,'previous':None,'rtk':{'current':None,'previous':None},'operation':intent,'generation':'1'*32,'draining':None}
+            state={'version':1,'revision':4,'active':old,'previous':None,'operation':intent,'generation':'1'*32,'draining':None}
             save(home/'state.json',state)
             with mock.patch.object(operations,'lock',side_effect=lambda *_: contextlib.nullcontext()), mock.patch.object(operations.route,'dynamic',return_value=home), mock.patch.object(operations.route,'preflight',return_value=(home/'route.yml',candidate,{})), mock.patch.object(operations.route,'route_state',return_value=('green','2'*32)), mock.patch.object(operations,'wait_health') as direct, mock.patch.object(operations.route,'ack') as ack:
-                profile = {'app': '9router', 'route_name': '9router.yml'}
+                profile = {'app': 'omniroute', 'route_name': 'omniroute.yml'}
                 operations.reconcile({'component':'app'},state,home,home,home,profile,home)
                 self.assertEqual(state['active']['image'], new_ref)
             observed=load(home/'state.json')
@@ -104,11 +78,11 @@ class ReceiptRecovery(unittest.TestCase):
             atomic(home/'snapshot',original)
             old={'slot':'blue','image':DIGEST,'platform_ref':'a'*40,'manifest_sha256':'b'*64}
             new=dict(old,slot='green')
-            state={'version':1,'revision':2,'active':old,'previous':None,'rtk':{'current':None,'previous':None},'operation':{'request_id':'crashed','component':'app','phase':'publishing','old_hash':__import__('core').digest(original),'old_generation':'1'*32,'snapshot':str(home/'snapshot'),'target':'green','image':DIGEST,'new_hash':__import__('core').digest(candidate),'new_generation':'2'*32,'target_entry':new},'generation':'1'*32,'draining':None}
+            state={'version':1,'revision':2,'active':old,'previous':None,'operation':{'request_id':'crashed','component':'app','phase':'publishing','old_hash':__import__('core').digest(original),'old_generation':'1'*32,'snapshot':str(home/'snapshot'),'target':'green','image':DIGEST,'new_hash':__import__('core').digest(candidate),'new_generation':'2'*32,'target_entry':new},'generation':'1'*32,'draining':None}
             save(home/'state.json',state)
             with mock.patch.object(operations,'lock',side_effect=lambda *_: contextlib.nullcontext()), mock.patch.object(operations.route,'dynamic',return_value=home), mock.patch.object(operations.route,'preflight',return_value=(home/'route.yml',candidate,{})), mock.patch.object(operations.route,'route_state',return_value=('green','2'*32)), mock.patch.object(operations,'wait_health',side_effect=Failure('CANDIDATE_UNHEALTHY')), mock.patch.object(operations.route,'ack') as ack:
                 with self.assertRaisesRegex(Failure,'RECOVERY_REQUIRED'):
-                    operations.reconcile({'component':'app'},state,home,home,home,{'app': '9router', 'route_name': '9router.yml'},home)
+                    operations.reconcile({'component':'app'},state,home,home,home,{'app': 'omniroute', 'route_name': 'omniroute.yml'},home)
                 ack.assert_not_called()
             observed=load(home/'state.json')
             self.assertEqual(observed['active'],old)

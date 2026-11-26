@@ -44,7 +44,7 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" ]]
           [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ ]]
           [[ "$APP" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
-          [[ "$COMPONENT" =~ ^(app|cgw)$ ]]
+          [[ "$COMPONENT" == app ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: TheDemonTuan/vps-deploy
@@ -95,14 +95,13 @@ jobs:
           sys.path.insert(0, 'platform/lib')
           from core import app_registration
           registration = app_registration(Path('platform'), os.environ['APP'])
-          component = os.environ['COMPONENT']
-          image = registration['manifest']['image'] if component == 'app' else registration['manifest']['cgw']['image']
+          image = registration['manifest']['image']
           if not image.startswith('ghcr.io/') or registration['manifest']['platform'] != 'linux/arm64':
               raise SystemExit('unsupported production build policy')
           allowed_ref = registration['caller'].get('ref', 'refs/heads/master')
           caller_ref = os.environ.get('CALLER_REF', '')
           tags = [f"{image}:sha-{os.environ['SOURCE_SHA']}"]
-          if component == 'app' and caller_ref == allowed_ref:
+          if caller_ref == allowed_ref:
               tags.append(f"{image}:latest")
           build_policy = registration['manifest'].get('build', {})
           dockerfile_rel = build_policy.get('dockerfile', 'Dockerfile')
@@ -134,110 +133,14 @@ jobs:
           cache-to: type=gha,mode=min,ignore-error=true
           provenance: false
           sbom: false
-      - name: Build native runtime for compatibility proof
-        if: inputs.component == 'cgw'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: source
-          file: source/services/chatgpt-web-runtime/Dockerfile
-          load: true
-          push: false
-          platforms: linux/arm64
-          tags: cgw-runtime:proof-${{ inputs.source-sha }}
-          build-args: APP_REVISION=${{ inputs.source-sha }}
-          cache-from: type=gha,scope=cgw-runtime-arm64
-          cache-to: type=gha,scope=cgw-runtime-arm64,mode=min,ignore-error=true
-          provenance: false
-          sbom: false
-      - name: Prove compatibility and publish evidence-bearing runtime
-        if: inputs.component == 'cgw'
-        env:
-          SOURCE_SHA: ${{ inputs.source-sha }}
-        run: |
-          set -euo pipefail
-          [[ "$(uname -m)" == aarch64 ]]
-          package="$GITHUB_WORKSPACE/source/services/chatgpt-web-runtime"
-          evidence="$RUNNER_TEMP/cgw-build-evidence"
-          mkdir -m 0700 "$evidence"
-          sudo chown 10001:10001 "$evidence"
-          cache="cgw-build-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "CGW_BROWSER_VOLUME=$cache" >> "$GITHUB_ENV"
-          docker volume create "$cache"
-          raw="cgw-runtime:proof-$SOURCE_SHA"
-          docker run --rm --read-only --user 10001:10001 --cap-drop ALL \
-            --name "${cache}-init" \
-            --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
-            --mount "type=volume,src=$cache,dst=/opt/cgw-browser" \
-            --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-            --tmpfs /run:rw,nosuid,nodev,mode=0700,uid=10001,gid=10001 \
-            "$raw" python3 scripts/install-browser.py --manifest image-build-manifest.json
-          hardening=(--rm --read-only --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true
-            --name "${cache}-runtime"
-            --cpus 1 --memory 2g --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
-            --mount "type=volume,src=$cache,dst=/opt/cgw-browser,readonly"
-            --tmpfs "/tmp:rw,nosuid,nodev,size=512m,mode=1777"
-            --tmpfs "/run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700"
-            --tmpfs "/data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700")
-          docker run "${hardening[@]}" -v "$evidence:/evidence:rw" "$raw" \
-            bun scripts/verify-harness-compatibility.ts /evidence/compatibility.json
-          # Only generated build evidence enters the final layer; no runtime/account state.
-          sudo chown "$(id -u):$(id -g)" "$evidence" "$evidence/compatibility.json"
-          python3 - "$evidence/compatibility.json" <<'PY'
-          import json, sys
-          evidence = json.load(open(sys.argv[1], encoding='utf-8'))
-          flags = {'nativeToolLoop', 'namespacedTools', 'freeformTools', 'compatibilityV1',
-                   'nestedSubagents', 'profileConcurrency', 'approvalOnceOnly', 'requestScopeIsolation'}
-          assert set(evidence) == flags | {'protocolVersion', 'upstreamRevision'}
-          assert type(evidence['protocolVersion']) is int and evidence['protocolVersion'] == 1
-          assert evidence['upstreamRevision'] == 'fa2d2c6c24926078b46eedb2186f69f2e8d548d7'
-          assert all(evidence[flag] is True for flag in flags)
-          PY
-          printf 'FROM %s\nCOPY --chown=10001:10001 compatibility.json /opt/cgw/compatibility.json\nLABEL org.opencontainers.image.revision="%s"\n' \
-            "$raw" "$SOURCE_SHA" > "$evidence/Dockerfile"
-          tag="$REGISTERED_IMAGE:sha-$SOURCE_SHA"
-          # The native docker driver sees the loaded, tested local base without a mutable pull.
-          docker buildx build --builder default --load --platform linux/arm64 -f "$evidence/Dockerfile" -t "$tag" "$evidence"
-          [[ "$(docker image inspect "$tag" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" == "$SOURCE_SHA" ]]
-          docker push "$tag"
-          image_ref=$(docker image inspect "$tag" --format '{{range .RepoDigests}}{{println .}}{{end}}')
-          [[ "$image_ref" =~ ^${REGISTERED_IMAGE}@sha256:[0-9a-f]{64}$ ]]
-          echo "CGW_IMAGE_REF=$image_ref" >> "$GITHUB_ENV"
       - name: Smoke exact published image
         id: smoke
         working-directory: source
         env:
-          IMAGE_REF: ${{ inputs.component == 'cgw' && env.CGW_IMAGE_REF || format('{0}@{1}', env.REGISTERED_IMAGE, steps.digest.outputs.digest) }}
+          IMAGE_REF: ${{ format('{0}@{1}', env.REGISTERED_IMAGE, steps.digest.outputs.digest) }}
           REGISTERED_IMAGE: ${{ env.REGISTERED_IMAGE }}
-          COMPONENT: ${{ inputs.component }}
         run: |
           set -euo pipefail
           [[ "$IMAGE_REF" =~ ^${REGISTERED_IMAGE}@sha256:[0-9a-f]{64}$ ]]
-          if [[ "$COMPONENT" == app ]]; then
-            bash .deploy/smoke-image.sh "$IMAGE_REF"
-          else
-            package="$GITHUB_WORKSPACE/source/services/chatgpt-web-runtime"
-            docker run --rm --read-only --user 10001:10001 --cap-drop ALL \
-              --name "${CGW_BROWSER_VOLUME}-init" \
-              --security-opt no-new-privileges:true --cpus 0.5 --memory 1g \
-              --mount "type=volume,src=$CGW_BROWSER_VOLUME,dst=/opt/cgw-browser" \
-              --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-              --tmpfs /run:rw,nosuid,nodev,mode=0700,uid=10001,gid=10001 \
-              "$IMAGE_REF" python3 scripts/install-browser.py --manifest image-build-manifest.json
-            hardening=(--rm --read-only --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true
-              --name "${CGW_BROWSER_VOLUME}-runtime"
-              --cpus 1 --memory 2g --security-opt "seccomp=$package/security/seccomp.json" --shm-size 1g
-              --mount "type=volume,src=$CGW_BROWSER_VOLUME,dst=/opt/cgw-browser,readonly"
-              --tmpfs "/tmp:rw,nosuid,nodev,size=512m,mode=1777"
-              --tmpfs "/run:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700"
-              --tmpfs "/data:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700")
-            docker run "${hardening[@]}" "$IMAGE_REF" bun scripts/image-smoke.ts --arch arm64
-            docker run "${hardening[@]}" "$IMAGE_REF" bun scripts/smoke-offline.ts
-          fi
+          bash .deploy/smoke-image.sh "$IMAGE_REF"
           echo "image-ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
-      - name: Remove owned browser cache
-        if: always() && inputs.component == 'cgw'
-        run: |
-          if [[ -n "${CGW_BROWSER_VOLUME:-}" ]]; then
-            docker rm -f "${CGW_BROWSER_VOLUME}-init" "${CGW_BROWSER_VOLUME}-runtime" >/dev/null 2>&1 || true
-            docker volume rm "$CGW_BROWSER_VOLUME"
-          fi

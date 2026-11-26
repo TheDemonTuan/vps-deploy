@@ -3,25 +3,21 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 rendered=$(mktemp)
 trap 'rm -f -- "$rendered"' EXIT
-bash "$root/apps/9router/adapter.sh" green 0123456789abcdef0123456789abcdef dashboard.test.invalid legacy.test.invalid api.test.invalid > "$rendered"
+bash "$root/apps/omniroute/adapter.sh" green 0123456789abcdef0123456789abcdef dashboard.test.invalid '' api.test.invalid > "$rendered"
 python3 - "$rendered" <<'PY'
 import sys, yaml
 with open(sys.argv[1], encoding='utf-8') as source:
     route = yaml.safe_load(source)['http']
 routers = route['routers']
-assert set(routers) == {'9router-deny-internal', '9router-api-deny-admin', '9router-api-router', '9router-api-fallback', '9router-dashboard-router'}
-assert routers['9router-deny-internal']['priority'] > routers['9router-api-router']['priority']
-assert routers['9router-api-deny-admin']['priority'] > routers['9router-api-router']['priority']
-assert 'Host(`legacy.test.invalid`)' in routers['9router-dashboard-router']['rule']
-assert 'Host(`legacy.test.invalid`)' in routers['9router-deny-internal']['rule']
-assert 'PathPrefix(`/api/settings`)' in routers['9router-api-deny-admin']['rule']
-assert 'PathPrefix(`/internal`)' in routers['9router-deny-internal']['rule']
-assert routers['9router-api-router']['middlewares'] == ['9router-route-generation', 'tunnel-only', 'public-api-rate-limit', 'security-headers']
-assert route['services']['9router-service']['loadBalancer']['responseForwarding']['flushInterval'] == '100ms'
-assert route['services']['9router-service']['loadBalancer']['servers'] == [{'url':'http://9router-green:20128'}]
-assert route['middlewares']['9router-route-generation']['headers']['customResponseHeaders']['X-9Router-Route-Generation'] == '0123456789abcdef0123456789abcdef'
+assert set(routers) == {'omniroute-deny-internal', 'omniroute-api-router', 'omniroute-api-fallback', 'omniroute-dashboard-router'}
+assert routers['omniroute-deny-internal']['priority'] > routers['omniroute-api-router']['priority']
+assert 'PathPrefix(`/internal`)' in routers['omniroute-deny-internal']['rule']
+assert routers['omniroute-api-router']['middlewares'] == ['omniroute-api-key-only', 'omniroute-route-generation', 'tunnel-only', 'public-api-rate-limit', 'security-headers']
+assert route['services']['omniroute-service']['loadBalancer']['responseForwarding']['flushInterval'] == '100ms'
+assert route['services']['omniroute-service']['loadBalancer']['servers'] == [{'url':'http://omniroute-green:20128'}]
+assert route['middlewares']['omniroute-route-generation']['headers']['customResponseHeaders']['X-OmniRoute-Route-Generation'] == '0123456789abcdef0123456789abcdef'
 PY
-if bash "$root/apps/9router/adapter.sh" blue 0123456789abcdef0123456789abcdef 'bad`' '' api.test.invalid > /dev/null 2>&1; then echo UNSAFE_HOST_ACCEPTED >&2; exit 1; fi
+if bash "$root/apps/omniroute/adapter.sh" blue 0123456789abcdef0123456789abcdef 'bad`' '' api.test.invalid > /dev/null 2>&1; then echo UNSAFE_HOST_ACCEPTED >&2; exit 1; fi
 helper="$root/lib/traefik.sh"
 for bad in '/a/../healthz X-Demo-Route-Generation' '/healthz Bad:Header' '/healthz X-Demo-Route-Generation?'; do
   read -r path header <<< "$bad"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolated HTTP slot, RTK, and loopback TLS proxy for disposable runner."""
+"""Isolated HTTP slot and loopback TLS proxy for disposable runner."""
 import http.client
 import json
 import os
@@ -35,11 +35,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if mode == 'rtk' and self.path == '/filter':
-            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-            self.send_json({'protocolVersion': 1, 'content': body['content'].splitlines()[0]})
-        else:
-            self.send_error(404)
+        self.send_error(404)
 
     def do_GET(self):
         global active
@@ -49,7 +45,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.dumps({'ok': True, 'deployment_slot': 'blue'}).encode()
                 self.send_response(200)
                 self.send_header('Cache-Control', 'no-store')
-                self.send_header('X-9Router-Route-Generation', '1' * 32)
+                self.send_header(os.environ.get('GENERATION_HEADER', 'X-Fixture-Route-Generation'), '1' * 32)
                 self.send_header('Content-Length', str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -78,14 +74,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(body)
             finally:
                 connection.close()
-            return
-        if mode == 'rtk':
-            if self.path == '/health':
-                self.send_json({'ok': True})
-            elif self.path == '/version':
-                self.send_json({'protocolVersion': 1})
-            else:
-                self.send_error(404)
             return
         if self.path.split('?', 1)[0] == health_path:
             with active_lock:
@@ -134,5 +122,5 @@ if mode == 'tls':
     context.load_cert_chain(sys.argv[2], sys.argv[3])
     httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
 else:
-    httpd = ThreadingHTTPServer(('0.0.0.0', 8080 if mode == 'rtk' else app_port), Handler)
+    httpd = ThreadingHTTPServer(('0.0.0.0', app_port), Handler)
 httpd.serve_forever()
