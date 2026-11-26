@@ -48,9 +48,12 @@ become() {
     sleep 35
   fi
   litestream --profile primary --profile replica down
+  # Any switch ends this node's lineage. Its served copy must go, or a replica pointed here before
+  # this node's new snapshot restores the old one and stays stuck on it; its local LTX state
+  # (.mc-hub.db-litestream) must go, or a new primary tries to continue the old lineage.
+  find /srv/platform-sync/litestream -mindepth 1 -delete
+  rm -rf "$volume/.mc-hub.db-litestream"
   if [ "$want" = primary ]; then
-    # A new lineage from this node's copy; the old primary's files would not continue it.
-    find /srv/platform-sync/litestream -mindepth 1 -delete
     echo primary >"$volume/role"
     rm -f "$follows"
     litestream --profile primary up -d
