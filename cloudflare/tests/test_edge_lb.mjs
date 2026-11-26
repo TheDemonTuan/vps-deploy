@@ -202,14 +202,14 @@ test('public images come from the bucket with the API headers; others fall throu
 test('a node takes the lease only with its key from its own address, and only once the writer stopped renewing', async () => {
   assert.equal((await leaseCall('n2', { op: 'promote' }, 'guess')).status, 404);
   assert.equal((await call('/__edge/lease/mc-hub-api', { method: 'POST', body: '{"op":"promote"}', headers: { authorization: 'Bearer node-key' } })).status, 404);
-  assert.deepEqual(await (await leaseCall('n1', { op: 'beat' })).json(), { writer: 'n1', epoch: 0, version: 0 });
+  assert.deepEqual(await (await leaseCall('n1', { op: 'beat' })).json(), { writer: 'n1', epoch: 0, version: 0, down: [] });
   const refused = await leaseCall('n2', { op: 'promote' });
   assert.equal(refused.status, 409);
   assert.equal((await refused.json()).writer, 'n1');
   assert.equal(telegrams.length, 0);
 
   const forced = await leaseCall('n2', { op: 'promote', force: true });
-  assert.deepEqual(await forced.json(), { writer: 'n2', epoch: 1, version: 1 });
+  assert.deepEqual(await forced.json(), { writer: 'n2', epoch: 1, version: 1, down: [] });
   assert.match(telegrams[0], /n2 is now the writer \(was n1, forced\)/);
   _test.leases.clear();
   await call('/api/comments', { method: 'POST', body: '{}' });
@@ -322,4 +322,49 @@ test('the cron checks every node of each leased site and alerts after two failur
   await worker.scheduled({}, env);
   assert.match(telegrams[1], /OK again: n2 thedemontuan.dev/);
   assert.match(telegrams[1], /OK again: lease/);
+});
+
+test('a read answered 500 is retried on the next node without marking the first one down', async () => {
+  replies = { n2: 500 };
+  assert.equal(await (await call('/', {}, clientOn('n2'))).text(), 'n1');
+  assert.equal(_test.downUntil.has('n2'), false);
+  replies = { n1: 500, n2: 500 };
+  assert.equal((await call('/')).status, 500);
+});
+
+test('clients start on another node while theirs fails its check, and a replica whose follower stopped is read last', async () => {
+  const client = clientOn('n2');
+  replies = { n2: 502 };
+  await worker.scheduled({}, env);
+  replies = {};
+  calls = [];
+  await call('/', {}, client);
+  assert.deepEqual(calls.map((c) => c.node), ['n1']);
+  await worker.scheduled({}, env);
+  _test.leases.clear();
+  calls = [];
+  await call('/', {}, client);
+  assert.deepEqual(calls.map((c) => c.node), ['n2']);
+  const now = Math.floor(Date.now() / 1000);
+  await leaseCall('n1', { op: 'beat', synced: now });
+  assert.deepEqual((await (await leaseCall('n2', { op: 'beat', synced: now - 600 })).json()).down, ['n2']);
+  assert.deepEqual((await (await leaseCall('n2', { op: 'beat', synced: now })).json()).down, []);
+});
+
+test('a writer failing three checks in a row hands the lease to a replica that was current, never to a stale one', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  await leaseCall('n1', { op: 'beat', synced: now });
+  await leaseCall('n2', { op: 'beat', synced: now - 600 });
+  await worker.scheduled({}, env);
+  replies = { n1: 502 };
+  for (let i = 0; i < 3; i++) await worker.scheduled({}, env);
+  assert.equal((await (await leaseCall('n2', { op: 'beat', synced: now })).json()).writer, 'n1');
+  await worker.scheduled({}, env);
+  const state = await (await leaseCall('n2', { op: 'beat', synced: now })).json();
+  assert.deepEqual([state.writer, state.epoch, state.down], ['n2', 1, ['n1']]);
+  assert.ok(telegrams.some((t) => /n2 is now the writer \(was n1, failing 4 checks in a row\)/.test(t)));
+  _test.leases.clear();
+  calls = [];
+  await call('/api/comments', { method: 'POST', body: '{}' });
+  assert.deepEqual(calls.map((c) => c.node), ['n2']);
 });

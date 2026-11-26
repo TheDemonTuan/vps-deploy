@@ -18,9 +18,12 @@ flowchart LR
 - **Routing** (`cloudflare/edge-lb/index.mjs`, rules from `registry/<app>.yml` `balance`):
   reads go to a node chosen by weighted rendezvous hashing of the client IP
   (`hosts/<node>.yml` `edge.weight`; lower on a node that also runs unbalanced services), so a
-  client always lands on the same node and nodes share clients by weight. A 5xx, a connect
-  failure or no response headers within 10 s is retried once on the next node and marks the
-  failed node last for 30 s. Writes (non-GET), `primary_paths`, `primary_cookies` and, for
+  client always lands on the same node and nodes share clients by weight. A 5xx (a read's 500
+  too), a connect failure or no response headers within 10 s is retried once on the next node
+  and (except a 500) marks the failed node last for 30 s. The cron's checks (every minute) put a
+  node last for everyone while its last check failed, and a replica whose follower has not
+  confirmed for 3 minutes that it is current (`peer.sh` sends `synced` with each renewal) while
+  the writer renews; down nodes still serve when nothing else does. Writes (non-GET), `primary_paths`, `primary_cookies` and, for
   `sticky_seconds` after a write that returns content (not a 204 such as a view count), the same
   client go to the writer: the registry `host`, or with `lease` the node its Durable Object names
   (re-read every 30 s; see Failover). Reads among them (a signed-in admin's pages, a sticky
@@ -115,11 +118,10 @@ CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… python3 cloudflare/edge_lb.py
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… python3 cloudflare/edge_lb.py --operation apply
 ```
 
-`apply` adds `<id>-origin.<zone>` CNAMEs, each node's tunnel ingress, the queue, uploads the
-Worker with its bindings (R2, Durable Object, queue, Analytics Engine; secrets are kept), its
-queue consumer and cron, and only then sets the routes (fail-open, Workers Paid). Token:
-Workers Scripts Edit, Workers Routes Edit, Queues Edit, Cloudflare Tunnel Edit, DNS Edit, Zone
-Read. Worker secrets, once: `NODE_KEY` (also each node's `/etc/platform/edge-node-key`),
+`apply` creates the queue, uploads the Worker with its bindings (R2, Durable Object, queue,
+Analytics Engine; secrets are kept), its queue consumer and cron, and only then sets the routes
+(fail-open, Workers Paid); DNS and tunnels are OpenTofu's (`cloudflare/tofu`). Token: Workers
+Scripts Edit, Workers Routes Edit, Queues Edit, Zone Read. Worker secrets, once: `NODE_KEY` (also each node's `/etc/platform/edge-node-key`),
 `REPLAY_KEY` (also `edge-replay-key` in each node's mc-hub-api volume, owner 1000, 0600: a
 runtime.env key would change the containers' environment, which a release upgrade refuses),
 `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` (`PUT .../workers/scripts/edge-lb/secrets`). Drain a node
@@ -241,9 +243,13 @@ change within about 5 minutes (each node's page cache).
 
 ## Failover (the writer is down)
 
-Reads keep working without action (the Worker retries the other node), readers' writes are
-queued at the edge, everything else that writes fails. The edge alerts once the writer has not
-renewed its lease for 3 minutes. If it stays down, on a replica:
+Reads keep working without action (the Worker retries the other nodes), readers' writes are
+queued at the edge, everything else that writes fails for a few minutes. Once the writer has
+failed 3 cron checks in a row (both its sites count), the edge gives the lease to the
+highest-weight replica that passes its checks, renewed within 3 minutes and whose follower last
+confirmed it current at most 2 minutes before the writer's last good check (when none
+qualifies nothing changes; the PROBLEM alerts stand). That node's next `peer/` run promotes it as below. By hand,
+on a replica:
 
 ```sh
 sudo /opt/platform/peer/role.sh promote          # refused while the writer still renews

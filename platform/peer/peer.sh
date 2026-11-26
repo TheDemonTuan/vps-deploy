@@ -55,9 +55,14 @@ report() {
 
 # --- 1. Lease
 role=$(cat "$volume/role" 2>/dev/null || echo "$ROLE")
+# When this node's database was last known current (unix seconds): now on the primary, the last
+# good follower check on a replica. The edge reads a stale replica last and promotes only a
+# replica that was current when the writer was last seen healthy.
+synced=$(date +%s)
+[ "$role" = primary ] || synced=$(cat "$state/synced" 2>/dev/null || echo 0)
 renewed=0 writer=$(cat "$state/writer" 2>/dev/null || echo unknown)
 if lease=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat /etc/platform/edge-node-key)" |
-  curl -fsS -m 20 -K - -H 'content-type: application/json' -d '{"op":"beat"}' "$LEASE_URL") &&
+  curl -fsS -m 20 -K - -H 'content-type: application/json' -d "{\"op\":\"beat\",\"synced\":$synced}" "$LEASE_URL") &&
   writer=$(jq -er '.writer' <<<"$lease"); then
   renewed=1
   echo "$writer" >"$state/writer"
@@ -125,6 +130,7 @@ if [ "$role" = replica ] && [ -n "$writer_ip" ] && [ "$writer" != "$NODE" ]; the
       report "litestream follower" fail "replica txid $replica behind primary's $before from a minute ago"
     else
       report "litestream follower" ok "txid $replica"
+      date +%s >"$state/synced"
     fi
   else
     # The follower reads over the same SFTP link: this copy no longer gets the primary's writes.
