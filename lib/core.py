@@ -255,7 +255,9 @@ def host_registration(release, host_id):
     for app, binding in value['apps'].items():
         registration_id(app)
         required = {'api_host', 'dashboard_host', 'dashboard_alias_host', 'work_dir', 'compose_project', 'edge_network', 'route_name'}
-        fields(binding, required, required)
+        # rtk_network, cgw_network: retired 9router's, still in releases installed before its removal;
+        # the installer reads the installed host record with this code, so it must not refuse the upgrade.
+        fields(binding, required | {'rtk_network', 'cgw_network'}, required)
         hostname(binding['api_host'])
         for key in ('dashboard_host', 'dashboard_alias_host'):
             if binding[key]:
