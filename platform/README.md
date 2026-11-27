@@ -348,8 +348,8 @@ What a flood meets, before any of it reaches a node, and the two steps a person 
 1. Always on: `edge_cache` (a key random query parameters cannot change) and R2 answer most
    reads without a node; `mc-hub-api-flood` blocks an address past 300 requests in 10 s; then
    Traefik's per-visitor limits and CrowdSec (its bans reach `$edge_bans` at the edge). Each app
-   sheds past `MAX_ACTIVE_REQUESTS` in flight (mc-hub-api 64, mc-hub 32: on two cores, beyond
-   them p99 passed 0.5 s, and with them a 512-connection flood kept p99 at 0.1–0.26 s) and the
+   sheds past `MAX_ACTIVE_REQUESTS` in flight (32 each: at the containers' CPU limits, 1 CPU for
+   mc-hub-api and 0.5 for mc-hub, it keeps p99 at 0.2–0.73 s, under the edge's 1 s header wait) and the
    edge moves those reads to another node; a busy node loses weight (Telegram).
 2. Many addresses, each under the limit (Telegram busy alerts, the "HTTP DDoS attack" email,
    Security → Events): lower `requests_per_period` of `mc-hub-api-flood` in the dashboard
