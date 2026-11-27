@@ -61,6 +61,17 @@ class Registration(unittest.TestCase):
             (root / 'registry/mc-hub.yml').write_text(mutated)
             self.assertEqual(app_registration(root, 'mc-hub')['host'], 'oracle-main')
 
+    def test_host_record_of_a_release_with_retired_9router_still_loads(self):
+        raw = (ROOT / 'hosts/oracle-main.yml').read_text()
+        mutated = raw.replace('apps:\n', 'apps:\n  9router:\n    api_host: 9router-api.tuannguyenviet.site\n    dashboard_host: 9router.tuannguyenviet.site\n'
+                              '    dashboard_alias_host: ""\n    work_dir: /opt/9router\n    compose_project: 9router\n'
+                              '    edge_network: edge-9router\n    rtk_network: 9router-rtk\n    route_name: 9router.yml\n', 1)
+        self.assertNotEqual(raw, mutated)
+        with tempfile.TemporaryDirectory() as name:
+            (Path(name) / 'hosts').mkdir()
+            (Path(name) / 'hosts/oracle-main.yml').write_text(mutated)
+            self.assertIn('9router', host_registration(Path(name), 'oracle-main')['apps'])
+
     def test_manifest_bool_does_not_equal_integer(self):
         with self.assertRaisesRegex(Failure, 'MANIFEST_POLICY'):
             exact({'version': True}, {'version': 1})
