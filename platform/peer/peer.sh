@@ -14,7 +14,9 @@
 #    database backup goes to /data/backups (the mirror copies it to R2) and to OCI Object Storage.
 #    On the LAPI node, the same way, the CrowdSec controller (Telegram bot, Cloudflare edge list).
 # 3. On the other nodes, checks that the Litestream followers (mc-hub-api's database, the LAPI's)
-#    keep up with the writer. Telegram after two bad runs in a row, and again when it recovers.
+#    keep up with the writer. Telegram after two bad runs in a row (explain: what the check
+#    guards, its impact, where to start, the fleet's writer and LAPI), and a reply to that message
+#    when it recovers, with how long it lasted.
 # CrowdSec shares bans through its one LAPI (roles/crowdsec), not here.
 # /etc/platform/peer.env: NODE, NODE_IP, ROLE (primary|replica before any failover), LEASE_URL,
 # TELEGRAM_CHAT_ID. /etc/platform/nodes: "<id> <ip> <ecdsa host key>" per edge node (ansible).
@@ -37,27 +39,96 @@ peer_sftp() {
     -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/platform/known_hosts "platform-sync@$1"
 }
 
+esc() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$1"; }
+# A Litestream position (16 hex digits) as the transaction number.
+tx() { if [[ ${1:-} =~ ^[0-9a-f]{16}$ ]]; then printf '#%d' "$((16#$1))"; else printf none; fi; }
+
+# notify <html> [<message id>]: a Telegram message, a reply to that one when given. Prints the new
+# message's id.
 notify() {
+  local reply=()
+  [[ ${2:-} =~ ^[0-9]+$ ]] && reply=(--data-urlencode "reply_parameters={\"message_id\":$2,\"allow_sending_without_reply\":true}")
   # The token goes through curl's config on stdin, never on a command line.
   printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$(cat /etc/platform/telegram-token)" |
-    curl -fsS -m 15 -o /dev/null -K - --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" --data-urlencode "text=[$NODE] $1" ||
-    echo "telegram failed: $1" >&2
+    curl -fsS -m 15 -K - --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" -d parse_mode=HTML --data-urlencode "text=$1" "${reply[@]}" |
+    jq -r '.result.message_id' || echo "telegram failed: $1" >&2
 }
 
-# report <check> ok|fail <detail>
+# explain <check>: sets title, what (the check in plain words), impact and look (where to start)
+# for whoever reads the alert, and lapi_node.
+explain() {
+  lapi_node=$(cat "$state/lapi" 2>/dev/null)
+  [ "$lapi_node" = here ] && lapi_node=$NODE
+  lapi_node=${lapi_node:-unsettled}
+  look="sudo journalctl -u platform-peer -n 30"
+  case $1 in
+    "edge lease")
+      title="cannot renew its edge lease"
+      what="Every minute $NODE renews its lease with the Cloudflare edge (edge-lb Worker), which names the writer; the last two renewals failed."
+      impact="A writer stops taking writes 150 s after its last renewal and the edge hands writing to a current replica after 3 min. A replica is read last and never promoted." ;;
+    "crowdsec lapi")
+      title="CrowdSec LAPI has not moved to the writer"
+      what="The fleet's one CrowdSec LAPI (the ban database) follows the writer, $writer. $NODE has been switching for 5 min without finishing."
+      impact="Until it settles $NODE may miss new bans and unbans and cannot send its own. platform-lapi retries every minute."
+      look="sudo journalctl -u platform-lapi -n 50" ;;
+    "daily backup")
+      title="daily database backup failed"
+      what="The writer, $NODE, keeps one copy of mc-hub-api's database a day (VACUUM INTO), which then goes to R2 and OCI."
+      impact="No restore point for today yet; earlier days stay in /data/backups, R2 and OCI. Retried every minute." ;;
+    "oci backup")
+      title="OCI backup upload failed"
+      what="Today's backup is on $NODE and in R2, but its upload to OCI Object Storage (the copy outside Cloudflare) failed."
+      impact="Only today's copy outside Cloudflare is missing. Retried every minute; an expired pre-authenticated request URL fails every time." ;;
+    "crowdsec controller")
+      title="CrowdSec controller is not running"
+      what="The controller runs on the LAPI node, $NODE: ban messages and unban buttons in this chat, and the Cloudflare edge ban list."
+      impact="Bans still block on every node, but no ban messages arrive and the Cloudflare edge list stops following bans and unbans."
+      look="sudo journalctl -u crowdsec-telegram-controller -n 50" ;;
+    "litestream follower")
+      title="mc-hub database copy is behind"
+      what="$NODE follows the writer $writer's mc-hub-api database over SFTP. If every replica reports this, the cause is on $writer."
+      impact="The edge reads from $NODE last and will not promote it; pages served from $NODE may show older data."
+      look="sudo docker logs --tail 50 litestream" ;;
+    "crowdsec follower")
+      title="CrowdSec ban database copy is behind"
+      what="$NODE keeps a live copy of the ban database from the LAPI on $lapi_node, to take the LAPI over if $lapi_node fails. If every other node reports this, the cause is on $lapi_node."
+      impact="None on blocking now: $NODE asks the LAPI on $lapi_node live. Only a takeover by $NODE could miss the newest bans and unbans, and it refuses one without a copy verified in the last 10 min."
+      look="sudo docker logs --tail 50 litestream-crowdsec" ;;
+    *) title=$1 what="" impact="unknown" ;;
+  esac
+}
+
+# report <check> ok|fail <detail> [<failed runs in a row before alerting, default 2>]
 report() {
-  local key fails
+  local key fails since sent
   key=$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' _)
   fails=$(cat "$state/$key.fails" 2>/dev/null || echo 0)
   if [ "$2" = ok ]; then
-    if [ -e "$state/$key.alerted" ]; then notify "OK again: $1 ($3)"; rm -f "$state/$key.alerted"; fi
+    if [ -e "$state/$key.alerted" ]; then
+      read -r since sent <"$state/$key.alerted"
+      explain "$1"
+      notify "✅ <b>$NODE: resolved${since:+ after $((($(date +%s) - since + 59) / 60)) min}</b> · $title
+<b>Now:</b> $(esc "$3")" "${sent:-}" >/dev/null
+      rm -f "$state/$key.alerted"
+    fi
     echo 0 >"$state/$key.fails"
     return
   fi
   fails=$((fails + 1))
   echo "$fails" >"$state/$key.fails"
+  [ "$fails" -gt 1 ] || date +%s >"$state/$key.since"
   echo "check failed ($fails): $1: $3" >&2
-  if [ "$fails" -ge 2 ] && [ ! -e "$state/$key.alerted" ]; then notify "PROBLEM: $1 ($3)"; touch "$state/$key.alerted"; fi
+  if [ "$fails" -ge "${4:-2}" ] && [ ! -e "$state/$key.alerted" ]; then
+    explain "$1"
+    since=$(cat "$state/$key.since" 2>/dev/null || date +%s)
+    sent=$(notify "🔴 <b>$NODE: $title</b>
+$what
+<b>Impact:</b> $impact
+<b>Start with:</b> <code>$look</code> on $NODE
+<b>Seen:</b> $(esc "$3")
+<i>Writer $writer · CrowdSec LAPI $lapi_node · checked every minute; a ✅ reply follows when it clears.</i>")
+    echo "$since $sent" >"$state/$key.alerted"
+  fi
 }
 
 # --- 1. Lease
@@ -114,13 +185,14 @@ if [ "$renewed" = 1 ]; then
   [ "$writer" = "$NODE" ] || lapi_want=$writer
   lapi=$(cat "$state/lapi" 2>/dev/null)
   if [ "$lapi" = "$lapi_want" ]; then
-    report "crowdsec lapi" ok "$lapi"
+    report "crowdsec lapi" ok "the LAPI is on ${lapi/#here/$NODE}"
   elif [ -n "$lapi" ]; then
-    report "crowdsec lapi" fail "the writer is $writer, this node's crowdsec LAPI: ${lapi:-unsettled} (here or the node it follows)"
+    # 5: a switch waits out the old writer's last lease (3 min) before it may serve.
+    report "crowdsec lapi" fail "the writer is $writer, but $NODE still $([ "$lapi" = here ] && echo "serves the LAPI itself" || echo "follows the LAPI on $lapi")" 5
     systemctl start --no-block platform-lapi.service
   fi
 else
-  report "edge lease" fail "renewal failed"
+  report "edge lease" fail "the edge did not answer or refused the renewal"
 fi
 
 # --- 2. Writer duties
@@ -181,6 +253,11 @@ fi
 lag=""
 [ "$role" = primary ] && lag=0
 if [ -n "$writer_ip" ] && [ "$writer" != "$NODE" ]; then
+  # Ours first: read after the writer's listing, a copy could already hold a transaction the
+  # listing missed (the LAPI writes every few seconds) and looked ahead of it. Read before, ours
+  # can only trail the listing, so ahead means the writer started a new lineage.
+  replica=$(tr -d '\n' <"$volume/mc-hub.db-txid" 2>/dev/null)
+  copy=$(tr -d '\n' </var/lib/crowdsec/follow/crowdsec.db-txid 2>/dev/null)
   # One SFTP session lists the writer's copies, the CrowdSec LAPI's and mc-hub-api's ("-": a
   # missing one does not end the batch). A copy's position is its highest LTX end txid on any
   # level; ours is the follower's -txid file. Behind what the writer had a minute ago means the
@@ -191,39 +268,41 @@ if [ -n "$writer_ip" ] && [ "$writer" != "$NODE" ]; then
   newest() { sed -n "s#.*/litestream/$1/ltx/.*-\([0-9a-f]\{16\}\)\.ltx\$#\1#p" <<<"$listing" | sort | tail -1; }
   if [ "$role" = replica ]; then
     primary=$(newest mc-hub-api)
-    replica=$(tr -d '\n' <"$volume/mc-hub.db-txid" 2>/dev/null)
     before=$(cat "$state/primary-txid" 2>/dev/null)
     if [ -n "$primary" ]; then
       echo "$primary" >"$state/primary-txid"
       [ -n "$replica" ] && lag=$((16#$primary - 16#$replica))
-      if [ -z "$replica" ] || [[ $replica > $primary ]]; then
-        report "litestream follower" fail "replica txid ${replica:-none}, primary $primary"
+      if [ -z "$replica" ]; then
+        report "litestream follower" fail "no local copy yet (its restore has not finished); $writer is at $(tx "$primary")"
+      elif [[ $replica > $primary ]]; then
+        report "litestream follower" fail "ours is at $(tx "$replica"), past $writer's newest $(tx "$primary"): $writer started a new history, so ours needs a fresh restore"
       elif [ -n "$before" ] && [[ $replica < $before ]]; then
-        report "litestream follower" fail "replica txid $replica behind primary's $before from a minute ago"
+        report "litestream follower" fail "ours is stuck at $(tx "$replica"), behind where $writer was a minute ago ($(tx "$before"))"
       else
-        report "litestream follower" ok "txid $replica"
+        report "litestream follower" ok "ours is at $(tx "$replica"), $writer at $(tx "$primary")"
         date +%s >"$state/synced"
       fi
     else
       # The follower reads over the same SFTP link: this copy no longer gets the primary's writes.
-      report "litestream follower" fail "cannot list the primary's LTX files over SFTP (replica txid ${replica:-none})"
+      report "litestream follower" fail "cannot read $writer's copy over SFTP (the follower uses the same link); ours is at $(tx "$replica")"
     fi
   fi
   # The copy this node takes the LAPI over from (platform/crowdsec/lapi.sh).
   if [ "$(cat "$state/lapi" 2>/dev/null)" = "$writer" ]; then
     held=$(newest crowdsec)
-    copy=$(tr -d '\n' </var/lib/crowdsec/follow/crowdsec.db-txid 2>/dev/null)
     before=$(cat "$state/crowdsec-txid" 2>/dev/null)
     if [ -z "$held" ]; then
-      report "crowdsec follower" fail "no copy of the LAPI database on $writer over SFTP (ours: txid ${copy:-none})"
+      report "crowdsec follower" fail "cannot read the LAPI's copy on $writer over SFTP (the follower uses the same link); ours is at $(tx "$copy")"
     else
       echo "$held" >"$state/crowdsec-txid"
-      if [ -z "$copy" ] || [[ $copy > $held ]]; then
-        report "crowdsec follower" fail "copy txid ${copy:-none}, LAPI node $held"
+      if [ -z "$copy" ]; then
+        report "crowdsec follower" fail "no local copy yet (its restore has not finished); the LAPI on $writer is at $(tx "$held")"
+      elif [[ $copy > $held ]]; then
+        report "crowdsec follower" fail "ours is at $(tx "$copy"), past the newest on $writer ($(tx "$held")): its copy started over, so ours needs a fresh restore"
       elif [ -n "$before" ] && [[ $copy < $before ]]; then
-        report "crowdsec follower" fail "copy txid $copy behind the LAPI node's $before from a minute ago"
+        report "crowdsec follower" fail "ours is stuck at $(tx "$copy"), behind where the LAPI on $writer was a minute ago ($(tx "$before"))"
       else
-        report "crowdsec follower" ok "txid $copy"
+        report "crowdsec follower" ok "ours is at $(tx "$copy"), the LAPI on $writer at $(tx "$held")"
         printf '%s\n' "$writer" >"$state/crowdsec-synced"
       fi
     fi

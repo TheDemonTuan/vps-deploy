@@ -104,7 +104,13 @@ flowchart LR
   the follower keeps up, including when the writer's SFTP cannot be read at all (the follower
   uses the same link), and restarts the follower on the lease writer when it follows another
   node; Telegram after two bad runs and on recovery. The fleet is `/etc/platform/nodes`
-  (`<id> <ip> <ECDSA host key>`, written by `ansible/`).
+  (`<id> <ip> <ECDSA host key>`, written by `ansible/`). Each alert names the node and the check
+  in plain words, what it means for bans, reads and writes, the command to start with, and the
+  fleet's writer and LAPI node; the recovery is a reply to it, with how long it lasted. A LAPI
+  switch alerts only after 5 minutes (it waits out the old writer's lease). The same problem from
+  every follower points at the node they follow. The edge's messages use the same marks (🔴 problem,
+  ✅ resolved, 🔁 writer moved, 🆘 needs a person). `bash platform/peer/peer.test.sh` exercises the
+  follower checks and alerts without any node.
 - **One CrowdSec LAPI**, on the lease writer. Every node runs its own agent, AppSec, nftables and
   Traefik bouncers. On followers `crowdsec-lapi.service` forwards `172.31.254.1:8080` to the LAPI
   via SSH with a host-pinned, source-restricted key; no public LAPI port. Litestream follows
