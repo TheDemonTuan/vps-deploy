@@ -29,14 +29,3 @@ resource "cloudflare_r2_bucket_lock" "mc_hub_db_backups" {
     }
   ]
 }
-
-# Email when Cloudflare mitigates an HTTP DDoS attack on any zone (Free plan alert). Spend is
-# covered by the account's budget alert (total spend >= $10, email), created with the account.
-resource "cloudflare_notification_policy" "http_ddos" {
-  account_id  = var.account_id
-  name        = "HTTP DDoS attack"
-  alert_type  = "dos_attack_l7"
-  enabled     = true
-  description = "vps-deploy cloudflare/tofu: README \"Under attack\""
-  mechanisms  = { email = [{ id = "nguyenviettuanbp@gmail.com" }] }
-}

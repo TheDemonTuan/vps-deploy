@@ -16,7 +16,7 @@ This directory declares the Cloudflare infrastructure for `vps-deploy` using Ope
   - `thedemontuan.dev`: Custom WAF (`Edge IP bans`, `edge-probe-paths, foreign-workers`, `mc-hub-api-host`, `mc-hub-methods`, `attack-mode` (off; platform/README "Under attack")), Rate limiting (`mc-hub-api-flood`), Managed WAF (`edge-free-managed`).
   - `tuannguyenviet.site`: Custom WAF (`omniroute_api_paths`, `Edge IP bans`, `foreign-workers`, `edge-probe-paths`, `mc-hub-api-host`), Rate limiting, Managed WAF (`OmniRoute managed WAF`).
 - **R2 Storage**: `mc-hub-db` and `mc-hub-media` buckets, protected with `prevent_destroy`; a 30-day lock on `mc-hub-db/backups/` (it cannot be removed from OpenTofu: delete the rule in the dashboard first).
-- **Notifications**: `HTTP DDoS attack` (email). The account's budget alert (total spend ≥ $10) predates this and stays unmanaged.
+- **Notifications**: none. The `HTTP DDoS Attack Alert` (email) and the account's budget alert (total spend ≥ $10, email) are made in the dashboard (Notifications → Add): the OpenTofu token cannot write notification policies (403).
 
 ### What is Left Unmanaged
 
