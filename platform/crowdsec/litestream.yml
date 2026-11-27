@@ -2,19 +2,18 @@
 # platform/crowdsec/lapi.sh starts the profile this node needs:
 # primary (the LAPI node): replicates every WAL change of /var/lib/crowdsec/data/crowdsec.db within
 #   ~1 s into /srv/platform-sync/litestream/crowdsec, which the other nodes read over SFTP.
-# replica (every other node): follows the LAPI node's copy into /var/lib/crowdsec/follow, a file
-#   nothing opens until lapi.sh makes it this node's database (cscli would write to it otherwise).
-#   PRIMARY_SSH and PRIMARY_HOST_KEY come from /etc/platform/crowdsec-lapi.env (lapi.sh).
-# Root with DAC_OVERRIDE only: crowdsec's files are root's, the sync directory and key uid 1000's.
+# replica (every other node): `relay` (platform/sync/relay.sh) mirrors the LAPI node's copy
+#   over read-only SFTP into /var/lib/platform-relay/crowdsec, and Litestream follows that mirror
+#   into /var/lib/crowdsec/follow, a file nothing opens until lapi.sh makes it this node's database
+#   (cscli would write to it otherwise). PRIMARY_SSH and PRIMARY_HOST_KEY come from
+#   /etc/platform/crowdsec-lapi.env (lapi.sh), which also empties the relay's directory.
+# Litestream runs as root with DAC_OVERRIDE only: crowdsec's files are root's, the sync directory,
+# the relay's and the key uid 1000's.
 name: litestream-crowdsec
-x-litestream: &litestream
-  image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
-  container_name: litestream-crowdsec
+x-hardening: &hardening
   restart: unless-stopped
-  user: "0:0"
   read_only: true
   cap_drop: [ALL]
-  cap_add: [DAC_OVERRIDE]
   security_opt: [no-new-privileges:true]
   tmpfs:
     - /tmp:rw,noexec,nosuid,size=64m
@@ -24,6 +23,12 @@ x-litestream: &litestream
     options:
       max-size: "10m"
       max-file: "3"
+x-litestream: &litestream
+  <<: *hardening
+  image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
+  container_name: litestream-crowdsec
+  user: "0:0"
+  cap_add: [DAC_OVERRIDE]
 services:
   primary:
     <<: *litestream
@@ -33,15 +38,30 @@ services:
       - /var/lib/crowdsec/data:/data:z
       - ./litestream-primary.yml:/etc/litestream.yml:ro,z
       - /srv/platform-sync/litestream:/replica:z
-  replica:
-    <<: *litestream
+  relay:
+    <<: *hardening
+    # The image of platform/litestream/compose.yml's relay and mirror.
+    image: rclone/rclone:1.76.0@sha256:7cbeec24a44f206067597c0368be4de90ae19a64d5113c7d1938bd737a81e466
+    container_name: litestream-crowdsec-relay
     profiles: [replica]
-    # Optional: compose reads it for any command naming this profile, also before lapi.sh wrote it.
+    user: "1000:1000"
     env_file:
       - path: /etc/platform/crowdsec-lapi.env
         required: false
+    environment:
+      HOME: /tmp
+    entrypoint: [sh, /relay.sh, crowdsec]
+    volumes:
+      - /opt/platform/sync/relay.sh:/relay.sh:ro,z
+      - /var/lib/platform-relay/crowdsec:/relay:z
+      - /etc/platform/sync_key:/etc/relay/sync_key:ro,z
+  replica:
+    <<: *litestream
+    profiles: [replica]
+    # Starts once the relay holds a complete copy (/relay/at).
+    entrypoint: [sh, -c, 'until [ -s /relay/at ]; do sleep 1; done; exec litestream "$$@"', litestream]
     command: [restore, -f, -follow-interval, 1s, -config, /etc/litestream.yml, /follow/crowdsec.db]
     volumes:
       - /var/lib/crowdsec/follow:/follow:z
       - ./litestream-replica.yml:/etc/litestream.yml:ro,z
-      - /etc/platform/sync_key:/etc/litestream/sync_key:ro,z
+      - /var/lib/platform-relay/crowdsec:/relay:ro,z

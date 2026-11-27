@@ -6,10 +6,10 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
-mkdir -p "$t/bin" "$t/vol" "$t/peer" "$t/sync/crowdsec" "$t/etc"
+mkdir -p "$t/bin" "$t/vol" "$t/peer" "$t/sync/crowdsec" "$t/etc" "$t/relay/mc-hub-api"
 cp write-position.sh "$t/"
 sed -e "s#/etc/platform#$t/etc#g; s#/run/platform-role.lock#$t/lock#; s#/var/lib/docker/volumes/mc-hub-api-data/_data#$t/vol#;
-  s#/var/lib/platform-peer#$t/peer#g; s#/srv/platform-sync/litestream#$t/sync#; s#sleep [0-9]*#:#g;
+  s#/var/lib/platform-peer#$t/peer#g; s#/srv/platform-sync/litestream#$t/sync#; s#/var/lib/platform-relay#$t/relay#; s#sleep [0-9]*#:#g;
   s#chown 1000:1000#chown $(id -u):$(id -g)#; s#-o 1000 -g 1000#-o $(id -u) -g $(id -g)#" role.sh >"$t/role.sh"
 printf 'NODE=n2\nROLE=replica\nLEASE_URL=http://lease.invalid\n' >"$t/etc/peer.env"
 printf '# id ip host key\nn1 10.0.0.1 ecdsa-sha2-nistp256 AAAAone\nn2 10.0.0.2 ecdsa-sha2-nistp256 AAAAtwo\nn3 10.0.0.3 ecdsa-sha2-nistp256 AAAAthree\n' >"$t/etc/nodes"
@@ -48,9 +48,10 @@ printf 'PRIMARY_SSH=10.0.0.1:22\nPRIMARY_HOST_KEY=ecdsa-sha2-nistp256 AAAAone\n'
 rc=$(run n1)
 check "a replica already following the writer does nothing" '[ "$rc" = 0 ] && [ ! -s "$t/log" ]'
 
-rc=$(run n3)
+mkdir -p "$t/relay/mc-hub-api/copy/ltx"; echo 1 >"$t/relay/mc-hub-api/at"; rc=$(run n3)
 check "a new writer is followed from a fresh restore" '[ "$rc" = 0 ] && [ "$(follows)" = 10.0.0.3:22 ] &&
   grep -q "PRIMARY_HOST_KEY=ecdsa-sha2-nistp256 AAAAthree" "$t/etc/litestream-primary.env" && ls "$t"/vol/fenced-*/mc-hub.db >/dev/null 2>&1'
+check "and the relay mirrors it from scratch" '[ -d "$t/relay/mc-hub-api" ] && [ -z "$(ls -A "$t/relay/mc-hub-api")" ]'
 check "the apps stopped for it start again" 'grep -qx "docker start mc-hub-api-blue" "$t/log" && [ ! -e "$t/peer/stopped-apps" ]'
 
 rc=$(run n9)

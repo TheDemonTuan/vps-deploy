@@ -1,10 +1,7 @@
-# Every other node: follow the LAPI node's copy over read-only SFTP (host key pinned).
+# Every other node: follow the LAPI node's copy from the relay's local mirror of it
+# (platform/sync/relay.sh).
 dbs:
   - path: /follow/crowdsec.db
     replica:
-      type: sftp
-      host: ${PRIMARY_SSH}
-      user: platform-sync
-      key-path: /etc/litestream/sync_key
-      host-key: ${PRIMARY_HOST_KEY}
-      path: /litestream/crowdsec
+      type: file
+      path: /relay/copy

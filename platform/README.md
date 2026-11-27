@@ -93,10 +93,14 @@ flowchart LR
   tuannguyenviet.site keeps its Free ruleset rule (OmniRoute hosts only) and API path rules.
   Traefik's limits and CrowdSec stay behind them. Blocks show in Security → Events.
 - **Data**: SQLite stays single-writer on the primary. Litestream (`litestream/`) writes its WAL
-  changes to a local directory; each replica follows it over read-only SFTP (`sync/`) into its
-  own file, and mc-hub-api opens that read-only (`DB_ROLE` = engine `NODE_ROLE`, or the volume's
-  `role` file after a failover; writes there return 503 `READ_ONLY`, but the Worker never sends
-  them). A primary also refuses writes (503 `READ_ONLY`) once `writer-lease` in its volume is
+  changes to a local directory; on each replica a relay (`sync/relay.sh`, rclone) mirrors it over
+  read-only SFTP (level 0 every second, the rest every minute) and Litestream follows that mirror
+  into its own file. Litestream's own SFTP client waits a round trip per ~1 KB read: from 250 ms
+  away (n4, Buffalo) a 4.5 MB restore took 40 minutes; the relay pipelines it (about a minute)
+  and keeps the copy within a few seconds. mc-hub-api opens that file read-only (`DB_ROLE` =
+  engine `NODE_ROLE`, or the volume's `role` file after a failover; writes there return 503
+  `READ_ONLY`, but the Worker never sends them). A primary also refuses writes (503 `READ_ONLY`)
+  once `writer-lease` in its volume is
   150 s old: `peer/` touches it every minute while the lease names the node and ages it at
   once when another node holds it, so a writer cut off from the lease stops before the edge may
   promote another (3 minutes); no such file, no fence (a node that never ran `peer/`). The
@@ -114,8 +118,8 @@ flowchart LR
   requests (except writes, which go to the primary) are seen by one node. `peer/`
   (`platform-peer.timer`, every minute) renews the node's lease first (Telegram after two failed
   renewals). On a replica it checks that
-  the follower keeps up, including when the writer's SFTP cannot be read at all (the follower
-  uses the same link), and restarts the follower on the lease writer when it follows another
+  the follower keeps up with the relay's mirror, and that the relay reached the writer in the
+  last 2 minutes, and restarts the follower on the lease writer when it follows another
   node; Telegram after two bad runs and on recovery. The fleet is `/etc/platform/nodes`
   (`<id> <ip> <ECDSA host key>`, written by `ansible/`). Each alert names the node and the check
   in plain words, what it means for bans, reads and writes, the command to start with, and the
@@ -222,7 +226,8 @@ the nodes' `opc` keys); CI only lints it.
    workstation; the sync and LAPI tunnel keys are generated on the node, its CrowdSec agent and
    bouncer keys on the LAPI node. Within a
    minute `peer.sh` starts `platform-role.service`, which follows the lease writer: the first
-   `docker logs litestream` line is `entering follow mode`.
+   `docker logs litestream` line is `entering follow mode` (after the relay's first copy,
+   `/var/lib/platform-relay/mc-hub-api/at`).
 5. **Apps**: start `<app>-blue` from the release's Compose profile with the primary's current
    image and `NODE_ROLE=replica`, publish the adapter-rendered route (slot `blue`, a new
    generation). Installer `--check`, then apply, with `--host <host>` and the same deploy public
