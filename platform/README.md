@@ -21,13 +21,19 @@ flowchart LR
   client always lands on the same node and nodes share clients by weight. A 5xx (a read's 500
   too; a node that does not route the site yet answers 503, `edge/dynamic/zz-unrouted.yml`), a
   connect failure or no response headers within 1 s is retried once on the next node and
-  (except a 500) marks the failed node last for 30 s. When every node failed, a stale edge copy
+  (except a 500, or a 503 with `X-Overloaded`: the apps shed requests past their in-flight cap,
+  `MAX_ACTIVE_REQUESTS`, and such a node is up) marks the failed node last for 30 s. When every node failed, a stale edge copy
   is served, else the first node that only ran out of time is waited for. A `primary_paths` read waits for the
   writer instead (a replica refuses `/api/dl`, and a download's headers wait while a file the
   writer lacks comes from R2). The cron's checks (every minute) put a
   node last for everyone while its last check failed, and a replica whose follower has not
   confirmed for 3 minutes that it is current (`peer.sh` sends `synced` with each renewal) while
-  the writer renews; down nodes still serve when nothing else does. Writes (non-GET), `primary_paths`, `primary_cookies` and, for
+  the writer renews; down nodes still serve when nothing else does. A node whose `/healthz`
+  reports `busy` (the larger of host load per CPU and in-flight requests over the cap) above 0.9
+  on average gets a quarter less weight per check, down to a quarter of it, and back an eighth
+  per check below 0.6 (only its own clients move; Telegram when it starts and ends). A `/healthz`
+  503 names its reason in the alert (mc-hub-api: `disk: <n> MiB free` under 1 GiB in its
+  volume). Writes (non-GET), `primary_paths`, `primary_cookies` and, for
   `sticky_seconds` after a write that returns content (not a 204 such as a view count), the same
   client go to the writer: the registry `host`, or with `lease` the node its Durable Object names
   (re-read every 30 s; see Failover). Reads among them (a signed-in admin's pages, a sticky
@@ -48,7 +54,9 @@ flowchart LR
   - `edge_cache`: GETs of the listed paths without the session cookie stay in the Cache API
     for `ttl_seconds` and are served stale for `stale_seconds` when every node fails; only
     responses marked `public` or `no-cache`. The key carries the lease's version, bumped after
-    each `fanout` reached every node, so an admin's purge reaches every colo.
+    each `fanout` reached every node, so an admin's purge reaches every colo, and only the query
+    parameters `edge_cache.query` lists for the path (pages: none), so random parameters cannot
+    turn the cache off; the node still gets the query as sent.
   - `immutable_paths` (`/_astro/`): served by the edge cache; a miss that a node answers 404
     (a deploy reaches the nodes one after another) is tried on the next node, and only 2xx
     is cached.
@@ -65,17 +73,22 @@ flowchart LR
     `edge_lb.py --operation stats` sums the last hour (token: Account Analytics Read).
 - **Edge WAF & Rulesets** (`cloudflare/tofu/rulesets.tf`, OpenTofu; Free plan: 5 custom rules and
   1 rate limiting rule per zone, no regex): what an origin refuses anyway stops at Cloudflare,
-  before the Worker and the tunnels. `edge-probe-paths` on both zones blocks dotfiles (not
+  before the Worker and the tunnels. `foreign-workers` on both zones refuses other Cloudflare
+  customers' Workers (their subrequests share 2a06:98c0:3600::103 with ours, which CrowdSec
+  therefore never bans): only edge-lb, UptimeFlare (`*.workers.dev`) and the
+  `tuannguyenviet.site` Workers pass. `edge-probe-paths` on both zones blocks dotfiles (not
   `/.well-known/`), `*.php`, WordPress paths and self-announcing scanners (sqlmap, nuclei, …);
   on the site also `/internal` and every file type it never serves outside `/_astro/`,
   `/media/`, `/cdn-cgi/` and `/.well-known/`. `mc-hub-api-host` keeps both API hosts to GET/HEAD
   of `/healthz`, the one route Traefik keeps there (`tests/test_mc_hub_api.py` keeps the list
   equal to the adapter), plus lease POSTs from the nodes' own addresses (`hosts/*.yml`
   `ssh.address`); readers use the site's `/api/`, SSR the node's internal entrypoint.
-  `mc-hub-methods` takes writes on the site only under `/api/` and `/admin`. The rate limiting
-  rule `mc-hub-api-flood` blocks an address for 10 s after 150 `/api/` or `/healthz` requests in
-  10 s at one Cloudflare location (verified bots exempt): looser than Traefik's per-visitor
-  limit, so it only sheds floods. On thedemontuan.dev
+  `mc-hub-methods` takes writes on the site only under `/api/` and `/admin`; `foreign-workers`
+  shares the `edge-probe-paths` rule on thedemontuan.dev, which leaves a slot for `attack-mode`
+  (off; README "Under attack"). The rate limiting rule `mc-hub-api-flood` blocks an address for
+  10 s after 300 requests in 10 s at one Cloudflare location on every path but `/_astro/` and
+  `/media/` (verified bots exempt): looser than Traefik's per-visitor limits, so it only sheds
+  floods, cached pages included. On thedemontuan.dev
   `edge-free-managed` runs Cloudflare's Free Managed Ruleset except on monitor./metrics;
   tuannguyenviet.site keeps its Free ruleset rule (OmniRoute hosts only) and API path rules.
   Traefik's limits and CrowdSec stay behind them. Blocks show in Security → Events.
@@ -117,7 +130,11 @@ flowchart LR
   `crowdsec.db` separately into `/var/lib/crowdsec/follow` so machine and bouncer registrations
   move with decisions. `platform-lapi.service` switches roles independently of the app DB. Peer
   checks the LAPI follower TXID; a missing restore cannot promote. Replication is asynchronous:
-  the newest decisions or unbans might not yet have reached the promoted node.
+  the newest decisions or unbans might not yet have reached the promoted node. The Telegram bot
+  therefore shows a ban or unban as ⏳ until every other node's copy has it, then ✅ (or ⚠️
+  naming the node still behind after 55 s): each node publishes its copy's position
+  (`crowdsec-follow-position.service`, `lapi.sh publish`) on its read-only SFTP, and the
+  controller's `crowdsec-telegram-replica.service` (root, on request) compares them.
 - **Controller fencing**: only a writer heartbeat gets a local grant; the next writer waits out
   its predecessor's last 180 s lease. A separate systemd timer stops the old LAPI and controller
   when the 120 s boot-local grant expires, even if peer stops. Agents do not require this grant.
@@ -324,6 +341,29 @@ the balanced apps' registries (render, release, `edge_lb.py --operation apply`),
 pre-release backup on the old `host` fails and stops its deploys; the `role` file keeps each
 node's role across deploys either way.
 
+## Under attack
+
+What a flood meets, before any of it reaches a node, and the two steps a person can add:
+
+1. Always on: `edge_cache` (a key random query parameters cannot change) and R2 answer most
+   reads without a node; `mc-hub-api-flood` blocks an address past 300 requests in 10 s; then
+   Traefik's per-visitor limits and CrowdSec (its bans reach `$edge_bans` at the edge). Each app
+   sheds past `MAX_ACTIVE_REQUESTS` in flight (mc-hub-api 64, mc-hub 32: on two cores, beyond
+   them p99 passed 0.5 s, and with them a 512-connection flood kept p99 at 0.1–0.26 s) and the
+   edge moves those reads to another node; a busy node loses weight (Telegram).
+2. Many addresses, each under the limit (Telegram busy alerts, the "HTTP DDoS attack" email,
+   Security → Events): lower `requests_per_period` of `mc-hub-api-flood` in the dashboard
+   (Security → WAF → Rate limiting rules) for an immediate effect, then in
+   `cloudflare/tofu/rulesets.tf`.
+3. Still too much: turn on the custom rule `attack-mode` (Security → WAF → Custom rules), a
+   managed challenge on the site's pages for everyone but verified bots, the nodes and our own
+   Workers; assets, images and `/api/` stay open (a page's calls carry the clearance its
+   challenge gave). Set `enabled = true` in `rulesets.tf` too, so the next apply keeps it, and
+   back to `false` when it is over.
+
+Not "I'm Under Attack" or Bot Fight Mode: neither spares the nodes' lease renewals and deploy
+probes (Bot Fight Mode cannot be skipped at all), which `attack-mode` does.
+
 ## Restore from R2 (every node lost)
 
 The mirror is a plain Litestream S3 replica. With the R2 token (IP-filtered to the nodes: add a
@@ -331,7 +371,8 @@ new node's IP first), a config `{dbs: [{path: /out/mc-hub.db, replica: {type: s3
 mc-hub-db, path: litestream/mc-hub-api, endpoint: https://<account>.r2.cloudflarestorage.com,
 region: auto}}]}` and `litestream restore -config … /out/mc-hub.db` rebuild the database as of
 the last hourly mirror; `r2:mc-hub-db/backups` holds `/data/backups` (the pre-release
-`VACUUM INTO` snapshots).
+`VACUUM INTO` snapshots), each locked for 30 days (R2 bucket lock, `cloudflare/tofu/r2.tf`): no
+token can delete or overwrite one before that.
 
 Without Cloudflare: the confirmed writer also uploads each daily copy to the OCI bucket
 `mc-hub-db-backup` (n1's tenancy; Object Storage console → the bucket → Objects → Download).

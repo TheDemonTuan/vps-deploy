@@ -21,6 +21,8 @@ accessLog:
       names:
         User-Agent: keep
         Cf-Connecting-Ip: keep
+        # Set by Cloudflare on Worker subrequests (the Worker's zone); CrowdSec trusts only ours.
+        Cf-Worker: keep
     queryParameters:
       defaultMode: drop
 

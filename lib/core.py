@@ -131,9 +131,13 @@ def balance_policy(value):
     require(value.get('lease') or not (value.get('queue_paths') or 'edge_cache' in value), 'REGISTRY_POLICY')
     if 'edge_cache' in value:
         cache = value['edge_cache']
-        fields(cache, {'paths', 'ttl_seconds', 'stale_seconds'}, {'paths', 'ttl_seconds', 'stale_seconds'})
+        fields(cache, {'paths', 'ttl_seconds', 'stale_seconds', 'query'}, {'paths', 'ttl_seconds', 'stale_seconds'})
         require(type(cache['paths']) is list and cache['paths'] and all(type(p) is str and p.startswith('^/') for p in cache['paths']), 'REGISTRY_POLICY')
         require(type(cache['ttl_seconds']) is int and 1 <= cache['ttl_seconds'] <= 300 and type(cache['stale_seconds']) is int and cache['ttl_seconds'] <= cache['stale_seconds'] <= 604800, 'REGISTRY_POLICY')
+        # query: path pattern -> the query parameters its handler reads (the edge cache key keeps only those).
+        query = cache.get('query', {})
+        require(type(query) is dict and all(type(p) is str and p.startswith('^/') and type(names) is list and
+                                            all(type(n) is str and re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', n) for n in names) for p, names in query.items()), 'REGISTRY_POLICY')
     sticky = value.get('sticky_seconds', 0)
     require(type(sticky) is int and 0 <= sticky <= 300, 'REGISTRY_POLICY')
     for item in value.get('fanout', []):

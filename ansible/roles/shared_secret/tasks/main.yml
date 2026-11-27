@@ -1,13 +1,23 @@
-# One shared secret: copied from secrets_source when this node lacks it, never overwritten, never
-# logged. secret: {dest, src (default dest), owner, mode, keep (regex: lines to copy), node_line
-# (rewrite NODE= to this node's id)}.
+# One shared secret: copied from secrets_source when this node lacks it, never overwritten unless
+# sync (copied again whenever it differs; only for files copied as they are), never logged.
+# secret: {dest, src (default dest), owner, mode, keep (regex: lines to copy), node_line (rewrite
+# NODE= to this node's id), sync}.
 - name: "Look for {{ secret.dest }}"
   ansible.builtin.stat:
     path: "{{ secret.dest }}"
   register: shared_secret_stat
 
+- name: "Compare {{ secret.dest }} with {{ secrets_source }}'s"
+  when: secret.sync | default(false) and shared_secret_stat.stat.exists and inventory_hostname != secrets_source
+  ansible.builtin.stat:
+    path: "{{ secret.src | default(secret.dest) }}"
+  delegate_to: "{{ secrets_source }}"
+  register: shared_secret_source
+
 - name: "Copy {{ secret.dest }} from {{ secrets_source }}"
-  when: not shared_secret_stat.stat.exists
+  when: >-
+    not shared_secret_stat.stat.exists or
+    (shared_secret_source.stat.checksum | default(none)) not in [none, shared_secret_stat.stat.checksum]
   block:
     - name: "Read {{ secret.src | default(secret.dest) }} on {{ secrets_source }}"
       ansible.builtin.slurp:

@@ -74,6 +74,49 @@
     mode: u=rwX,g=rX,o=rX
   notify: Reload crowdsec
 
+# The package's post-install `cscli setup` adds acquisition and hub items of its own (setup.*.yaml:
+# sshd read from both /var/log/secure and the journal, so ssh-bf counted every failure twice).
+# This fleet acquires only what platform/crowdsec/config/acquis.d lists, the same on every node.
+- name: Acquisition files cscli setup wrote
+  ansible.builtin.find:
+    paths: /etc/crowdsec/acquis.d
+    patterns: "setup.*.yaml"
+  register: crowdsec_setup_acquis
+
+- name: Remove them
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ crowdsec_setup_acquis.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  notify: Reload crowdsec
+
+# auditd: cscli setup's collection, with no acquisition left. whitelists (127/8, 10/8, 172.16/12,
+# 192.168/16): what keeps an internal address (the connector 172.31.250.2 among them) from a ban.
+- name: Hub items alike on every node (no auditd; the private-address whitelist everywhere)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if cscli collections list -o json | jq -e '.collections[]? | select(.name == "crowdsecurity/auditd")' >/dev/null; then
+      {{ 'echo changed; exit 0' if ansible_check_mode else '' }}
+      cscli collections remove crowdsecurity/auditd >/dev/null && echo changed
+    fi
+    if ! cscli parsers list -o json | jq -e '.parsers[]? | select(.name == "crowdsecurity/whitelists")' >/dev/null; then
+      {{ 'echo changed; exit 0' if ansible_check_mode else '' }}
+      cscli parsers install crowdsecurity/whitelists >/dev/null && echo changed
+    fi
+  register: crowdsec_setup_hub
+  check_mode: false
+  changed_when: "'changed' in crowdsec_setup_hub.stdout"
+  notify: Reload crowdsec
+
+- name: Daily hub update (the package's timer), on every node alike
+  ansible.builtin.systemd_service:
+    name: crowdsec-hubupdate.timer
+    enabled: true
+    state: started
+  ignore_errors: "{{ ansible_check_mode }}"
+
 - name: Never ban a node of this fleet (SFTP polling looks like ssh-bf)
   ansible.builtin.template:
     src: "{{ platform_src }}/crowdsec/self-whitelist.yaml.j2"
@@ -205,14 +248,16 @@
   changed_when: true
 
 # profiles.yaml notifies http_telegram (the controller on the LAPI node, its bearer key inside).
+# Kept as on secrets_source: a LAPI node loads it at its next start (lapi.sh restarts it on taking over).
 - name: Ban notifications plugin config
   ansible.builtin.include_role:
     name: shared_secret
   vars:
     secret:
       dest: /etc/crowdsec/notifications/http_telegram.yaml
+      sync: true
 
-- name: LAPI move (lapi.sh, its unit, the tunnel unit, Litestream for crowdsec.db)
+- name: LAPI move (lapi.sh, its units, the tunnel unit, Litestream for crowdsec.db)
   ansible.builtin.copy:
     src: "{{ platform_src }}/crowdsec/{{ item.src }}"
     dest: "{{ item.dest }}"
@@ -228,8 +273,9 @@
     - {src: crowdsec-lapi.service, dest: /etc/systemd/system/crowdsec-lapi.service}
     - {src: platform-lapi-guard.timer, dest: /etc/systemd/system/platform-lapi-guard.timer}
     - {src: platform-lapi-guard.service, dest: /etc/systemd/system/platform-lapi-guard.service}
+    - {src: crowdsec-follow-position.service, dest: /etc/systemd/system/crowdsec-follow-position.service}
     - {src: lapi-grant.conf, dest: /etc/systemd/system/crowdsec.service.d/30-lapi-grant.conf}
-  notify: Reload systemd
+  notify: [Reload systemd, Restart copy publisher]
 
 - name: Agent and firewall bouncer start after the tunnel (a condition skips it on the LAPI node)
   ansible.builtin.copy:
@@ -252,6 +298,13 @@
     name: crowdsec-lapi.service
     enabled: true
   ignore_errors: "{{ ansible_check_mode }}"  # the unit file is not written in check mode
+
+- name: This node's copy published for the LAPI node's write confirmations (lapi.sh publish)
+  ansible.builtin.systemd_service:
+    name: crowdsec-follow-position.service
+    enabled: true
+    state: started
+  ignore_errors: "{{ ansible_check_mode }}"
 
 - name: Hold or follow the LAPI as the lease says
   when: not ansible_check_mode
