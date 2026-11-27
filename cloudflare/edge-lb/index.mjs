@@ -500,7 +500,7 @@ export class Lease {
       await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: this.env.TELEGRAM_CHAT_ID, text: `[edge] ${alerts.join("\n")}` }),
+        body: JSON.stringify({ chat_id: this.env.TELEGRAM_CHAT_ID, parse_mode: "HTML", text: `🌐 <b>edge</b> (Cloudflare Worker)\n${alerts.join("\n")}` }),
       }).catch(() => {});
     }
     return response;
@@ -537,7 +537,7 @@ export class Lease {
       if (!force && age < LEASE_MS) {
         return Response.json({ error: "WRITER_ALIVE", writer: s.writer, seconds: Math.round(age / 1000) }, { status: 409 });
       }
-      alerts.push(`${node} is now the writer (was ${s.writer}${force ? ", forced" : ""}); ${s.writer} steps down to replica when it is back.`);
+      alerts.push(`🔁 <b>Writer moved</b>: ${node} is now the writer (was ${s.writer}${force ? ", forced" : ""}); ${s.writer} steps down to replica when it is back.`);
       s.lapiAfter = Math.max(s.lapiAfter || 0, (s.beats[s.writer] || 0) + LEASE_MS);
       s.writer = node;
       s.epoch++;
@@ -547,15 +547,19 @@ export class Lease {
     if (op === "check") {
       const age = now - (s.beats[s.writer] ?? 0);
       results.lease = age < LEASE_MS ? "" : `writer ${s.writer} has not renewed the lease for ${Math.round(age / 60000)} min (it stopped taking writes after 150 s)`;
+      s.failingSince ??= {};
       for (const [check, detail] of Object.entries(results)) {
         s.fails[check] = detail ? (s.fails[check] ?? 0) + 1 : 0;
+        if (s.fails[check] === 1) s.failingSince[check] = now;
         if (detail && s.fails[check] >= 2 && !s.alerted[check]) {
           s.alerted[check] = true;
-          alerts.push(`PROBLEM: ${check}: ${detail}`);
+          alerts.push(`🔴 <b>${label(check)}</b>: ${esc(detail)}${impact(check, s.writer)}`);
         } else if (!detail && s.alerted[check]) {
           delete s.alerted[check];
-          alerts.push(`OK again: ${check}`);
+          const since = s.failingSince[check];
+          alerts.push(`✅ <b>${label(check)}</b>: back to normal${since ? `, after ${Math.ceil((now - since) / 60000)} min` : ""}`);
         }
+        if (!detail) delete s.failingSince[check];
       }
       const failing = (n) => Object.keys(results).some((check) => check.startsWith(`${n} `) && results[check]);
       const nodes = [...new Set(Object.keys(results).filter((check) => check.includes(" ")).map((check) => check.split(" ")[0]))];
@@ -576,7 +580,7 @@ export class Lease {
         const why = writerFails >= PROMOTE_CHECKS ? `failing ${writerFails} checks in a row` : `no lease renewal for ${Math.round(age / 60000)} min`;
         if (next) {
           const lag = s.floor || floor === null ? "" : `, ${floor > at(next) ? floor - at(next) : 0n} transactions behind its last report`;
-          alerts.push(`${next} is now the writer (was ${s.writer}, ${why}${lag}); ${s.writer} steps down to replica when it is back.`);
+          alerts.push(`🔁 <b>Writer moved</b>: ${next} is now the writer (was ${s.writer}, ${why}${lag}); ${s.writer} steps down to replica when it is back.`);
           s.lapiAfter = Math.max(s.lapiAfter || 0, (s.beats[s.writer] || 0) + LEASE_MS);
           s.writer = next;
           s.epoch++;
@@ -585,8 +589,8 @@ export class Lease {
           delete s.alerted.failover;
         } else if (!s.alerted.failover) {
           s.alerted.failover = true;
-          alerts.push(`PROBLEM: writer ${s.writer} is down (${why}) and no replica may take over by itself (each must pass its checks, renew the lease and hold the writer's data). ` +
-            (s.floor ? "Even forced promotion requires the last acknowledged position." : "sudo /opt/platform/peer/role.sh promote --force takes it anyway, losing what that replica lacks."));
+          alerts.push(`🆘 <b>Needs a person</b>: writer ${s.writer} is down (${why}) and no replica may take over by itself (each must pass its checks, renew the lease and hold the writer's data). ` +
+            (s.floor ? "Even forced promotion requires the last acknowledged position." : "<code>sudo /opt/platform/peer/role.sh promote --force</code> on a replica takes it anyway, losing what that replica lacks."));
         }
       } else {
         delete s.alerted.failover;
@@ -596,6 +600,17 @@ export class Lease {
     return { alerts, response: Response.json({ writer: s.writer, epoch: s.epoch, version: s.version, down: downNodes(s, now),
       ...(s.floor && { floor: s.floor }), lapiGrant: op === "beat" && node === s.writer && now >= (s.lapiAfter || 0) }) };
   }
+}
+
+// Telegram HTML: a check's name and what its failure means, from a detail that may hold anything.
+const esc = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const label = (check) => (check === "lease" ? "Lease" : check.replace(" ", " · "));
+function impact(check, writer) {
+  if (check === "lease") return "";
+  const node = check.split(" ")[0];
+  return node === writer
+    ? `. ${node} is the writer: writes wait, and after ${PROMOTE_CHECKS} failed checks in a row the edge hands writing to a current replica.`
+    : ". Readers are sent to the other nodes meanwhile.";
 }
 
 // Read last: nodes whose last check failed and, while the writer renews, replicas whose follower

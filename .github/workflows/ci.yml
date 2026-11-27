@@ -42,6 +42,7 @@ jobs:
           PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
           bash platform/peer/role.test.sh
+          bash platform/peer/peer.test.sh
           "$PYTHON" -m venv "$RUNNER_TEMP/ansible"
           "$RUNNER_TEMP/ansible/bin/pip" install --quiet ansible-core==2.22.0 ansible-lint==26.11.1
           export PATH="$RUNNER_TEMP/ansible/bin:$PATH"

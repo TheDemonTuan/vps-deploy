@@ -359,15 +359,15 @@ test('the cron checks every node of each leased site and alerts after two failur
   await worker.scheduled({}, env);
   // The writer (n1) never renewed the lease here, so that is reported as well.
   assert.equal(telegrams.length, 1);
-  assert.match(telegrams[0], /PROBLEM: n2 thedemontuan.dev: HTTP 502/);
-  assert.match(telegrams[0], /PROBLEM: n2 api.thedemontuan.dev: HTTP 502/);
-  assert.match(telegrams[0], /PROBLEM: lease: writer n1 has not renewed the lease/);
-  assert.doesNotMatch(telegrams[0], /n1 thedemontuan/);
+  assert.match(telegrams[0], /🔴 <b>n2 · thedemontuan.dev<\/b>: HTTP 502\. Readers are sent to the other nodes/);
+  assert.match(telegrams[0], /🔴 <b>n2 · api.thedemontuan.dev<\/b>: HTTP 502/);
+  assert.match(telegrams[0], /🔴 <b>Lease<\/b>: writer n1 has not renewed the lease/);
+  assert.doesNotMatch(telegrams[0], /n1 · thedemontuan/);
   replies = {};
   await leaseCall('n1', { op: 'beat' });
   await worker.scheduled({}, env);
-  assert.match(telegrams[1], /OK again: n2 thedemontuan.dev/);
-  assert.match(telegrams[1], /OK again: lease/);
+  assert.match(telegrams[1], /✅ <b>n2 · thedemontuan.dev<\/b>: back to normal, after \d+ min/);
+  assert.match(telegrams[1], /✅ <b>Lease<\/b>: back to normal/);
 });
 
 test('a read answered 500 is retried on the next node without marking the first one down', async () => {
@@ -430,7 +430,7 @@ test('a writer that stops renewing hands the lease to the replica holding its da
     await beat('n2', '00000000000000f0');
     await worker.scheduled({}, env);
     assert.equal((await beat('n2', '00000000000000f0')).writer, 'n1');
-    assert.ok(telegrams.some((t) => /PROBLEM: writer n1 is down \(no lease renewal for 3 min\) and no replica may take over/.test(t)));
+    assert.ok(telegrams.some((t) => /Needs a person<\/b>: writer n1 is down \(no lease renewal for 3 min\) and no replica may take over/.test(t)));
     // Within PROMOTE_LAG_TXIDS of what n1 last reported.
     await beat('n2', '00000000000000fc');
     await worker.scheduled({}, env);
