@@ -194,9 +194,11 @@ the nodes' `opc` keys); CI only lints it.
    upgrade its tenancy to Pay As You Go (Always Free resources stay free).
    Another provider (n4, `hosts/vps-n4.yml`): an EL install the roles already know (AlmaLinux 10),
    then as root what the Oracle image comes with: `opc` (uid 1000, groups `adm`, `systemd-journal`, `NOPASSWD` sudo,
-   the node's key), SELinux enforcing (`/.autorelabel`, reboot), firewalld with only `ssh`, a 4 GB
-   `/.swapfile`, UTC. Without a serial log, compare `ssh-keyscan` from the workstation and every
-   node before pinning the host key.
+   the node's key), SELinux (an image shipped with it disabled: `SELINUX=permissive` and
+   `/.autorelabel`, reboot, then `setenforce 1` and `SELINUX=enforcing`; booting straight into
+   enforcing on unlabeled files freezes systemd), firewalld with only `ssh`, a 4 GB `/.swapfile`,
+   UTC. Without a serial log, compare `ssh-keyscan` from the workstation and every node before
+   pinning the host key.
 2. **Cloudflare** (dashboard): the node's IP in the IP filter of the account tokens
    `litestream-mc-hub-db` and `mc-hub-media-nodes` (R2 backups and media; the litestream role
    fails on a node they refuse). Its tunnel `shared-edge-<host>` comes from `cloudflare/tofu`.
