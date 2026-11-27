@@ -3,7 +3,8 @@
 # names) once, on the node that holds the edge lease (the writer), from the operator's machine.
 # The other nodes need nothing: Litestream copies the database to them within about a second and
 # the files go to R2, which they read; the script waits until every replica has the import.
-# Pages show it within about 5 minutes (each node's page cache), as on one node.
+# Then it clears each node's page cache (mc-hub's POST /internal/revalidate, from inside the
+# container), so pages show the import at once and Cloudflare's edge copy within about 2 minutes.
 # MCHUB_NODES: ssh aliases of every node (default "vps-node-1 vps-node-2").
 set -euo pipefail
 bundle=${1:?usage: mchub-import.sh BUNDLE_DIR}
@@ -50,3 +51,12 @@ for host in $reachable; do
   echo "$host: replica has it (txid $have)"
 done
 echo "done: every node serves the import"
+
+# shortcut: a node unreachable now keeps its old pages until they expire (up to an hour); rerun then.
+revalidate='const r = await fetch("http://127.0.0.1:8080/internal/revalidate", { method: "POST" }); if (r.status !== 204) { console.error(`HTTP ${r.status}`); process.exit(1); }'
+for host in $reachable; do
+  for c in $(ssh "$host" "sudo docker ps --format {{.Names}}" | grep -E '^mc-hub-(blue|green)$'); do
+    if ssh "$host" "sudo docker exec $c bun -e '$revalidate'"; then echo "$host: $c page cache cleared"
+    else echo "$host: $c page cache NOT cleared; POST /admin/revalidate from a signed-in admin tab" >&2; fi
+  done
+done
