@@ -20,6 +20,18 @@ export default {
           "^/api/posts(/[^/]+)?$",
           "^/(?!api/|admin|_astro/|media/)"
         ],
+        "query": {
+          "^/api/posts$": [
+            "category",
+            "featured",
+            "limit",
+            "locale",
+            "page",
+            "sort",
+            "tag",
+            "translationKey"
+          ]
+        },
         "stale_seconds": 86400,
         "ttl_seconds": 30
       },

@@ -34,6 +34,11 @@ locals {
   # Only our own Workers may reach the origins that way: edge-lb (route on thedemontuan.dev),
   # this account's workers.dev (UptimeFlare) and the tuannguyenviet.site Workers.
   foreign_workers = "not cf.worker.upstream_zone in {\"\" \"thedemontuan.dev\" \"tuannguyenviet.site\" \"nguyenviettuanbp.workers.dev\"}"
+  # Attack mode: a managed challenge on the site's pages (paths without an extension) for every
+  # visitor but verified bots, the nodes (deploy probes, lease) and our own Workers' subrequests
+  # (UptimeFlare). Assets, images, /api/ (the page's own calls, after its challenge) stay open.
+  # It does what "I'm Under Attack" would, which cannot spare the nodes on the Free plan.
+  site_pages = "http.host eq \"${local.mc_hub_site}\" and http.request.method in {\"GET\" \"HEAD\"} and http.request.uri.path.extension eq \"\" and not starts_with(http.request.uri.path, \"/api/\") and not starts_with(http.request.uri.path, \"/cdn-cgi/\") and not starts_with(http.request.uri.path, \"/.well-known/\") and not cf.client.bot and cf.worker.upstream_zone eq \"\" and not ip.src in {${local.edge_node_ips}}"
 }
 
 resource "cloudflare_ruleset" "thedemontuan_dev_custom_waf" {
@@ -53,17 +58,12 @@ resource "cloudflare_ruleset" "thedemontuan_dev_custom_waf" {
       ref         = "crowdsec_edge_block"
     },
     {
+      # One rule for both (Free plan: 5 custom rules). The controller (crowdsec-telegram) checks
+      # that crowdsec_edge_block is exactly "ip.src in $edge_bans", so that one stays alone.
       action      = "block"
-      description = "foreign-workers"
+      description = "edge-probe-paths, foreign-workers"
       enabled     = true
-      expression  = local.foreign_workers
-      ref         = "foreign_workers"
-    },
-    {
-      action      = "block"
-      description = "edge-probe-paths"
-      enabled     = true
-      expression  = "${local.probe_paths} or (${local.site_probes}) or ${local.scanner_probes}"
+      expression  = "${local.probe_paths} or (${local.site_probes}) or ${local.scanner_probes} or ${local.foreign_workers}"
       ref         = "ef7d847cf4094f29a25d1ca321d0110c"
     },
     {
@@ -80,6 +80,15 @@ resource "cloudflare_ruleset" "thedemontuan_dev_custom_waf" {
       enabled     = true
       expression  = local.site_methods
       ref         = "mc_hub_methods"
+    },
+    {
+      # Off until an attack gets past the rate limit (README "Under attack"): turn it on in the
+      # dashboard for an immediate effect, then here so the next apply keeps it.
+      action      = "managed_challenge"
+      description = "attack-mode"
+      enabled     = false
+      expression  = local.site_pages
+      ref         = "mc_hub_attack_mode"
     }
   ]
 }
@@ -150,20 +159,22 @@ resource "cloudflare_ruleset" "thedemontuan_dev_ratelimit" {
 
   rules = [
     {
-      # Above what Traefik's per-visitor /api/ limit (10/s, burst 30) lets through, so it only sheds
-      # floods. Replaces the leaked-credential rule: every password form sits behind Access.
-      # /api/admin/ is Access-only; vmagent (metrics.) flushes its disk buffer in bursts. /healthz:
-      # all the API host still serves, and Traefik puts no per-IP limit on it.
+      # Every path but hashed assets and images (a page pulls dozens; the edge cache and R2 serve
+      # them, never a node), so a flood of edge-cached pages stops here too, before the Worker.
+      # Above what Traefik lets one visitor through (pages 20/s burst 60, /api/ 10/s burst 30) with
+      # room for many readers behind one carrier address (CGNAT). Replaces the leaked-credential
+      # rule: every password form sits behind Access. /api/admin/ is Access-only; vmagent
+      # (metrics.) flushes its disk buffer in bursts.
       action      = "block"
       description = "mc-hub-api-flood"
       enabled     = true
-      expression  = "(starts_with(http.request.uri.path, \"/api/\") or http.request.uri.path eq \"/healthz\") and not starts_with(http.request.uri.path, \"/api/admin/\") and http.request.uri.path ne \"/api/v1/write\" and not cf.bot_management.verified_bot"
+      expression  = "not starts_with(http.request.uri.path, \"/_astro/\") and not starts_with(http.request.uri.path, \"/media/\") and not starts_with(http.request.uri.path, \"/api/admin/\") and http.request.uri.path ne \"/api/v1/write\" and not cf.bot_management.verified_bot"
       ref         = "mc_hub_api_flood"
       ratelimit = {
         characteristics     = ["ip.src", "cf.colo.id"]
         mitigation_timeout  = 10
         period              = 10
-        requests_per_period = 150
+        requests_per_period = 300
       }
     }
   ]

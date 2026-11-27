@@ -10,7 +10,9 @@
 // queue the `queue_paths` writes while it is down, are health-checked every minute (cron) with
 // Telegram alerts, and keep `edge_cache` reads in the Cache API (stale when every node fails).
 // The checks steer reads: a node that failed its last check, or a replica whose follower stopped
-// confirming it is current, is tried last. A writer failing PROMOTE_CHECKS checks in a row, or no
+// confirming it is current, is tried last; a node whose /healthz reports it busy (load per CPU,
+// or its in-flight requests near their cap) gets a smaller share of clients. A writer failing
+// PROMOTE_CHECKS checks in a row, or no
 // longer renewing the lease, hands it to the healthy replica holding the most data, and only if it
 // is at most PROMOTE_LAG_TXIDS behind the writer's last report (its peer.sh then makes it the
 // primary). The old writer stops taking writes by itself (mc-hub-api's writer-lease, platform/peer).
@@ -50,6 +52,14 @@ const STORED = "x-edge-stored";
 // location's path to a tunnel can stall a request for 10 s or more (EWR, 2026-11-26).
 // The lease (writer, cache version) is re-read from its Durable Object at most leaseMs apart.
 const timing = { ttfbMs: 1_000, leaseMs: 30_000 };
+// Load-aware weights: each check's highest "busy" per node (its /healthz: the larger of load per
+// CPU and in-flight requests over their cap) feeds an EWMA; above LOAD_HOT the node's weight
+// factor steps down by a quarter (to 0.25 at least), below LOAD_COOL it climbs back an eighth per
+// check. A factor without a report for LOAD_MS counts as 1 (a node that stopped answering is
+// marked down instead).
+const LOAD_HOT = 0.9;
+const LOAD_COOL = 0.6;
+const LOAD_MS = 180_000;
 
 // Isolate-local passive health: a node that just failed is tried last for DOWN_MS.
 const downUntil = new Map();
@@ -106,22 +116,25 @@ export default {
     const checks = {};
     for (const [host, site] of Object.entries(config.sites)) {
       if (!site.lease) continue;
-      const results = (checks[site.lease] ??= { site, results: {} }).results;
+      const check = (checks[site.lease] ??= { site, results: {}, loads: {} });
       await Promise.all(
         site.nodes.map(async (node) => {
           let detail = "";
           try {
             const headers = { "user-agent": "edge-lb-health", [PIN]: node, ...(env.NODE_KEY && { [PIN_KEY]: await pinKey(env) }) };
             const response = await send(new Request(`https://${host}/healthz`, { headers }), node, site, 15_000);
-            if (response.status !== 200) detail = `HTTP ${response.status}`;
+            const report = await response.json().catch(() => ({}));
+            if (response.status !== 200) detail = `HTTP ${response.status}${typeof report.reason === "string" ? `: ${report.reason}` : ""}`;
+            const busy = Number(report.busy) || 0;
+            if (!detail && busy > 0) check.loads[node] = Math.max(check.loads[node] ?? 0, busy);
           } catch (error) {
             detail = error?.name || String(error);
           }
-          results[`${node} ${host}`] = detail;
+          check.results[`${node} ${host}`] = detail;
         }),
       );
     }
-    await Promise.all(Object.values(checks).map(({ site, results }) => lease(env, site, { op: "check", results })));
+    await Promise.all(Object.values(checks).map(({ site, results, loads }) => lease(env, site, { op: "check", results, loads })));
   },
 };
 
@@ -218,8 +231,16 @@ async function route(request, url, site, env, ctx, meta) {
   const cached = !primary && cache && request.method === "GET" && !request.headers.has("authorization") && cache.paths.some((p) => new RegExp(p).test(url.pathname));
   let key, hit;
   if (cached) {
-    // The lease's version is bumped after each fanout (the admin's cache purge) reached every node.
+    // The key keeps only the query parameters the path's handler reads (edge_cache.query): any
+    // other parameter would mint a fresh entry per value and send a flood straight to the nodes.
+    // The request itself still goes out unchanged. The lease's version is bumped after each
+    // fanout (the admin's cache purge) reached every node.
     const keyUrl = new URL(url);
+    const read = Object.entries(cache.query ?? {}).find(([p]) => new RegExp(p).test(url.pathname))?.[1] ?? [];
+    keyUrl.search = "";
+    for (const [name, value] of [...url.searchParams].filter(([name]) => read.includes(name)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      keyUrl.searchParams.append(name, value);
+    }
     keyUrl.searchParams.set("__edge_v", String(state.version));
     key = new Request(keyUrl, { method: "GET" });
     hit = await caches.default.match(key);
@@ -233,7 +254,7 @@ async function route(request, url, site, env, ctx, meta) {
   // there first; while the writer fails, another node's copy (about a second behind) beats a 502.
   // One bound to it by its path waits for its headers: a replica refuses /api/dl, and a download's
   // headers wait while a file the writer lacks comes from R2.
-  let order = pickOrder(site.nodes, client, Date.now(), state.down);
+  let order = pickOrder(site.nodes, client, Date.now(), state.down, state.load);
   if (primary && !(downUntil.get(state.writer) > Date.now()) && !state.down?.includes(state.writer)) {
     order = [state.writer, ...order.filter((n) => n !== state.writer)];
   }
@@ -257,8 +278,9 @@ async function route(request, url, site, env, ctx, meta) {
       // Only out of time for its headers: a working node behind a stalled tunnel (EWR, 2026-11-26).
       if (error?.name === "AbortError") stalled ??= order[i];
     }
-    // A 500 does not mark the node down: it is more often that one request's.
-    if (failed && !final && last?.status !== 500) downUntil.set(order[i], Date.now() + DOWN_MS);
+    // A 500 does not mark the node down: it is more often that one request's. Nor does an
+    // overloaded node's shed (X-Overloaded): it is up, and answers again as soon as it has room.
+    if (failed && !final && last?.status !== 500 && !last?.headers?.has("x-overloaded")) downUntil.set(order[i], Date.now() + DOWN_MS);
     // Every node failed and none has a stale copy: wait for the first one that only ran out of
     // time rather than answer with a down node's error.
     if (failed && final && stalled && !hit && !waited) {
@@ -296,11 +318,12 @@ function needsPrimary(request, url, rules) {
 
 // Weighted rendezvous hashing on the client address: a client always lands on the same node, so
 // that node's Traefik rate limits and CrowdSec scenarios see all of its requests (not a share) and
-// its reads come from one replica; nodes get clients in proportion to weight, and a node leaving
-// moves only its own clients. Nodes marked down (here, or by the cron's checks) go last; weight 0
-// is last too (retries only).
-export function pickOrder(nodes, client, now = Date.now(), down = []) {
-  const score = (n) => (config.nodes[n].weight > 0 ? -config.nodes[n].weight / Math.log(unit(n + "|" + client)) : 0);
+// its reads come from one replica; nodes get clients in proportion to weight (times the lease's
+// load factor, so a busy node sheds only part of its clients), and a node leaving moves only its
+// own clients. Nodes marked down (here, or by the cron's checks) go last; weight 0 is last too
+// (retries only).
+export function pickOrder(nodes, client, now = Date.now(), down = [], load = {}) {
+  const score = (n) => (config.nodes[n].weight > 0 ? (-config.nodes[n].weight * (load?.[n] ?? 1)) / Math.log(unit(n + "|" + client)) : 0);
   return nodes
     .map((n) => [n, score(n), downUntil.get(n) > now || down.includes(n)])
     .sort((a, b) => a[2] - b[2] || b[1] - a[1])
@@ -506,7 +529,7 @@ export class Lease {
     return response;
   }
 
-  async update(tx, { op, node, force, results, primary, synced, txid, epoch, position }) {
+  async update(tx, { op, node, force, results, loads, primary, synced, txid, epoch, position }) {
     const s = (await tx.get("lease")) ?? { writer: primary, epoch: 0, version: 0, beats: {}, fails: {}, alerted: {} };
     if (op === "confirm") {
       if (s.writer !== node || s.epoch !== epoch) return new Response(null, { status: 409 });
@@ -564,6 +587,21 @@ export class Lease {
       const failing = (n) => Object.keys(results).some((check) => check.startsWith(`${n} `) && results[check]);
       const nodes = [...new Set(Object.keys(results).filter((check) => check.includes(" ")).map((check) => check.split(" ")[0]))];
       for (const n of nodes) if (!failing(n)) s.ok[n] = now;
+      s.load ??= {};
+      for (const [n, busy] of Object.entries(loads ?? {})) {
+        const l = s.load[n] && now - s.load[n].at < LOAD_MS ? s.load[n] : { busy, factor: 1 };
+        l.busy = 0.5 * l.busy + 0.5 * busy;
+        l.factor = l.busy > LOAD_HOT ? Math.max(0.25, l.factor - 0.25) : l.busy < LOAD_COOL ? Math.min(1, l.factor + 0.125) : l.factor;
+        l.at = now;
+        s.load[n] = l;
+        if (l.factor < 1 && !s.alerted[`load:${n}`]) {
+          s.alerted[`load:${n}`] = true;
+          alerts.push(`🟠 <b>${n} busy</b>: ${Math.round(l.busy * 100)}% of its capacity in use; it gets ${l.factor * 100}% of its usual share of readers until that falls below ${LOAD_COOL * 100}%.`);
+        } else if (l.factor === 1 && s.alerted[`load:${n}`]) {
+          delete s.alerted[`load:${n}`];
+          alerts.push(`✅ <b>${n}</b>: load back to normal, full share of readers again`);
+        }
+      }
       const writerFails = Math.max(0, ...Object.keys(s.fails).filter((check) => check.startsWith(`${s.writer} `)).map((check) => s.fails[check]));
       // A writer that stopped renewing has fenced itself (writer-lease), checks or not; only a
       // peer.sh that sends its position does that, so an older one is left to the checks.
@@ -597,7 +635,7 @@ export class Lease {
       }
     }
     await tx.put("lease", s);
-    return { alerts, response: Response.json({ writer: s.writer, epoch: s.epoch, version: s.version, down: downNodes(s, now),
+    return { alerts, response: Response.json({ writer: s.writer, epoch: s.epoch, version: s.version, down: downNodes(s, now), load: loadFactors(s, now),
       ...(s.floor && { floor: s.floor }), lapiGrant: op === "beat" && node === s.writer && now >= (s.lapiAfter || 0) }) };
   }
 }
@@ -621,6 +659,11 @@ function downNodes(s, now) {
     for (const [n, at] of Object.entries(s.synced)) if (n !== s.writer && now - at > SYNC_MS) down.add(n);
   }
   return [...down];
+}
+
+// Weight factors below 1 with a recent report; a missing node means 1.
+function loadFactors(s, now) {
+  return Object.fromEntries(Object.entries(s.load ?? {}).filter(([, l]) => l.factor < 1 && now - l.at < LOAD_MS).map(([n, l]) => [n, l.factor]));
 }
 
 export const _test = { downUntil, leases, timing };

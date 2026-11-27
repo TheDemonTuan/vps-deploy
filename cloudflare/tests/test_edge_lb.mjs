@@ -236,14 +236,14 @@ test('public images come from the bucket with the API headers; others fall throu
 test('a node takes the lease only with its key from its own address, and only once the writer stopped renewing', async () => {
   assert.equal((await leaseCall('n2', { op: 'promote' }, 'guess')).status, 404);
   assert.equal((await call('/__edge/lease/mc-hub-api', { method: 'POST', body: '{"op":"promote"}', headers: { authorization: 'Bearer node-key' } })).status, 404);
-  assert.deepEqual(await (await leaseCall('n1', { op: 'beat' })).json(), { writer: 'n1', epoch: 0, version: 0, down: [], lapiGrant: true });
+  assert.deepEqual(await (await leaseCall('n1', { op: 'beat' })).json(), { writer: 'n1', epoch: 0, version: 0, down: [], load: {}, lapiGrant: true });
   const refused = await leaseCall('n2', { op: 'promote' });
   assert.equal(refused.status, 409);
   assert.equal((await refused.json()).writer, 'n1');
   assert.equal(telegrams.length, 0);
 
   const forced = await leaseCall('n2', { op: 'promote', force: true });
-  assert.deepEqual(await forced.json(), { writer: 'n2', epoch: 1, version: 1, down: [], lapiGrant: false });
+  assert.deepEqual(await forced.json(), { writer: 'n2', epoch: 1, version: 1, down: [], load: {}, lapiGrant: false });
   assert.match(telegrams[0], /n2 is now the writer \(was n1, forced\)/);
   _test.leases.clear();
   await call('/api/comments', { method: 'POST', body: '{}' });
@@ -368,6 +368,63 @@ test('the cron checks every node of each leased site and alerts after two failur
   await worker.scheduled({}, env);
   assert.match(telegrams[1], /✅ <b>n2 · thedemontuan.dev<\/b>: back to normal, after \d+ min/);
   assert.match(telegrams[1], /✅ <b>Lease<\/b>: back to normal/);
+});
+
+test('the edge cache key keeps only the query parameters the path reads; the node still gets the full query', async () => {
+  replies = { n1: publicJson('v1'), n2: publicJson('v1') };
+  await call('/api/posts?limit=1&utm=a');
+  await call('/datapack/?x=1');
+  await settle();
+  calls = [];
+  for (const path of ['/api/posts?utm=b&limit=1', '/datapack/?y=2', '/datapack/']) assert.equal((await call(path)).headers.get('x-edge-cache'), 'HIT', path);
+  assert.equal(calls.length, 0);
+  assert.equal((await call('/api/posts?limit=2&utm=c')).headers.get('x-edge-cache'), null);
+  assert.equal(new URL(calls[0].url).search, '?limit=2&utm=c');
+});
+
+test('an overloaded node (X-Overloaded) hands the read to the next one without being marked down', async () => {
+  replies = { n2: () => new Response('busy', { status: 503, headers: { 'x-overloaded': '1', 'retry-after': '1' } }) };
+  assert.equal(await (await call('/', {}, clientOn('n2'))).text(), 'n1');
+  assert.equal(_test.downUntil.has('n2'), false);
+  replies = { n1: 502, n2: () => new Response('busy', { status: 503, headers: { 'x-overloaded': '1' } }) };
+  assert.equal((await call('/', {}, clientOn('n2'))).status, 502);
+  assert.equal(_test.downUntil.has('n2'), false);
+});
+
+test('a busy node sheds part of its readers until its load falls, with an alert each way', async () => {
+  const health = (busy) => () => Response.json({ ok: true, busy, active_requests: 1 });
+  const factors = async () => (await (await leaseCall('n1', { op: 'beat' })).json()).load;
+  await leaseCall('n1', { op: 'beat' });
+  replies = { n2: health(2) };
+  await worker.scheduled({}, env);
+  await worker.scheduled({}, env);
+  assert.deepEqual(await factors(), { n2: 0.5 });
+  assert.equal(telegrams.length, 1);
+  assert.match(telegrams[0], /🟠 <b>n2 busy<\/b>: 200% of its capacity in use; it gets 75% of its usual share/);
+
+  // Only n2's clients move, and only some of them.
+  const before = Array.from({ length: 4000 }, (_, i) => pickOrder(['n1', 'n2'], ipAt(i))[0]);
+  const after = Array.from({ length: 4000 }, (_, i) => pickOrder(['n1', 'n2'], ipAt(i), Date.now(), [], { n2: 0.5 })[0]);
+  assert.ok(before.every((n, i) => n === 'n2' || after[i] === 'n1'));
+  const share = after.filter((n) => n === 'n2').length / after.length;
+  assert.ok(share > 0.5 && share < 0.58, `n2 share ${share}`);
+  const moved = ipAt(before.findIndex((n, i) => n === 'n2' && after[i] === 'n1'));
+  _test.leases.clear();
+  calls = [];
+  replies = {};
+  await call('/', {}, moved);
+  assert.deepEqual(calls.map((c) => c.node), ['n1']);
+
+  replies = { n2: health(0.1) };
+  for (let i = 0; i < 12 && Object.keys(await factors()).length; i++) await worker.scheduled({}, env);
+  assert.deepEqual(await factors(), {});
+  assert.match(telegrams.at(-1), /✅ <b>n2<\/b>: load back to normal/);
+
+  // A node that refuses its check says why (mc-hub-api: disk nearly full).
+  replies = { n2: () => Response.json({ ok: false, reason: 'disk: 512 MiB free' }, { status: 503 }) };
+  await worker.scheduled({}, env);
+  await worker.scheduled({}, env);
+  assert.match(telegrams.at(-1), /🔴 <b>n2 · api.thedemontuan.dev<\/b>: HTTP 503: disk: 512 MiB free/);
 });
 
 test('a read answered 500 is retried on the next node without marking the first one down', async () => {

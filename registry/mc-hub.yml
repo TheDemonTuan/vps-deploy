@@ -47,6 +47,9 @@ balance:
     paths: ['^/api/posts(/[^/]+)?$', '^/(?!api/|admin|_astro/|media/)']
     ttl_seconds: 30
     stale_seconds: 86400
+    # The only query parameters a cached path reads (mc-hub-api handlePublicPosts); the key drops
+    # every other one, and pages (which read none) get one entry per path whatever the query.
+    query: {'^/api/posts$': [category, featured, limit, locale, page, sort, tag, translationKey]}
   # Hashed build assets: the edge cache serves them; a miss tries every node (deploys reach the
   # nodes one after another, so one may not have a new build's files yet).
   immutable_paths: ['^/_astro/']
