@@ -116,6 +116,16 @@ def app_hosts(registration):
     return [registration['host']] + registration.get('replica_hosts', [])
 
 
+def build_platforms(release, registration):
+    """Platforms an app's image is built for: its manifest's (the smoke-tested one) and each of its hosts'."""
+    return sorted({registration['manifest']['platform']} | {host_registration(release, host).get('platform', 'linux/arm64') for host in app_hosts(registration)})
+
+
+def native_architecture():
+    machine = os.uname().machine
+    return {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(machine, machine)
+
+
 def balance_policy(value):
     """Edge load-balancer rules of an app run on several hosts (cloudflare/edge_lb.py renders them)."""
     # bypass_paths: dropped rule (now immutable_paths), still in releases installed before it; the
@@ -215,8 +225,10 @@ def host_registration(release, host_id):
     path = Path(release) / 'hosts' / (host_id + '.yml')
     require(path.is_file() and not path.is_symlink(), 'HOST_NOT_REGISTERED')
     value = parse_yaml(path.read_bytes())
-    fields(value, {'version', 'host', 'ssh', 'traefik', 'edge', 'apps'}, {'version', 'host', 'ssh', 'traefik', 'apps'})
+    fields(value, {'version', 'host', 'platform', 'ssh', 'traefik', 'edge', 'apps'}, {'version', 'host', 'ssh', 'traefik', 'apps'})
     require(type(value['version']) is int and value['version'] == 1 and value['host'] == host_id, 'REGISTRY_POLICY')
+    # The node's image platform; the Oracle A1 nodes leave it out (linux/arm64).
+    require(value.get('platform', 'linux/arm64') in ('linux/arm64', 'linux/amd64'), 'REGISTRY_POLICY')
     if 'edge' in value:
         # Load-balancer identity: <id>-origin.<zone> is a proxied CNAME to this node's tunnel.
         edge = value['edge']
@@ -406,14 +418,9 @@ def inspect(kind, name):
 
 
 def image_id(ref):
+    # A build publishes one image per host platform (build_platforms); the host pulls its own.
     value = inspect('image', ref)
-    architecture = os.uname().machine
-    architecture = {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(architecture, architecture)
-    if ref.startswith('localhost:5000/') and fixture_authorized():
-        require(value['Architecture'] == architecture, 'IDENTITY_MISMATCH')
-    else:
-        require(value['Architecture'] == 'arm64', 'IDENTITY_MISMATCH')
-    require(value['Os'] == 'linux' and ref in value['RepoDigests'], 'IDENTITY_MISMATCH')
+    require(value['Architecture'] == native_architecture() and value['Os'] == 'linux' and ref in value['RepoDigests'], 'IDENTITY_MISMATCH')
     return value['Id']
 
 
@@ -473,7 +480,7 @@ def host(config, registration, host_record):
     if fixture:
         require(Path(value['work_dir']).stat().st_mode & 0o777 == 0o700, 'FIXTURE_POLICY')
     if fixture:
-        native = {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(os.uname().machine, os.uname().machine)
+        native = native_architecture()
         fixture_image = 'localhost:5000/' + app
         require(value['architecture'] == native and value['image_repository'] == fixture_image, 'FIXTURE_POLICY')
         require(type(value['ca_bundle']) is str, 'FIXTURE_POLICY')
@@ -488,7 +495,7 @@ def host(config, registration, host_record):
                 trusted_path(fault)
     else:
         value['image_repository'] = registration['manifest']['image']
-        value['architecture'] = 'arm64'
+        value['architecture'] = native_architecture()
     trusted_path(config / 'app.yml')
     trusted_path(config / 'runtime.env')
     require((config / 'runtime.env').stat().st_mode & 0o777 == 0o600, 'UNSAFE_RUNTIME_ENV')

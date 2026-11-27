@@ -34,6 +34,22 @@ class Registration(unittest.TestCase):
             self.assertNotIn('tunnel', host['edge'])
             self.assertEqual(host['edge']['id'], 'n1')
 
+    def test_build_platforms_cover_every_host_of_the_app(self):
+        raw = (ROOT / 'hosts/oracle-main.yml').read_text()
+        registration = {'host': 'oracle-main', 'replica_hosts': ['other'], 'manifest': {'platform': 'linux/arm64'}}
+        with tempfile.TemporaryDirectory() as name:
+            release = Path(name)
+            (release / 'hosts').mkdir()
+            (release / 'hosts/oracle-main.yml').write_text(raw)
+            other = release / 'hosts/other.yml'
+            other.write_text(raw.replace('host: oracle-main', 'host: other'))
+            self.assertEqual(core.build_platforms(release, registration), ['linux/arm64'])
+            other.write_text('platform: linux/amd64\n' + other.read_text())
+            self.assertEqual(core.build_platforms(release, registration), ['linux/amd64', 'linux/arm64'])
+            other.write_text(other.read_text().replace('linux/amd64', 'linux/riscv64'))
+            with self.assertRaisesRegex(Failure, 'REGISTRY_POLICY'):
+                core.build_platforms(release, registration)
+
     def test_registration_of_a_release_with_the_dropped_bypass_paths_still_loads(self):
         raw = (ROOT / 'registry/mc-hub.yml').read_text()
         mutated = raw.replace('  lease: mc-hub-api\n', "  lease: mc-hub-api\n  bypass_paths: ['/_astro/*']\n")
@@ -82,7 +98,7 @@ class Registration(unittest.TestCase):
                 mock.patch.object(Path, 'stat', return_value=SimpleNamespace(st_mode=0o100600)):
             value = core.host(Path('/etc/vps-deploy/apps/omniroute'), registration, host_record)
         self.assertEqual(value['image_repository'], 'ghcr.io/thedemontuan/omniroute-vps')
-        self.assertEqual(value['architecture'], 'arm64')
+        self.assertEqual(value['architecture'], core.native_architecture())
 
 
     def test_root_owned_sticky_lock_ancestor_only(self):

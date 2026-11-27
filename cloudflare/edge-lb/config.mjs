@@ -11,6 +11,10 @@ export default {
     "n3": {
       "ip": "140.245.58.227",
       "weight": 30
+    },
+    "n4": {
+      "ip": "192.255.159.24",
+      "weight": 0
     }
   },
   "rules": {
@@ -89,7 +93,8 @@ export default {
       "nodes": [
         "n1",
         "n2",
-        "n3"
+        "n3",
+        "n4"
       ],
       "primary": "n1",
       "rules": "mc-hub-api",
@@ -100,7 +105,8 @@ export default {
       "nodes": [
         "n1",
         "n2",
-        "n3"
+        "n3",
+        "n4"
       ],
       "primary": "n1",
       "rules": "mc-hub",

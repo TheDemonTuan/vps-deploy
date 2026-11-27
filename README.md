@@ -62,7 +62,7 @@ sequenceDiagram
    - Cài đặt runtime dependencies và chạy `.deploy/verify.sh` (toàn bộ suite offline, syntax, router, persistence, quota/bypass logic).
 2. **Gate 2 - Immutable Build & Smoke (`build`)**:
    - Gọi reusable workflow `TheDemonTuan/vps-deploy/.github/workflows/build-docker.yml@<PINNED_SHA>`.
-   - Buildx biên dịch native image trên runner ARM64 (`ubuntu-24.04-arm`).
+   - Buildx biên dịch native image cho từng platform mà các host của app chạy (`build_platforms` trong `lib/core.py`: `linux/arm64` trên `ubuntu-24.04-arm`, thêm `linux/amd64` trên `ubuntu-24.04` khi có host `platform: linux/amd64`), smoke từng digest, rồi gộp thành một image index; mỗi host kéo đúng kiến trúc của mình.
    - Kiểm tra hợp lệ manifest `.deploy/app.yml` trước khi push.
    - Đẩy image lên GHCR với digest cố định: `ghcr.io/<owner>/<app>@sha256:<64hex>`.
    - Chạy `.deploy/smoke-image.sh` kiểm tra container độc lập: endpoint health, header `no-store`, HTTP/2 h2c, background refresh.

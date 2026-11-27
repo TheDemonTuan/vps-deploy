@@ -20,17 +20,21 @@ on:
         default: app
     outputs:
       image-ref:
-        value: ${{ jobs.build.outputs.image-ref }}
+        value: ${{ jobs.publish.outputs.image-ref }}
 permissions:
   contents: read
+# One native build per platform the app's hosts run (lib/core.py build_platforms: the manifest's
+# linux/arm64 plus each host's `platform`), each on its own runner, then one index over them.
 jobs:
-  build:
+  plan:
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
-      packages: write
     outputs:
-      image-ref: ${{ steps.smoke.outputs.image-ref }}
+      image: ${{ steps.policy.outputs.image }}
+      tags: ${{ steps.policy.outputs.tags }}
+      dockerfile: ${{ steps.policy.outputs.dockerfile }}
+      matrix: ${{ steps.policy.outputs.matrix }}
     steps:
       - name: Reject mutable platform checkout
         env:
@@ -75,6 +79,7 @@ jobs:
           path: source
           persist-credentials: false
       - name: Validate checked out caller and registered manifest
+        id: policy
         env:
           APP: ${{ inputs.app }}
           SOURCE_SHA: ${{ inputs.source-sha }}
@@ -90,14 +95,16 @@ jobs:
           set -euo pipefail
           python3 platform/scripts/check-caller.py build-docker.yml
           python3 - <<'PY'
-          import os, sys
+          import json, os, sys
           from pathlib import Path
           sys.path.insert(0, 'platform/lib')
-          from core import app_registration
+          from core import app_registration, build_platforms
           registration = app_registration(Path('platform'), os.environ['APP'])
           image = registration['manifest']['image']
           if not image.startswith('ghcr.io/') or registration['manifest']['platform'] != 'linux/arm64':
               raise SystemExit('unsupported production build policy')
+          runners = {'linux/arm64': 'ubuntu-24.04-arm', 'linux/amd64': 'ubuntu-24.04'}
+          matrix = [{'platform': p, 'arch': p.split('/')[1], 'runner': runners[p]} for p in build_platforms(Path('platform'), registration)]
           allowed_ref = registration['caller'].get('ref', 'refs/heads/master')
           caller_ref = os.environ.get('CALLER_REF', '')
           tags = [f"{image}:sha-{os.environ['SOURCE_SHA']}"]
@@ -108,39 +115,109 @@ jobs:
           dockerfile_path = Path('source') / dockerfile_rel
           if not dockerfile_path.is_file() or dockerfile_path.is_symlink() or not dockerfile_path.resolve().is_relative_to(Path('source').resolve()):
               raise SystemExit('invalid or missing Dockerfile in source checkout')
-          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
-              stream.write('REGISTERED_IMAGE=' + image + '\n')
-              stream.write('DOCKER_TAGS=' + ','.join(tags) + '\n')
-              stream.write('DOCKERFILE_PATH=' + str(dockerfile_path) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+              stream.write('image=' + image + '\n')
+              stream.write('tags=' + ','.join(tags) + '\n')
+              stream.write('dockerfile=' + str(dockerfile_path) + '\n')
+              stream.write('matrix=' + json.dumps(matrix) + '\n')
           PY
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.source-sha }}
+          path: source
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish immutable digest
+      - name: Build and publish this platform's digest
         id: digest
-        if: inputs.component == 'app'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: source
-          file: ${{ env.DOCKERFILE_PATH }}
-          push: true
-          platforms: linux/arm64
-          tags: ${{ env.DOCKER_TAGS }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=min,ignore-error=true
+          file: ${{ needs.plan.outputs.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ needs.plan.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=min,scope=${{ matrix.arch }},ignore-error=true
           provenance: false
           sbom: false
       - name: Smoke exact published image
-        id: smoke
         working-directory: source
         env:
-          IMAGE_REF: ${{ format('{0}@{1}', env.REGISTERED_IMAGE, steps.digest.outputs.digest) }}
-          REGISTERED_IMAGE: ${{ env.REGISTERED_IMAGE }}
+          IMAGE_REF: ${{ format('{0}@{1}', needs.plan.outputs.image, steps.digest.outputs.digest) }}
+          REGISTERED_IMAGE: ${{ needs.plan.outputs.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
           set -euo pipefail
           [[ "$IMAGE_REF" =~ ^${REGISTERED_IMAGE}@sha256:[0-9a-f]{64}$ ]]
           bash .deploy/smoke-image.sh "$IMAGE_REF"
-          echo "image-ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-ref: ${{ steps.index.outputs.image-ref }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the index over every platform's smoked digest
+        id: index
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ needs.plan.outputs.image }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          refs=()
+          for digest in *; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            refs+=("$IMAGE@sha256:$digest")
+          done
+          [[ ${#refs[@]} -eq $(jq length <<<"$MATRIX") ]]
+          IFS=, read -ra tags <<<"$TAGS"
+          args=()
+          for tag in "${tags[@]}"; do args+=(-t "$tag"); done
+          docker buildx imagetools create "${args[@]}" "${refs[@]}"
+          index=$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$index" =~ ^sha256:[0-9a-f]{64}$ ]]
+          want=$(jq -c '[.[].platform] | sort' <<<"$MATRIX")
+          got=$(docker buildx imagetools inspect --raw "$IMAGE@$index" | jq -c '[.manifests[] | .platform.os + "/" + .platform.architecture] | sort')
+          [[ "$want" == "$got" ]]
+          echo "image-ref=$IMAGE@$index" >> "$GITHUB_OUTPUT"
