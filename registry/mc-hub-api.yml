@@ -2,7 +2,7 @@ version: 1
 app: mc-hub-api
 host: oracle-main
 # The SQLite writer stays on `host`; replica hosts open the Litestream copy read-only.
-replica_hosts: [oracle-sg2, oracle-n3, vps-n4]
+replica_hosts: [oracle-sg2, vps-n4]
 caller:
   repository: TheDemonTuan/mc-hub-api
   ref: refs/heads/main
