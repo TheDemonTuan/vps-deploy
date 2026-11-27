@@ -1,3 +1,5 @@
+# On a new node the crowdsec role flushes handlers before the edge stack exists; "Edge stack"
+# then starts Traefik with the new configuration.
 - name: Restart traefik
-  ansible.builtin.command: docker restart edge-traefik
+  ansible.builtin.shell: "! docker inspect edge-traefik >/dev/null 2>&1 || docker restart edge-traefik"
   changed_when: true
