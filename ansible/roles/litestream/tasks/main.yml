@@ -33,7 +33,7 @@
     cmd: |
       set -euo pipefail
       v() { sed -n "s/^$1=//p" "$2" | head -1 | tr -d "\"'"; }
-      image=$(sed -n 's/^ *image: \(rclone\/rclone[^ ]*\)$/\1/p' /opt/platform/litestream/compose.yml)
+      image=$(sed -n '/^ *image: rclone\/rclone/{s/^ *image: //p;q}' /opt/platform/litestream/compose.yml)
       # Keys through the environment (docker run -e NAME), never on a command line.
       lsf() {
         RCLONE_CONFIG_R2_ENDPOINT=$1 RCLONE_CONFIG_R2_ACCESS_KEY_ID=$2 RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=$3 \

@@ -1,5 +1,6 @@
-# platform/sync: every node serves /srv/platform-sync read-only over SFTP to the other nodes (the
-# Litestream follower). Each node's client key is generated here;
+# platform/sync: every node serves /srv/platform-sync read-only over SFTP to the other nodes, and
+# reads the writer's copies from it through relay.sh (the Litestream followers' local mirrors).
+# Each node's client key is generated here;
 # the other nodes' keys and host keys are read over the pinned SSH session of this play.
 - name: SFTP-only user
   ansible.builtin.user:
@@ -9,18 +10,31 @@
     home: /srv/platform-sync
     shell: /sbin/nologin
 
-- name: Sync directories (the chroot must be root-owned; Litestream's replica volume is uid 1000's)
+# Before crowdsec: lapi.sh starts the crowdsec relay there. The relays run as uid 1000.
+- name: Sync directories (the chroot must be root-owned; Litestream's replica volume and the relays' mirrors are uid 1000's)
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
     owner: "{{ item.owner | default('root') }}"
     group: "{{ item.owner | default('root') }}"
-    mode: "0755"
+    mode: "{{ item.mode | default('0755') }}"
   loop:
     - {path: /srv/platform-sync}
     - {path: /srv/platform-sync/litestream, owner: "1000"}
     - {path: /etc/platform}
+    - {path: /opt/platform/sync}
+    - {path: /var/lib/platform-relay}
+    - {path: /var/lib/platform-relay/mc-hub-api, owner: "1000", mode: "0750"}
+    - {path: /var/lib/platform-relay/crowdsec, owner: "1000", mode: "0750"}
   notify: Restore SELinux contexts
+
+- name: Relay (run by the followers' rclone containers)
+  ansible.builtin.copy:
+    src: "{{ platform_src }}/sync/relay.sh"
+    dest: /opt/platform/sync/relay.sh
+    owner: root
+    group: root
+    mode: "0644"
 
 - name: Read access for platform-sync to Litestream's 0750 directories, now and as they appear
   ansible.builtin.shell: |

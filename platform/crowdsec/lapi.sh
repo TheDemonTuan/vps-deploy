@@ -67,6 +67,7 @@ conf=/etc/crowdsec/config.yaml.local
 modes=/etc/platform/crowdsec
 data=/var/lib/crowdsec/data
 follow=/var/lib/crowdsec/follow
+relay=/var/lib/platform-relay/crowdsec
 served=/srv/platform-sync/litestream/crowdsec
 
 copy() { docker compose -f /opt/platform/crowdsec/litestream.yml "$@"; }
@@ -135,6 +136,7 @@ PY
   copy --profile primary up -d
   # The LAPI node follows nobody: the copy it just promoted is stale from here on.
   [ ! -d "$follow" ] || find "$follow" -mindepth 1 -delete
+  [ ! -d "$relay" ] || find "$relay" -mindepth 1 -delete
 else
   line=$(awk -v n="$want" '$1 == n && NF >= 4 {print $2, $3, $4}' /etc/platform/nodes)
   [ -n "$line" ] || { echo "writer $want is not in /etc/platform/nodes" >&2; exit 1; }
@@ -155,6 +157,7 @@ else
   if [ -z "${2:-}" ] || cscli lapi status >/dev/null 2>&1; then systemctl restart crowdsec; fi
   copy --profile replica down
   find "$follow" -mindepth 1 -delete
+  [ ! -d "$relay" ] || find "$relay" -mindepth 1 -delete
   copy --profile replica up -d
 fi
 echo "$want" >"$state.tmp" && mv -f "$state.tmp" "$state"

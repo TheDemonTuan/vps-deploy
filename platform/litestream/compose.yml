@@ -6,16 +6,19 @@
 #   /data/backups to R2 bucket mc-hub-db every hour (off-site; `litestream restore` reads it).
 #   The mirror never restarts by itself: platform/peer starts it only while the edge lease
 #   confirms this node as the writer, so an old primary cannot overwrite the new one's R2 copy.
-# replica (registry `replica_hosts`): follows the writer's directory over read-only SFTP into this
-#   node's own /data/mc-hub.db, which mc-hub-api opens read-only (DB_ROLE=replica). A restart
-#   resumes from the last applied txid. platform/peer/role.sh picks the writer (the edge lease)
-#   and writes it to /etc/platform/litestream-primary.env before starting this.
+# replica (registry `replica_hosts`): `relay` (platform/sync/relay.sh) mirrors the writer's
+#   directory over read-only SFTP into /var/lib/platform-relay/mc-hub-api, and Litestream follows
+#   that mirror into this node's own /data/mc-hub.db, which mc-hub-api opens read-only
+#   (DB_ROLE=replica). A
+#   restart resumes from the last applied txid. platform/peer/role.sh picks the writer (the edge
+#   lease) and writes it to /etc/platform/litestream-primary.env before starting this.
 # Replication makes no R2 requests: following R2 directly listed ~480 objects a minute.
 # /etc/platform/litestream.env (root, 0600): LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
 # (R2 token scoped to bucket mc-hub-db and the nodes' IPs), R2_ACCOUNT_ID. On a replica also
 # /etc/platform/litestream-primary.env: PRIMARY_SSH (<ip>:22) and PRIMARY_HOST_KEY (the writer's
 # "ecdsa-sha2-nistp256 AAAA…" host key).
 # /etc/platform/sync_key: this node's SFTP client key (owner 1000, 0600), see platform/README.md.
+# /var/lib/platform-relay/mc-hub-api: owner 1000 (ansible), emptied by role.sh on every switch.
 name: litestream
 x-hardening: &hardening
   restart: unless-stopped
@@ -80,15 +83,31 @@ services:
     volumes:
       - /srv/platform-sync/litestream:/replica:ro,z
       - mc-hub-api-data:/data:ro
+  # Its own SFTP client waits a round trip per small read; the relay pipelines them.
+  relay:
+    <<: *hardening
+    # Same image as `mirror`; the R2 credentials stay out of this container.
+    image: rclone/rclone:1.76.0@sha256:7cbeec24a44f206067597c0368be4de90ae19a64d5113c7d1938bd737a81e466
+    container_name: litestream-relay
+    profiles: [replica]
+    env_file: [/etc/platform/litestream-primary.env]
+    environment:
+      HOME: /tmp
+    entrypoint: [sh, /relay.sh, mc-hub-api]
+    volumes:
+      - /opt/platform/sync/relay.sh:/relay.sh:ro,z
+      - /var/lib/platform-relay/mc-hub-api:/relay:z
+      - /etc/platform/sync_key:/etc/relay/sync_key:ro,z
   replica:
     <<: *litestream
     profiles: [replica]
-    env_file: [/etc/platform/litestream.env, /etc/platform/litestream-primary.env]
+    # Starts once the relay holds a complete copy (/relay/at).
+    entrypoint: [sh, -c, 'until [ -s /relay/at ]; do sleep 1; done; exec litestream "$$@"', litestream]
     command: [restore, -f, -follow-interval, 1s, -config, /etc/litestream.yml, /data/mc-hub.db]
     volumes:
       - mc-hub-api-data:/data
       - ./replica.yml:/etc/litestream.yml:ro,z
-      - /etc/platform/sync_key:/etc/litestream/sync_key:ro,z
+      - /var/lib/platform-relay/mc-hub-api:/relay:ro,z
 volumes:
   # Created by mc-hub-api's Compose project (or `docker volume create` on a new node).
   mc-hub-api-data:

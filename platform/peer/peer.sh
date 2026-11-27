@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # platform-peer: runs every minute on each edge node (platform-peer.timer). It reaches the other
-# nodes only through their read-only SFTP (platform/sync) and through the edge.
+# nodes only through their read-only SFTP (platform/sync, by way of the relays) and through the edge.
 # 1. Renews this node's edge lease (cloudflare/edge-lb) with its replication position and, when
 #    the lease's writer no longer matches this node's database role (or a replica follows another
 #    node), starts platform-role.service (role.sh) to switch it. First, so a slow check cannot
@@ -30,14 +30,6 @@ state=/var/lib/platform-peer
 volume=/var/lib/docker/volumes/mc-hub-api-data/_data
 . "$(dirname "$0")/write-position.sh"
 peers=$(awk -v me="$NODE" '!/^#/ && NF >= 2 && $1 != me {print $1, $2}' /etc/platform/nodes)
-
-# peer_sftp <ip>: batch commands on stdin.
-peer_sftp() {
-  # ServerAlive: a peer that accepts the connection and then stalls fails within ~15 s.
-  sftp -q -b - -i /etc/platform/sync_key -o BatchMode=yes -o ConnectTimeout=10 \
-    -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
-    -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/platform/known_hosts "platform-sync@$1"
-}
 
 esc() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$1"; }
 # A Litestream position (16 hex digits) as the transaction number.
@@ -253,19 +245,21 @@ fi
 lag=""
 [ "$role" = primary ] && lag=0
 if [ -n "$writer_ip" ] && [ "$writer" != "$NODE" ]; then
-  # Ours first: read after the writer's listing, a copy could already hold a transaction the
-  # listing missed (the LAPI writes every few seconds) and looked ahead of it. Read before, ours
-  # can only trail the listing, so ahead means the writer started a new lineage.
+  # Each follower reads only its relay's local mirror of the writer's copy (platform/sync/
+  # relay.sh), so ours can only trail it; ahead means the writer started a new lineage (reset or
+  # promotion) and this node needs a fresh restore. Behind what the mirror held a minute ago means
+  # the follower is stuck. Ours first, then the mirror, which only grows meanwhile.
   replica=$(tr -d '\n' <"$volume/mc-hub.db-txid" 2>/dev/null)
   copy=$(tr -d '\n' </var/lib/crowdsec/follow/crowdsec.db-txid 2>/dev/null)
-  # One SFTP session lists the writer's copies, the CrowdSec LAPI's and mc-hub-api's ("-": a
-  # missing one does not end the batch). A copy's position is its highest LTX end txid on any
-  # level; ours is the follower's -txid file. Behind what the writer had a minute ago means the
-  # follower is stuck; ahead means the writer started a new lineage (reset or promotion) and this
-  # node needs a fresh restore.
-  listing=$(printf '%s\n' '-ls -1 /litestream/crowdsec/ltx/*/*.ltx' 'ls -1 /litestream/mc-hub-api/ltx/*/*.ltx' |
-    peer_sftp "$writer_ip" 2>/dev/null)
-  newest() { sed -n "s#.*/litestream/$1/ltx/.*-\([0-9a-f]\{16\}\)\.ltx\$#\1#p" <<<"$listing" | sort | tail -1; }
+  # newest <db>: the mirror's position (its highest LTX end txid on any level); nothing when the
+  # relay has not reached the writer for 2 minutes.
+  newest() {
+    local at
+    at=$(cat "/var/lib/platform-relay/$1/at" 2>/dev/null)
+    [[ $at =~ ^[0-9]+$ ]] && (( $(date +%s) - at < 120 )) || return 0
+    find "/var/lib/platform-relay/$1/copy/ltx" -mindepth 2 -maxdepth 2 -name '*.ltx' -printf '%f\n' 2>/dev/null |
+      sed -n 's/.*-\([0-9a-f]\{16\}\)\.ltx$/\1/p' | sort | tail -1
+  }
   if [ "$role" = replica ]; then
     primary=$(newest mc-hub-api)
     before=$(cat "$state/primary-txid" 2>/dev/null)
@@ -283,8 +277,8 @@ if [ -n "$writer_ip" ] && [ "$writer" != "$NODE" ]; then
         date +%s >"$state/synced"
       fi
     else
-      # The follower reads over the same SFTP link: this copy no longer gets the primary's writes.
-      report "litestream follower" fail "cannot read $writer's copy over SFTP (the follower uses the same link); ours is at $(tx "$replica")"
+      # The follower reads only that mirror: this copy no longer gets the primary's writes.
+      report "litestream follower" fail "the relay's mirror of $writer's copy is missing or over 2 min old: it has not reached $writer over SFTP (docker logs litestream-relay); ours is at $(tx "$replica")"
     fi
   fi
   # The copy this node takes the LAPI over from (platform/crowdsec/lapi.sh).
@@ -292,7 +286,7 @@ if [ -n "$writer_ip" ] && [ "$writer" != "$NODE" ]; then
     held=$(newest crowdsec)
     before=$(cat "$state/crowdsec-txid" 2>/dev/null)
     if [ -z "$held" ]; then
-      report "crowdsec follower" fail "cannot read the LAPI's copy on $writer over SFTP (the follower uses the same link); ours is at $(tx "$copy")"
+      report "crowdsec follower" fail "the relay's mirror of the LAPI's copy on $writer is missing or over 2 min old: it has not reached $writer over SFTP (docker logs litestream-crowdsec-relay); ours is at $(tx "$copy")"
     else
       echo "$held" >"$state/crowdsec-txid"
       if [ -z "$copy" ]; then

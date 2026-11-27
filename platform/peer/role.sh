@@ -20,6 +20,7 @@ flock 9
 volume=/var/lib/docker/volumes/mc-hub-api-data/_data
 writer_file=/var/lib/platform-peer/writer
 stopped=/var/lib/platform-peer/stopped-apps
+relay=/var/lib/platform-relay/mc-hub-api
 promoting=/var/lib/platform-peer/promoting
 . "$(dirname "$0")/write-position.sh"
 lease_file=/var/lib/platform-peer/lease
@@ -107,6 +108,8 @@ become() {
         { echo 'local database does not cover the durable floor' >&2; return 1; }
     fi
     rm -rf "$base" "$volume/.mc-hub.db-litestream"
+    # The relay's mirror of the writer followed until now (platform/sync/relay.sh).
+    [ ! -d "$relay" ] || find "$relay" -mindepth 1 -delete
     if [ "$want" = primary ]; then
       printf '%s\n' $apps >>"$stopped"
       # From here on retries must preserve the new LTX files and the validated database.
