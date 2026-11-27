@@ -192,12 +192,19 @@ the nodes' `opc` keys); CI only lints it.
    serial log, not from a first connection. Oracle reclaims idle Always Free instances (over 7
    days, 95th-percentile CPU, network and A1 memory all under 20 %): keep the node in use, or
    upgrade its tenancy to Pay As You Go (Always Free resources stay free).
+   Another provider (n4, `hosts/vps-n4.yml`): an EL install the roles already know (AlmaLinux 10),
+   then as root what the Oracle image comes with: `opc` (uid 1000, groups `adm`, `systemd-journal`, `NOPASSWD` sudo,
+   the node's key), SELinux enforcing (`/.autorelabel`, reboot), firewalld with only `ssh`, a 4 GB
+   `/.swapfile`, UTC. Without a serial log, compare `ssh-keyscan` from the workstation and every
+   node before pinning the host key.
 2. **Cloudflare** (dashboard): the node's IP in the IP filter of the account tokens
    `litestream-mc-hub-db` and `mc-hub-media-nodes` (R2 backups and media; the litestream role
    fails on a node they refuse). Its tunnel `shared-edge-<host>` comes from `cloudflare/tofu`.
 3. **Registry**: `hosts/<host>.yml` with `ssh` (address, port, fingerprint and `host_key`),
-   `traefik`, `edge` (`id`, `tunnel`, `weight: 0`) and the balanced apps' bindings as on the
-   other nodes; the host in each balanced app's `replica_hosts`; render.
+   `traefik`, `edge` (`id`, `tunnel`, `weight: 0`), `platform: linux/amd64` on an x86-64 node
+   (the apps' builds then publish that platform too, `lib/core.py` `build_platforms`; deploy their
+   next release before step 5) and the balanced apps' bindings as on the other nodes; the host in
+   each balanced app's `replica_hosts`; render.
 4. **Platform**, from `ansible/` (the API token reads the new tunnel's token: Cloudflare Tunnel
    Read):
 
