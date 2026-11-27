@@ -3,13 +3,15 @@
 # last saw named), so it moves with mc-hub-api's database and a lost node does not take it along.
 #   lapi.sh reconcile [<writer>]   platform-lapi.service (peer.sh starts it when this node neither
 #                                  holds nor follows the writer); ansible/ passes the writer
+#   lapi.sh publish                crowdsec-follow-position.service: this node's copy, for the
+#                                  LAPI node's write confirmations (below)
 # The LAPI node runs crowdsec with the API server (lapi.yaml.local) and Litestream replicating
 # crowdsec.db (litestream.yml, profile primary). Every other node runs the agent only
 # (agent.yaml.local) behind crowdsec-lapi.service, an SSH forward to the LAPI node's
 # 172.31.254.1:8080, and follows that copy into /var/lib/crowdsec/follow. Taking the LAPI over
 # makes the copy this node's database (machines, bouncer keys, decisions and their history, about
 # a second old); a node without one refuses and stays an agent. Giving it up moves the database to
-# /var/lib/crowdsec/data/fenced-<time>/ (only the last one kept). The Telegram/Cloudflare
+# /var/lib/crowdsec/data/fenced-<time>/ (each kept 14 days). The Telegram/Cloudflare
 # controller runs only on the LAPI node (peer.sh starts it there).
 # State: /var/lib/platform-peer/lapi, "here" or the node followed, written once settled.
 set -euo pipefail
@@ -29,6 +31,32 @@ case ${1:-} in
       grep -q '^ *enable: false' /etc/crowdsec/config.yaml.local || systemctl stop --no-block crowdsec.service
     fi
     exit ;;
+  # The LAPI node's controller acknowledges a ban once every other node's copy has it (its
+  # replica.py reads this over SFTP): "<node followed> <copy's txid> <when peer.sh last verified
+  # the copy against that node>". The LAPI node itself publishes none.
+  publish)
+    out=/srv/platform-sync/crowdsec-follow last=unset
+    while :; do
+      line=
+      lapi=$(cat /var/lib/platform-peer/lapi 2>/dev/null || true)
+      txid=$(cat /var/lib/crowdsec/follow/crowdsec.db-txid 2>/dev/null || true)
+      if [[ $lapi =~ ^n[0-9]{1,3}$ && $txid =~ ^[0-9a-f]{16}$ ]]; then
+        verified=0
+        if [ "$(cat /var/lib/platform-peer/crowdsec-synced 2>/dev/null || true)" = "$lapi" ]; then
+          verified=$(stat -c %Y /var/lib/platform-peer/crowdsec-synced 2>/dev/null || echo 0)
+        fi
+        line="$lapi $txid $verified"
+      fi
+      if [ "$line" != "$last" ]; then
+        if [ -n "$line" ]; then
+          printf '%s\n' "$line" >"$out.tmp" && chmod 0644 "$out.tmp" && mv -f "$out.tmp" "$out"
+        else
+          rm -f "$out"
+        fi
+        last=$line
+      fi
+      sleep 1
+    done ;;
 esac
 [ -n "${NODE:-}" ] || . /etc/platform/peer.env
 exec 9>/run/platform-lapi.lock
@@ -105,6 +133,8 @@ PY
   [ "$restart" = false ] || systemctl restart crowdsec
   answers || { echo "the LAPI does not answer on 172.31.254.1:8080" >&2; exit 1; }
   copy --profile primary up -d
+  # The LAPI node follows nobody: the copy it just promoted is stale from here on.
+  [ ! -d "$follow" ] || find "$follow" -mindepth 1 -delete
 else
   line=$(awk -v n="$want" '$1 == n && NF >= 4 {print $2, $3, $4}' /etc/platform/nodes)
   [ -n "$line" ] || { echo "writer $want is not in /etc/platform/nodes" >&2; exit 1; }
@@ -128,3 +158,5 @@ else
   copy --profile replica up -d
 fi
 echo "$want" >"$state.tmp" && mv -f "$state.tmp" "$state"
+# Every recovery copy outlives any retry of a switch; after two weeks the LAPI has moved on.
+find "$data" -maxdepth 1 -type d -name 'fenced-*' -mtime +14 -exec rm -rf {} +

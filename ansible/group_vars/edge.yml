@@ -57,6 +57,10 @@ crowdsec_collections:
 # that node's inventory name.
 crowdsec_hub: "{{ inventory_hostname == crowdsec_lapi_host }}"
 crowdsec_allowlists: []
+# Cloudflare's source address for every Worker's subrequests to another zone (edge-lb's health
+# checks, write quorum and replayed writes): shared by all Cloudflare customers, so never banned.
+# Other customers' Workers are blocked at the edge instead (cloudflare/tofu rulesets.tf).
+cloudflare_workers_ip: "2a06:98c0:3600::103"
 
 # Apps every edge node runs (registry balance): the `apps` role prepares their runtime env.
 balanced_apps: [mc-hub, mc-hub-api]

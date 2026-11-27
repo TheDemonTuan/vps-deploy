@@ -1,7 +1,7 @@
 # Every node's agent (machine <edge_id>) and bouncers (traefik-<edge_id>, cs-firewall-bouncer-<edge_id>)
 # are registered on the LAPI node and checked against it on every run, here or through the
-# tunnel; the registrations travel with the LAPI's database. Entries made under other names (n1's
-# from before the fleet: its machine id, traefik, cs-firewall-bouncer-<n>) pass the check as they are.
+# tunnel; the registrations travel with the LAPI's database. The controller's /cs and alerts name
+# a node by these names only (n1's pre-fleet registrations were replaced by them).
 
 - name: This node's agent can log in
   ansible.builtin.command: cscli lapi status

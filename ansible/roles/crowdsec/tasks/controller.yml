@@ -95,12 +95,13 @@
   vars:
     secret: "{{ crowdsec_ctl_file }}"
 
-# Its own setting names only the node it was installed on.
-- name: The controller never bans a node of this fleet
+# Its own setting names only the node it was installed on. The Workers address is every
+# Cloudflare Worker's subrequest source (edge-lb's health checks and write quorum among them).
+- name: The controller never bans a node of this fleet, nor the Cloudflare Workers address
   ansible.builtin.shell: |
     set -euo pipefail
     f=/etc/crowdsec-telegram-controller/config.json
-    w='{{ groups["edge"] | map("extract", hostvars, "edge_ip") | map("regex_replace", "$", "/32") | list | to_json }}'
+    w='{{ groups["edge"] | map("extract", hostvars, "edge_ip") | map("regex_replace", "$", "/32") | list | union([cloudflare_workers_ip ~ "/128"]) | to_json }}'
     jq -e --argjson w "$w" '($w - .protected_cidrs) == []' "$f" >/dev/null && exit 0
     {{ 'echo missing; exit 0' if ansible_check_mode else '' }}
     jq --argjson w "$w" '.protected_cidrs = (.protected_cidrs + $w | unique)' "$f" >"$f.tmp"
@@ -122,6 +123,9 @@
     - {src: /opt/crowdsec-telegram-controller/current/deploy/crowdsec-telegram-controller.service, dest: /etc/systemd/system/}
     - {src: /opt/crowdsec-telegram-controller/current/deploy/crowdsec-telegram-health.service, dest: /etc/systemd/system/}
     - {src: /opt/crowdsec-telegram-controller/current/deploy/crowdsec-telegram-health.timer, dest: /etc/systemd/system/}
+    # The controller's copy checks (it starts the path unit; replica.py runs as root).
+    - {src: /opt/crowdsec-telegram-controller/current/deploy/crowdsec-telegram-replica.path, dest: /etc/systemd/system/}
+    - {src: /opt/crowdsec-telegram-controller/current/deploy/crowdsec-telegram-replica.service, dest: /etc/systemd/system/}
     - src: "{{ platform_src }}/crowdsec/controller-cloudflare.conf"
       dest: /etc/systemd/system/crowdsec-telegram-controller.service.d/cloudflare.conf
       remote: false
@@ -129,6 +133,19 @@
     label: "{{ item.dest }}"
   notify: [Reload systemd, Restart controller]
   ignore_errors: "{{ ansible_check_mode }}"  # no release to copy from in check mode
+
+# The node it runs on: the bot names it in its messages and on /cs.
+- name: Controller fleet settings
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/crowdsec-telegram-controller.service.d/fleet.conf
+    content: |
+      # ansible/roles/crowdsec: the node this controller runs on.
+      [Service]
+      Environment=FLEET_NODE={{ edge_id }}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: [Reload systemd, Restart controller]
 
 - name: Flush systemd reload for the controller
   ansible.builtin.meta: flush_handlers

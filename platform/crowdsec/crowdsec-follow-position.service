@@ -1,0 +1,12 @@
+[Unit]
+Description=Publish this node's copy of the CrowdSec LAPI database for the LAPI node's write confirmations
+After=local-fs.target
+
+[Service]
+ExecStart=/opt/platform/crowdsec/lapi.sh publish
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

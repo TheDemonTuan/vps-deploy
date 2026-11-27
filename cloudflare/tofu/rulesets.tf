@@ -29,6 +29,11 @@ locals {
   # The site takes writes only under /api/ and /admin (Access); /cdn-cgi/ is Cloudflare's own
   # (Web Analytics beacons, challenges, Access login).
   site_methods = "http.host eq \"${local.mc_hub_site}\" and not starts_with(http.request.uri.path, \"/cdn-cgi/\") and (not http.request.method in {\"GET\" \"HEAD\" \"POST\" \"PUT\" \"DELETE\"} or (not http.request.method in {\"GET\" \"HEAD\"} and not starts_with(http.request.uri.path, \"/api/\") and http.request.uri.path ne \"/admin\" and not starts_with(http.request.uri.path, \"/admin/\")))"
+  # Every Worker's subrequest into these zones arrives from one shared Cloudflare address
+  # (2a06:98c0:3600::103), which CrowdSec therefore never bans (ansible cloudflare_workers_ip).
+  # Only our own Workers may reach the origins that way: edge-lb (route on thedemontuan.dev),
+  # this account's workers.dev (UptimeFlare) and the tuannguyenviet.site Workers.
+  foreign_workers = "not cf.worker.upstream_zone in {\"\" \"thedemontuan.dev\" \"tuannguyenviet.site\" \"nguyenviettuanbp.workers.dev\"}"
 }
 
 resource "cloudflare_ruleset" "thedemontuan_dev_custom_waf" {
@@ -46,6 +51,13 @@ resource "cloudflare_ruleset" "thedemontuan_dev_custom_waf" {
       enabled     = true
       expression  = "ip.src in $edge_bans"
       ref         = "crowdsec_edge_block"
+    },
+    {
+      action      = "block"
+      description = "foreign-workers"
+      enabled     = true
+      expression  = local.foreign_workers
+      ref         = "foreign_workers"
     },
     {
       action      = "block"
@@ -98,6 +110,13 @@ resource "cloudflare_ruleset" "tuannguyenviet_site_custom_waf" {
       enabled     = true
       expression  = "ip.src in $edge_bans"
       ref         = "crowdsec_edge_block"
+    },
+    {
+      action      = "block"
+      description = "foreign-workers"
+      enabled     = true
+      expression  = local.foreign_workers
+      ref         = "foreign_workers"
     },
     {
       action      = "block"

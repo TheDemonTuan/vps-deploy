@@ -1,8 +1,9 @@
 name: local/self-whitelist
-description: Never ban this VPS; site SSR and deploy health probes reach its own routes through Cloudflare
+description: Never ban a node of this fleet, nor the address Cloudflare gives every Worker's subrequests
 whitelist:
-  reason: own public IP (frontend SSR 404 lookups and deploy probes looked like http-probing)
+  reason: own public IP (frontend SSR 404 lookups and deploy probes looked like http-probing), or the shared Cloudflare Workers address (edge-lb health checks and quorum; other Workers stop at the edge)
   ip:
 {% for host in groups['edge'] %}
     - "{{ hostvars[host].edge_ip }}"
 {% endfor %}
+    - "{{ cloudflare_workers_ip }}"

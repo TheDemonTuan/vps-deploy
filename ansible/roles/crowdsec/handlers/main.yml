@@ -18,3 +18,8 @@
 - name: Restart controller
   ansible.builtin.command: systemctl try-restart crowdsec-telegram-controller.service  # noqa: command-instead-of-module
   changed_when: true
+
+# Its loop runs the lapi.sh it started with.
+- name: Restart copy publisher
+  ansible.builtin.command: systemctl try-restart crowdsec-follow-position.service  # noqa: command-instead-of-module
+  changed_when: true

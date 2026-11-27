@@ -65,7 +65,10 @@ flowchart LR
     `edge_lb.py --operation stats` sums the last hour (token: Account Analytics Read).
 - **Edge WAF & Rulesets** (`cloudflare/tofu/rulesets.tf`, OpenTofu; Free plan: 5 custom rules and
   1 rate limiting rule per zone, no regex): what an origin refuses anyway stops at Cloudflare,
-  before the Worker and the tunnels. `edge-probe-paths` on both zones blocks dotfiles (not
+  before the Worker and the tunnels. `foreign-workers` on both zones refuses other Cloudflare
+  customers' Workers (their subrequests share 2a06:98c0:3600::103 with ours, which CrowdSec
+  therefore never bans): only edge-lb, UptimeFlare (`*.workers.dev`) and the
+  `tuannguyenviet.site` Workers pass. `edge-probe-paths` on both zones blocks dotfiles (not
   `/.well-known/`), `*.php`, WordPress paths and self-announcing scanners (sqlmap, nuclei, …);
   on the site also `/internal` and every file type it never serves outside `/_astro/`,
   `/media/`, `/cdn-cgi/` and `/.well-known/`. `mc-hub-api-host` keeps both API hosts to GET/HEAD
@@ -117,7 +120,11 @@ flowchart LR
   `crowdsec.db` separately into `/var/lib/crowdsec/follow` so machine and bouncer registrations
   move with decisions. `platform-lapi.service` switches roles independently of the app DB. Peer
   checks the LAPI follower TXID; a missing restore cannot promote. Replication is asynchronous:
-  the newest decisions or unbans might not yet have reached the promoted node.
+  the newest decisions or unbans might not yet have reached the promoted node. The Telegram bot
+  therefore shows a ban or unban as ⏳ until every other node's copy has it, then ✅ (or ⚠️
+  naming the node still behind after 55 s): each node publishes its copy's position
+  (`crowdsec-follow-position.service`, `lapi.sh publish`) on its read-only SFTP, and the
+  controller's `crowdsec-telegram-replica.service` (root, on request) compares them.
 - **Controller fencing**: only a writer heartbeat gets a local grant; the next writer waits out
   its predecessor's last 180 s lease. A separate systemd timer stops the old LAPI and controller
   when the 120 s boot-local grant expires, even if peer stops. Agents do not require this grant.
