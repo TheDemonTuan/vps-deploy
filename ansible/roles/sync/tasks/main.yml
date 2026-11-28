@@ -35,6 +35,7 @@
     owner: root
     group: root
     mode: "0644"
+  notify: Restart relays
 
 - name: Read access for platform-sync to Litestream's 0750 directories, now and as they appear
   ansible.builtin.shell: |
