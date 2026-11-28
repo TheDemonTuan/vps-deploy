@@ -22,13 +22,15 @@ export RCLONE_CONFIG_W_TYPE=sftp RCLONE_CONFIG_W_HOST="$host" RCLONE_CONFIG_W_US
   RCLONE_CONFIG_W_HOST_KEY_ALGORITHMS="${PRIMARY_HOST_KEY%% *}" RCLONE_CONFIG_W_SHELL_TYPE=none \
   RCLONE_CONFIG_W_DISABLE_HASHCHECK=true RCLONE_CONFIG_W_CONNECTIONS=8 RCLONE_CONFIG_W_IDLE_TIMEOUT=75s
 src=w:/litestream/$1${LTX_SUFFIX:-}
-# The control socket stays inside this container (/tmp is its own tmpfs).
-rclone rcd --rc-addr unix:///tmp/rc.sock --rc-no-auth &
+# The control API listens on this container's own loopback (its network namespace: no other
+# container or the host reaches it). busybox wget calls it: a new `rclone rc` client every second
+# cost ~6 % of a core per relay on n2 (ARM), ~95 % of the relay's CPU.
+rclone rcd --rc-addr 127.0.0.1:5572 --rc-no-auth &
 rcd=$!
+rc() { wget -qO /dev/null -T 3600 --header 'Content-Type: application/json' --post-data "$2" "http://127.0.0.1:5572/$1"; }
 mirror() {
   kill -0 "$rcd"
-  rclone rc --unix-socket /tmp/rc.sock --timeout 1h sync/sync srcFs="$1" dstFs="$2" _filter="$3" \
-    _config='{"SizeOnly":true,"Transfers":8,"Checkers":4}' >/dev/null
+  rc sync/sync "{\"srcFs\":\"$1\",\"dstFs\":\"$2\",\"_filter\":$3,\"_config\":{\"SizeOnly\":true,\"Transfers\":8,\"Checkers\":4}}"
 }
 # Both passes name the same source, so they share its connection pool.
 rest() { mirror "$src" /relay/copy '{"ExcludeRule":["/ltx/0/**"]}'; }
@@ -36,7 +38,7 @@ level0() {
   mirror "$src" /relay/copy '{"IncludeRule":["/ltx/0/**"]}'
   date +%s >/relay/at.tmp && mv -f /relay/at.tmp /relay/at
 }
-until [ -S /tmp/rc.sock ]; do kill -0 "$rcd"; sleep 0.2; done
+until rc rc/noop '{}' 2>/dev/null; do kill -0 "$rcd"; sleep 0.2; done
 # A failed first pass ends the container (restart: unless-stopped) before the follower may start.
 rest
 level0

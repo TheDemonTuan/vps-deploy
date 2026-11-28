@@ -1,3 +1,12 @@
 - name: Restore SELinux contexts
   ansible.builtin.command: restorecon -R /etc/ssh /srv/platform-sync /etc/platform
   changed_when: true
+
+# The relays read relay.sh once, at start. Only followers run them.
+- name: Restart relays
+  ansible.builtin.shell: |
+    for c in litestream-relay litestream-crowdsec-relay; do
+      docker inspect "$c" >/dev/null 2>&1 && docker restart "$c" >/dev/null && echo "$c"
+    done
+    true
+  changed_when: true
