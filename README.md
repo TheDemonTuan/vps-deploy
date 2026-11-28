@@ -66,9 +66,9 @@ sequenceDiagram
    - Kiểm tra hợp lệ manifest `.deploy/app.yml` trước khi push.
    - Đẩy image lên GHCR với digest cố định: `ghcr.io/<owner>/<app>@sha256:<64hex>`.
    - Chạy `.deploy/smoke-image.sh` kiểm tra container độc lập: endpoint health, header `no-store`, HTTP/2 h2c, background refresh.
-3. **Gate 3 - Restricted Transport Cutover (`deploy`)**:
+3. **Gate 3 - Rollout từng node (`deploy`)**:
    - Gắn với GitHub Environment `production` (chỉ nhánh `master` mới được cấp secret).
-   - Gọi composite action `TheDemonTuan/vps-deploy/.github/actions/deploy@<PINNED_SHA>`.
+   - Gọi composite action `TheDemonTuan/vps-deploy/.github/actions/deploy@<PINNED_SHA>` một lần, không truyền `host`: orchestrator `scripts/rollout.py` đọc `registry/<app>.yml` và đi lần lượt `host` (writer, chạy migration) rồi `replica_hosts`. Mỗi node phải qua Gate 4 và bằng chứng nghiêm ngặt (status `complete`, route/health, image digest, platform SHA) thì node sau mới bắt đầu. Node lỗi thì dừng: node đó giữ bản cũ (engine tự hoàn tác), các node đã lên bản mới được rollback, mới nhất trước, để fleet không lệch phiên bản. Truyền `host` để thao tác riêng một node (status/reconcile/rollback).
    - Kết nối SSH tới VPS user riêng `deploy-<app>` với host key ED25519 được pin cứng.
    - User SSH bị giới hạn bằng `forced command`: chỉ có thể đẩy duy nhất payload JSON vào stdin của wrapper, không có quyền mở interactive shell hay chạy bất kỳ lệnh bash nào khác.
 4. **Gate 4 - Host Blue/Green Cutover Engine (`deployctl`)**:
@@ -186,16 +186,13 @@ sequenceDiagram
              image-ref: ${{ needs.build.outputs.image-ref }}
            env:
              DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-             DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
-             DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
-             DEPLOY_USER: ${{ vars.DEPLOY_USER }}
    ```
 
 4. **Cấu hình GitHub Environment `production` trên App Repo**:
    - Vào **Settings** -> **Environments** -> **New environment**: đặt tên `production`.
    - **Deployment branches**: Chọn *Selected branches* -> thêm nhánh mặc định (`master` hoặc `main`).
    - **Environment secrets**: Thêm `DEPLOY_SSH_KEY` (khóa private OpenSSH ED25519 cho ứng dụng này).
-   - **Environment variables**:
+   - **Environment variables** (không cần: địa chỉ và host key lấy từ `hosts/<id>.yml`; chỉ ghi đè khi gọi action với một `host` cụ thể, rollout cả fleet sẽ từ chối `DEPLOY_HOST`):
      - `DEPLOY_HOST`: Địa chỉ IP hoặc hostname VPS (lưu trong Environment secret/var, không commit public).
      - `DEPLOY_PORT`: Cổng SSH (ví dụ `22`).
      - `DEPLOY_USER`: Tên user riêng của app (`deploy-<app>`).

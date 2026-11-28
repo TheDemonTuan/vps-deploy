@@ -66,6 +66,8 @@ class DeployActionBoundary(unittest.TestCase):
     def test_registered_caller_and_denials(self):
         self.assertEqual(self.check().returncode, 0)
         self.assertEqual(self.check(preflight=True).returncode, 0)
+        # No host: the action rolls out to every registered host (scripts/rollout.py).
+        self.assertEqual(self.check({"HOST": ""}).returncode, 0)
         for changes in ({"APP": "../omniroute"}, {"HOST": "other"}, {"CALLER_REPO": "attacker/repo"},
                         {"CALLER_REF": "refs/heads/evil"}, {"ACTION_REF": "c" * 40},
                         {"SOURCE_SHA": "c" * 40}, {"CONFIG": "other.yml"},
