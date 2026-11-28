@@ -254,7 +254,8 @@ async function route(request, url, site, env, ctx, meta) {
   // there first; while the writer fails, another node's copy (about a second behind) beats a 502.
   // One bound to it by its path waits for its headers: a replica refuses /api/dl, and a download's
   // headers wait while a file the writer lacks comes from R2.
-  let order = pickOrder(site.nodes, client, Date.now(), state.down, state.load);
+  const at = [parseFloat(request.cf?.latitude), parseFloat(request.cf?.longitude)];
+  let order = pickOrder(site.nodes, client, Date.now(), state.down, state.load, at.every(Number.isFinite) ? at : null);
   if (primary && !(downUntil.get(state.writer) > Date.now()) && !state.down?.includes(state.writer)) {
     order = [state.writer, ...order.filter((n) => n !== state.writer)];
   }
@@ -316,18 +317,33 @@ function needsPrimary(request, url, rules) {
   return [STICKY, ...rules.primary_cookies].some((name) => cookie.includes(name + "="));
 }
 
-// Weighted rendezvous hashing on the client address: a client always lands on the same node, so
-// that node's Traefik rate limits and CrowdSec scenarios see all of its requests (not a share) and
-// its reads come from one replica; nodes get clients in proportion to weight (times the lease's
-// load factor, so a busy node sheds only part of its clients), and a node leaving moves only its
-// own clients. Nodes marked down (here, or by the cron's checks) go last; weight 0 is last too
-// (retries only).
-export function pickOrder(nodes, client, now = Date.now(), down = [], load = {}) {
-  const score = (n) => (config.nodes[n].weight > 0 ? (-config.nodes[n].weight * (load?.[n] ?? 1)) / Math.log(unit(n + "|" + client)) : 0);
+// Nearest first: a reader is balanced only across the nodes within NEAR_KM of the nearest node that
+// is up and weighted (its location: request.cf, from its address); the farther nodes are its
+// fallbacks, nearest first. Distance stands in for latency: from Vietnam, Singapore answers in
+// ~50 ms and Buffalo in ~220 ms. Without a location (or nodes') every node counts as near.
+// Among the near nodes, weighted rendezvous hashing on the client address: a client always lands
+// on the same node, so that node's Traefik rate limits and CrowdSec scenarios see all of its
+// requests (not a share) and its reads come from one replica; nodes get clients in proportion to
+// weight (times the lease's load factor, so a busy node sheds only part of its clients), and a
+// node leaving moves only its own clients. Nodes marked down (here, or by the cron's checks) go
+// last; weight 0 is a fallback too (retries only).
+const NEAR_KM = 2_000;
+export function pickOrder(nodes, client, now = Date.now(), down = [], load = {}, where = null) {
+  const isDown = (n) => downUntil.get(n) > now || down.includes(n);
+  const km = (n) => (where && config.nodes[n].location ? distance(where, config.nodes[n].location) : 0);
+  const nearest = Math.min(...nodes.filter((n) => config.nodes[n].weight > 0 && !isDown(n)).map(km));
+  const score = (n) => (config.nodes[n].weight > 0 && !(km(n) > nearest + NEAR_KM) ? (-config.nodes[n].weight * (load?.[n] ?? 1)) / Math.log(unit(n + "|" + client)) : 0);
   return nodes
-    .map((n) => [n, score(n), downUntil.get(n) > now || down.includes(n)])
-    .sort((a, b) => a[2] - b[2] || b[1] - a[1])
+    .map((n) => [n, score(n), isDown(n), km(n)])
+    .sort((a, b) => a[2] - b[2] || b[1] - a[1] || a[3] - b[3])
     .map(([n]) => n);
+}
+
+// Great-circle distance in km between two [lat, lon] points.
+function distance([lat1, lon1], [lat2, lon2]) {
+  const r = Math.PI / 180;
+  const h = Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2;
+  return 12_742 * Math.asin(Math.sqrt(h));
 }
 
 // FNV-1a with the murmur3 finalizer, mapped into (0, 1); independent per node.

@@ -11,13 +11,16 @@ traefik:
   mount: /etc/traefik/dynamic
 # Host ids: n<edge id>-<provider>-<region>-<arch>-<cores>c<GB>g. Edge load balancer
 # (cloudflare/edge-lb): n1-origin.<zone> is a proxied CNAME to this node's tunnel (cloudflare/tofu).
-# Weight is this node's share of balanced reads. n1 also runs everything that is not balanced
-# (OmniRoute, ACB, the bank gateway, the CrowdSec controller) and the database writer, so it
-# shares evenly with n2 (also 4 OCPU / 24 GB): 35/35/30.
+# Location ([lat, lon]): the edge balances a reader only across the nodes nearest it (within
+# 2000 km of the nearest); the others are its fallbacks. Weight is this node's share among the
+# nodes near a reader. n1 also runs everything that is not balanced (OmniRoute, ACB, the bank
+# gateway, the CrowdSec controller) and the database writer, so it shares evenly with n2 (also
+# 4 OCPU / 24 GB) the readers both are nearest to.
 edge:
   id: n1
   tunnel: 09575df7-5465-4201-94c0-130e16472dce
   weight: 35
+  location: [1.29, 103.85]
 apps:
   omniroute:
     api_host: omniroute-api.tuannguyenviet.site

@@ -12,11 +12,13 @@ traefik:
   container: edge-traefik
   dynamic_dir: /opt/platform/edge/dynamic
   mount: /etc/traefik/dynamic
-# Far from the readers (US): a little less weight than the two Oracle nodes.
+# Buffalo, NY: the readers nearest it (the Americas, Europe) read here, everyone else only when
+# both Singapore nodes fail.
 edge:
   id: n3
   tunnel: 992dc99e-1470-48d0-a676-a7de907e0f6e
   weight: 30
+  location: [42.89, -78.88]
 apps:
   mc-hub:
     # Same bindings as on n1: the edge load balancer serves both hosts from either node.

@@ -77,7 +77,7 @@ def plan(root=ROOT):
             raise Failure('EDGE_BUCKET_BINDING_REUSED:' + bucket['binding'])
         for node in ids:
             tunnels.setdefault(node, set()).add(site)
-    worker = {'nodes': {node: {key: nodes[node][key] for key in ('weight', 'ip', 'name')} for node in sorted(tunnels)}, 'sites': sites, 'rules': rules}
+    worker = {'nodes': {node: {key: nodes[node][key] for key in ('weight', 'ip', 'name', 'location') if key in nodes[node]} for node in sorted(tunnels)}, 'sites': sites, 'rules': rules}
     return {'worker': worker, 'buckets': buckets, 'leased': any(site['lease'] for site in sites.values()),
             'tunnels': {node: (nodes[node]['tunnel'], sorted(hostnames)) for node, hostnames in tunnels.items()}}
 

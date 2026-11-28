@@ -14,6 +14,7 @@ edge:
   id: n2
   tunnel: 2c0939e7-b73e-4d29-9c7f-ac30f59a3ebf
   weight: 35
+  location: [1.29, 103.85]
 apps:
   mc-hub:
     # Same bindings as on n1: the edge load balancer serves both hosts from either node.

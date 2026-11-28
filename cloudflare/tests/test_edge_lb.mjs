@@ -101,6 +101,42 @@ test('weight 0 drains a node: it is only a fallback', () => {
   }
 });
 
+const HANOI = [21.03, 105.85];
+const NEW_YORK = [40.71, -74.0];
+// n1 in Singapore, n2 in Buffalo for the duration of fn.
+async function located(fn) {
+  const saved = { n1: config.nodes.n1.location, n2: config.nodes.n2.location, weight: config.nodes.n2.weight };
+  config.nodes.n1.location = [1.29, 103.85];
+  config.nodes.n2.location = [42.89, -78.88];
+  try {
+    await fn();
+  } finally {
+    Object.assign(config.nodes.n1, { location: saved.n1 });
+    Object.assign(config.nodes.n2, { location: saved.n2, weight: saved.weight });
+  }
+}
+
+test('a reader goes to the nodes nearest it; farther ones are fallbacks; drained or down near nodes hand it over', () =>
+  located(() => {
+    // n2 weighs 70 of 100, yet no reader near Singapore starts there, and none near Buffalo on n1.
+    for (let i = 0; i < 200; i++) {
+      assert.deepEqual(pickOrder(['n1', 'n2'], ipAt(i), 0, [], {}, HANOI), ['n1', 'n2']);
+      assert.deepEqual(pickOrder(['n1', 'n2'], ipAt(i), 0, [], {}, NEW_YORK), ['n2', 'n1']);
+    }
+    // The near node down: the far one first, the down one last.
+    assert.deepEqual(pickOrder(['n1', 'n2'], ipAt(1), 0, ['n2'], {}, NEW_YORK), ['n1', 'n2']);
+    // The near node drained (weight 0): it is only a fallback.
+    config.nodes.n2.weight = 0;
+    assert.deepEqual(pickOrder(['n1', 'n2'], ipAt(1), 0, [], {}, NEW_YORK), ['n1', 'n2']);
+  }));
+
+test("a read follows the client's location (request.cf) to its nearest node", () =>
+  located(async () => {
+    const request = new Request('https://thedemontuan.dev/', { headers: { 'cf-connecting-ip': clientOn('n2') } });
+    Object.defineProperty(request, 'cf', { value: { latitude: String(HANOI[0]), longitude: String(HANOI[1]) } });
+    assert.equal(await (await worker.fetch(request, env, ctx)).text(), 'n1');
+  }));
+
 test('writes, admin, sessions and downloads go to the writer; a write sets the sticky cookie', async () => {
   const post = await call('/api/comments', { method: 'POST', body: '{}' });
   assert.match(post.headers.get('set-cookie'), /^__Host-edge-primary=1; Max-Age=15;/);

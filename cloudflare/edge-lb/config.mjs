@@ -2,16 +2,28 @@ export default {
   "nodes": {
     "n1": {
       "ip": "134.185.89.192",
+      "location": [
+        1.29,
+        103.85
+      ],
       "name": "n1-oci-sin1-arm-4c24g",
       "weight": 35
     },
     "n2": {
       "ip": "217.142.186.194",
+      "location": [
+        1.29,
+        103.85
+      ],
       "name": "n2-oci-sin2-arm-4c24g",
       "weight": 35
     },
     "n3": {
       "ip": "192.255.159.24",
+      "location": [
+        42.89,
+        -78.88
+      ],
       "name": "n3-vhs-buf-x86-4c16g",
       "weight": 30
     }
