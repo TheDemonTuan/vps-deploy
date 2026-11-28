@@ -398,7 +398,8 @@ def main():
         require((installed / 'registry').exists(), 'APP_NOT_REGISTERED')
         old_registration = app_registration(installed, args.app)
         old_host = host_registration(installed, previous.get('host', old_registration['host']))
-        require(old_host['host'] == args.host, 'APP_BINDING_MISMATCH')
+        # A renamed host keeps its apps when it is the same machine (same SSH address and host key).
+        require(old_host['host'] == args.host or old_host['ssh'] == host_record['ssh'], 'APP_BINDING_MISMATCH')
         host(cfg, old_registration, old_host)
     enrolled_collisions(args.app, binding, host_record)
     source_env = cfg / 'runtime.env' if optional_trusted(cfg / 'runtime.env') else Path(binding['work_dir']) / '.env'

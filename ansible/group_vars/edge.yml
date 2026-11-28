@@ -4,7 +4,7 @@ platform_src: "{{ playbook_dir }}/../platform"
 # Shared secrets (bot token, Worker NODE_KEY, R2 keys, origin certificates, GHCR login, app
 # runtime env) are copied from this node to a node that lacks them, never overwritten and never
 # stored in git or on the workstation. Override with -e secrets_source=<host> if it is down.
-secrets_source: oracle-main
+secrets_source: n1-oci-sin1-arm-4c24g  # ggignore: a host id, not a secret
 
 # peer.env ROLE: the mc-hub-api writer before any failover (the lease decides after that).
 initial_writer: n1

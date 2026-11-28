@@ -12,14 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def render(app, slot='blue'):
-    binding = host_registration(ROOT, 'oracle-main')['apps'][app]
+    binding = host_registration(ROOT, 'n1-oci-sin1-arm-4c24g')['apps'][app]
     return subprocess.check_output(['bash', str(ROOT / 'apps' / app / 'adapter.sh'), slot, 'a' * 32,
                                     binding['dashboard_host'], binding['dashboard_alias_host'], binding['api_host']])
 
 
 def host_rule(app):
     # A host's domain, then its fallback alias (the previous domain) when the registry names one.
-    binding = host_registration(ROOT, 'oracle-main')['apps'][app]
+    binding = host_registration(ROOT, 'n1-oci-sin1-arm-4c24g')['apps'][app]
     return ' || '.join('Host(`' + host + '`)' for host in (binding['api_host'], binding['dashboard_alias_host']) if host)
 
 
@@ -80,8 +80,8 @@ class McHubApi(unittest.TestCase):
                     self.assertEqual(result.returncode, 2)
 
     def test_domain_copies_follow_the_registry(self):
-        # Moving domains edits hosts/oracle-main.yml; these few literal copies must cover it.
-        apps = host_registration(ROOT, 'oracle-main')['apps']
+        # Moving domains edits hosts/n1-oci-sin1-arm-4c24g.yml; these few literal copies must cover it.
+        apps = host_registration(ROOT, 'n1-oci-sin1-arm-4c24g')['apps']
         site_hosts = {apps['mc-hub']['api_host'], apps['mc-hub']['dashboard_alias_host']} - {''}
         routers = parse_yaml(render('mc-hub-api'))['http']['routers']
         api_site_hosts = set(re.findall(r'Host\(`([^`]*)`\)', routers['mc-hub-api-site-router']['rule']))

@@ -5,11 +5,11 @@
 # the files go to R2, which they read; the script waits until every replica has the import.
 # Then it clears each node's page cache (mc-hub's POST /internal/revalidate, from inside the
 # container), so pages show the import at once and Cloudflare's edge copy within about 2 minutes.
-# MCHUB_NODES: ssh aliases of every node (default "vps-node-1 vps-node-2").
+# MCHUB_NODES: ssh aliases of every node (default: the host ids, hosts/*.yml).
 set -euo pipefail
 bundle=${1:?usage: mchub-import.sh BUNDLE_DIR}
 [ -f "$bundle/content.json" ] || { echo "no $bundle/content.json" >&2; exit 2; }
-nodes=${MCHUB_NODES:-vps-node-1 vps-node-2}
+nodes=${MCHUB_NODES:-n1-oci-sin1-arm-4c24g n2-oci-sin2-arm-4c24g n3-vhs-buf-x86-4c16g}
 volume=/var/lib/docker/volumes/mc-hub-api-data/_data
 # Replication position: on the writer the highest LTX end txid it published, on a replica the
 # follower's -txid file (16 hex digits each, so they compare as strings).

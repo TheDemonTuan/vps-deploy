@@ -86,7 +86,7 @@ python3 - "$release" "$fixture" "$api" "$ssh_port" "$fixture/hostkey.pub" "$host
 import pathlib, sys, yaml
 release, work, api, port, key_file, fp = sys.argv[1:]
 release = pathlib.Path(release)
-host = yaml.safe_load((release/'hosts/oracle-main.yml').read_text())
+host = yaml.safe_load((release/'hosts/n1-oci-sin1-arm-4c24g.yml').read_text())
 host['host'] = 'fixture-local'
 host['ssh'].update(address='127.0.0.1', port=int(port), host_key=' '.join(pathlib.Path(key_file).read_text().split()[:2]), fingerprint=fp)
 host['traefik']['dynamic_dir'] = work+'/dynamic'

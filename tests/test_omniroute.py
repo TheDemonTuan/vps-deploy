@@ -13,12 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 class OmniRoute(unittest.TestCase):
     def test_registration_has_no_resource_overlap(self):
         registration = app_registration(ROOT, 'omniroute')
-        host = host_registration(ROOT, 'oracle-main')
+        host = host_registration(ROOT, 'n1-oci-sin1-arm-4c24g')
         resource_collisions(host)
 
     def test_route_slot_identity_and_api_management_boundary(self):
         registration = app_registration(ROOT, 'omniroute')
-        host = host_registration(ROOT, 'oracle-main')['apps']['omniroute']
+        host = host_registration(ROOT, 'n1-oci-sin1-arm-4c24g')['apps']['omniroute']
         generation = 'a' * 32
         profile = dict(app='omniroute', registration=registration)
         for slot in ('blue', 'green'):

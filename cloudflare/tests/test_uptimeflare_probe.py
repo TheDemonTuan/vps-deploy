@@ -25,7 +25,7 @@ class ProbeTransportTests(unittest.TestCase):
         self.addCleanup(setattr, probe, '_KEY', self.previous)
 
     def test_pin_matches_registered_oracle_host(self):
-        host = yaml.safe_load((Path(__file__).parents[2] / 'hosts/oracle-main.yml').read_text())['ssh']
+        host = yaml.safe_load((Path(__file__).parents[2] / 'hosts/n1-oci-sin1-arm-4c24g.yml').read_text())['ssh']
         self.assertEqual(probe.HOST, host['address'])
         self.assertEqual(probe.FINGERPRINT, host['fingerprint'])
         self.assertEqual(host['port'], 22)

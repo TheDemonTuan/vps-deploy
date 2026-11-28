@@ -18,7 +18,7 @@
 #    guards, its impact, where to start, the fleet's writer and LAPI), and a reply to that message
 #    when it recovers, with how long it lasted.
 # CrowdSec shares bans through its one LAPI (roles/crowdsec), not here.
-# /etc/platform/peer.env: NODE, NODE_IP, ROLE (primary|replica before any failover), LEASE_URL,
+# /etc/platform/peer.env: NODE (edge id), NAME (host id, in alerts), NODE_IP, ROLE (primary|replica before any failover), LEASE_URL,
 # TELEGRAM_CHAT_ID. /etc/platform/nodes: "<id> <ip> <ecdsa host key>" per edge node (ansible).
 # /etc/platform/telegram-token: bot token, /etc/platform/edge-node-key: the Worker's NODE_KEY,
 # /etc/platform/oci-backup-url: a write-only pre-authenticated request for the OCI bucket, ending
@@ -99,7 +99,7 @@ report() {
     if [ -e "$state/$key.alerted" ]; then
       read -r since sent <"$state/$key.alerted"
       explain "$1"
-      notify "✅ <b>$NODE: resolved${since:+ after $((($(date +%s) - since + 59) / 60)) min}</b> · $title
+      notify "✅ <b>$NAME: resolved${since:+ after $((($(date +%s) - since + 59) / 60)) min}</b> · $title
 <b>Now:</b> $(esc "$3")" "${sent:-}" >/dev/null
       rm -f "$state/$key.alerted"
     fi
@@ -113,7 +113,7 @@ report() {
   if [ "$fails" -ge "${4:-2}" ] && [ ! -e "$state/$key.alerted" ]; then
     explain "$1"
     since=$(cat "$state/$key.since" 2>/dev/null || date +%s)
-    sent=$(notify "🔴 <b>$NODE: $title</b>
+    sent=$(notify "🔴 <b>$NAME: $title</b>
 $what
 <b>Impact:</b> $impact
 <b>Start with:</b> <code>$look</code> on $NODE

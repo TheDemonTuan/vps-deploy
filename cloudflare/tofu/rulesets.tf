@@ -2,7 +2,7 @@
 # here, before the edge-lb Worker and the tunnels. Free plan: 5 custom rules and 1 rate limiting
 # rule per zone, no regex, and a rate limiting rule may only test the path and verified bots.
 locals {
-  # From hosts/oracle-main.yml; tests/test_mc_hub_api.py keeps these and the paths below equal.
+  # From hosts/n1-oci-sin1-arm-4c24g.yml; tests/test_mc_hub_api.py keeps these and the paths below equal.
   mc_hub_site      = "thedemontuan.dev"
   mc_hub_api_host  = "api.thedemontuan.dev"
   mc_hub_api_alias = "minecraft-api.tuannguyenviet.site"

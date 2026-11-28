@@ -29,7 +29,13 @@
     secret:
       dest: /etc/platform/monitor.env
       src: /etc/platform/monitor-agent.env
-      node_line: true
+
+# Grafana shows this node under its host id (hosts/<id>.yml).
+- name: This node's name on its metrics
+  ansible.builtin.lineinfile:
+    path: /etc/platform/monitor.env
+    regexp: '^NODE='
+    line: "NODE={{ inventory_hostname }}"
 
 - name: No hub here (it moved to another node)
   when: not monitor_hub

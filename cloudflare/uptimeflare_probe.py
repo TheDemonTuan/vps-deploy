@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 
-# The oracle-main registration; tests keep this pin aligned with hosts/oracle-main.yml.
+# The n1 registration; tests keep this pin aligned with hosts/n1-oci-sin1-arm-4c24g.yml.
 HOST = '134.185.89.192'
 FINGERPRINT = 'SHA256:e3LV9csFdtQi0+fs+GkRX1T8RFCYNy7afFgSm8nyfc4'
 USER = 'probe-uptimeflare'

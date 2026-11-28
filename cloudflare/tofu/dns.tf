@@ -320,7 +320,7 @@ import {
   for_each = {
     for k, v in local.edge_hosts :
     k => v.edge.id
-    if k == "oracle-main" || k == "oracle-sg2"
+    if contains(["n1", "n2"], v.edge.id)
   }
   to = cloudflare_dns_record.origin[each.key]
   id = "${var.zones["thedemontuan.dev"]}/${each.value == "n1" ? "19ef7e43f98681d6ec949d74dfeccd4c" : "935b4472408272bb6eacaef48a20ce05"}"

@@ -96,7 +96,7 @@ flowchart LR
   changes to a local directory; on each replica a relay (`sync/relay.sh`, rclone) mirrors it over
   read-only SFTP (level 0 every second, the rest every minute) and Litestream follows that mirror
   into its own file. Litestream's own SFTP client waits a round trip per ~1 KB read: from 250 ms
-  away (n4, Buffalo) a 4.5 MB restore took 40 minutes; the relay pipelines it (about a minute)
+  away (n3, Buffalo) a 4.5 MB restore took 40 minutes; the relay pipelines it (about a minute)
   and keeps the copy within a few seconds. mc-hub-api opens that file read-only (`DB_ROLE` =
   engine `NODE_ROLE`, or the volume's `role` file after a failover; writes there return 503
   `READ_ONLY`, but the Worker never sends them). A primary also refuses writes (503 `READ_ONLY`)
@@ -196,7 +196,7 @@ the nodes' `opc` keys); CI only lints it.
    serial log, not from a first connection. Oracle reclaims idle Always Free instances (over 7
    days, 95th-percentile CPU, network and A1 memory all under 20 %): keep the node in use, or
    upgrade its tenancy to Pay As You Go (Always Free resources stay free).
-   Another provider (n4, `hosts/vps-n4.yml`): an EL install the roles already know (AlmaLinux 10),
+   Another provider (n3, `hosts/n3-vhs-buf-x86-4c16g.yml`): an EL install the roles already know (AlmaLinux 10),
    then as root what the Oracle image comes with: `opc` (uid 1000, groups `adm`, `systemd-journal`, `NOPASSWD` sudo,
    the node's key), SELinux (an image shipped with it disabled: `SELINUX=permissive` and
    `/.autorelabel`, reboot, then `setenforce 1` and `SELINUX=enforcing`; booting straight into
@@ -290,7 +290,7 @@ cron, `peer.sh` and CrowdSec on Telegram; UptimeFlare checks Grafana's `/api/hea
 
 ## Publish content (mc-hub `import`)
 
-From the operator's machine, with the `vps-node-*` ssh aliases:
+From the operator's machine, with ssh aliases named like the host ids (`n1-oci-sin1-arm-4c24g`):
 
 ```sh
 platform/mchub-import.sh path/to/bundle   # content.json + the files it names

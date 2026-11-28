@@ -23,7 +23,7 @@ class DeployActionBoundary(unittest.TestCase):
         source = self.root / "source"
         for directory in (platform, source):
             directory.mkdir()
-        for folder, name in (("registry", "omniroute.yml"), ("hosts", "oracle-main.yml")):
+        for folder, name in (("registry", "omniroute.yml"), ("hosts", "n1-oci-sin1-arm-4c24g.yml")):
             dest = platform / folder
             dest.mkdir()
             shutil.copyfile(ROOT / folder / name, dest / name)
@@ -46,7 +46,7 @@ class DeployActionBoundary(unittest.TestCase):
             subprocess.run(["git", "-C", str(directory), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"], check=True)
         self.platform_sha = subprocess.check_output(["git", "-C", str(platform), "rev-parse", "HEAD"], text=True).strip()
         self.source_sha = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-        self.env = dict(APP="omniroute", HOST="oracle-main", CALLER_REPO=self.caller["repository"],
+        self.env = dict(APP="omniroute", HOST="n1-oci-sin1-arm-4c24g", CALLER_REPO=self.caller["repository"],
                         CALLER_REF=self.caller["ref"], CALLER_SHA=self.source_sha, ACTION_REF=self.platform_sha,
                         SOURCE_SHA=self.source_sha, PLATFORM_REF=self.platform_sha, CONFIG=self.caller["config"],
                         OPERATION="deploy", COMPONENT="app", IMAGE_REF=registration["manifest"]["image"] + "@sha256:" + "b" * 64)
@@ -141,7 +141,7 @@ class DeployActionBoundary(unittest.TestCase):
                    "DEPLOY_HOST": "target.example", "DEPLOY_PORT": "22", "DEPLOY_USER": "attacker",
                    "DEPLOY_KEY_FILE": str(key), "GITHUB_STEP_SUMMARY": str(summary), "SSH_CAPTURE": str(captured)}
         res_bad = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
-                                  "--app", "omniroute", "--host", "oracle-main", "--operation", "status",
+                                  "--app", "omniroute", "--host", "n1-oci-sin1-arm-4c24g", "--operation", "status",
                                   "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
                                   "--config", self.caller["config"], "--request-id", "fixture-status"],
                                  cwd=self.root / "source", env=bad_env, capture_output=True, text=True)
@@ -152,7 +152,7 @@ class DeployActionBoundary(unittest.TestCase):
                     "DEPLOY_HOST": "target.example", "DEPLOY_PORT": "22", "DEPLOY_USER": "deploy-omniroute",
                     "DEPLOY_KEY_FILE": str(key), "GITHUB_STEP_SUMMARY": str(summary), "SSH_CAPTURE": str(captured)}
         res_good = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
-                                   "--app", "omniroute", "--host", "oracle-main", "--operation", "status",
+                                   "--app", "omniroute", "--host", "n1-oci-sin1-arm-4c24g", "--operation", "status",
                                    "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
                                    "--config", self.caller["config"], "--request-id", "fixture-status"],
                                   cwd=self.root / "source", env=good_env, capture_output=True, text=True)
@@ -165,10 +165,10 @@ class DeployActionBoundary(unittest.TestCase):
         self.assertIn("ForwardAgent=no", argv)
         self.assertNotIn("attacker", argv)
 
-        # oracle-main pins ssh.host_key: a different key from a scan is never trusted.
+        # n1 pins ssh.host_key: a different key from a scan is never trusted.
         make_mock("ssh-keyscan", "print('target.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP//////////////////////////////////////////')")
         res_mitm = subprocess.run([sys.executable, str(ROOT / "scripts/ssh-request.py"),
-                                   "--app", "omniroute", "--host", "oracle-main", "--operation", "status",
+                                   "--app", "omniroute", "--host", "n1-oci-sin1-arm-4c24g", "--operation", "status",
                                    "--source-sha", self.source_sha, "--platform-ref", self.platform_sha,
                                    "--config", self.caller["config"], "--request-id", "fixture-status"],
                                   cwd=self.root / "source", env=good_env, capture_output=True, text=True)

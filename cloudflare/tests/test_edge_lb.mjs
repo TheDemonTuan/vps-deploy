@@ -109,7 +109,7 @@ test('writes, admin, sessions and downloads go to the writer; a write sets the s
   await call('/', { headers: { cookie: 'a=1; __Host-mch_session=t' } });
   await call('/', { headers: { cookie: '__Host-edge-primary=1' } });
   assert.deepEqual(calls.map((c) => c.node), ['n1', 'n1', 'n1', 'n1', 'n1']);
-  assert.deepEqual(points[0].blobs, ['thedemontuan.dev', 'n1', 'POST', 'origin']);
+  assert.deepEqual(points[0].blobs, ['thedemontuan.dev', 'n1-oci-sin1-arm-4c24g', 'POST', 'origin']);
   assert.equal(points[0].doubles[0], 200);
 });
 
@@ -244,7 +244,7 @@ test('a node takes the lease only with its key from its own address, and only on
 
   const forced = await leaseCall('n2', { op: 'promote', force: true });
   assert.deepEqual(await forced.json(), { writer: 'n2', epoch: 1, version: 1, down: [], load: {}, lapiGrant: false });
-  assert.match(telegrams[0], /n2 is now the writer \(was n1, forced\)/);
+  assert.match(telegrams[0], /n2-oci-sin2-arm-4c24g is now the writer \(was n1-oci-sin1-arm-4c24g, forced\)/);
   _test.leases.clear();
   await call('/api/comments', { method: 'POST', body: '{}' });
   await call('/admin/posts');
@@ -359,14 +359,14 @@ test('the cron checks every node of each leased site and alerts after two failur
   await worker.scheduled({}, env);
   // The writer (n1) never renewed the lease here, so that is reported as well.
   assert.equal(telegrams.length, 1);
-  assert.match(telegrams[0], /🔴 <b>n2 · thedemontuan.dev<\/b>: HTTP 502\. Readers are sent to the other nodes/);
-  assert.match(telegrams[0], /🔴 <b>n2 · api.thedemontuan.dev<\/b>: HTTP 502/);
-  assert.match(telegrams[0], /🔴 <b>Lease<\/b>: writer n1 has not renewed the lease/);
-  assert.doesNotMatch(telegrams[0], /n1 · thedemontuan/);
+  assert.match(telegrams[0], /🔴 <b>n2-oci-sin2-arm-4c24g · thedemontuan.dev<\/b>: HTTP 502\. Readers are sent to the other nodes/);
+  assert.match(telegrams[0], /🔴 <b>n2-oci-sin2-arm-4c24g · api.thedemontuan.dev<\/b>: HTTP 502/);
+  assert.match(telegrams[0], /🔴 <b>Lease<\/b>: writer n1-oci-sin1-arm-4c24g has not renewed the lease/);
+  assert.doesNotMatch(telegrams[0], /n1-oci-sin1-arm-4c24g · thedemontuan/);
   replies = {};
   await leaseCall('n1', { op: 'beat' });
   await worker.scheduled({}, env);
-  assert.match(telegrams[1], /✅ <b>n2 · thedemontuan.dev<\/b>: back to normal, after \d+ min/);
+  assert.match(telegrams[1], /✅ <b>n2-oci-sin2-arm-4c24g · thedemontuan.dev<\/b>: back to normal, after \d+ min/);
   assert.match(telegrams[1], /✅ <b>Lease<\/b>: back to normal/);
 });
 
@@ -400,7 +400,7 @@ test('a busy node sheds part of its readers until its load falls, with an alert 
   await worker.scheduled({}, env);
   assert.deepEqual(await factors(), { n2: 0.5 });
   assert.equal(telegrams.length, 1);
-  assert.match(telegrams[0], /🟠 <b>n2 busy<\/b>: 200% of its capacity in use; it gets 75% of its usual share/);
+  assert.match(telegrams[0], /🟠 <b>n2-oci-sin2-arm-4c24g busy<\/b>: 200% of its capacity in use; it gets 75% of its usual share/);
 
   // Only n2's clients move, and only some of them.
   const before = Array.from({ length: 4000 }, (_, i) => pickOrder(['n1', 'n2'], ipAt(i))[0]);
@@ -418,13 +418,13 @@ test('a busy node sheds part of its readers until its load falls, with an alert 
   replies = { n2: health(0.1) };
   for (let i = 0; i < 12 && Object.keys(await factors()).length; i++) await worker.scheduled({}, env);
   assert.deepEqual(await factors(), {});
-  assert.match(telegrams.at(-1), /✅ <b>n2<\/b>: load back to normal/);
+  assert.match(telegrams.at(-1), /✅ <b>n2-oci-sin2-arm-4c24g<\/b>: load back to normal/);
 
   // A node that refuses its check says why (mc-hub-api: disk nearly full).
   replies = { n2: () => Response.json({ ok: false, reason: 'disk: 512 MiB free' }, { status: 503 }) };
   await worker.scheduled({}, env);
   await worker.scheduled({}, env);
-  assert.match(telegrams.at(-1), /🔴 <b>n2 · api.thedemontuan.dev<\/b>: HTTP 503: disk: 512 MiB free/);
+  assert.match(telegrams.at(-1), /🔴 <b>n2-oci-sin2-arm-4c24g · api.thedemontuan.dev<\/b>: HTTP 503: disk: 512 MiB free/);
 });
 
 test('a read answered 500 is retried on the next node without marking the first one down', async () => {
@@ -466,7 +466,7 @@ test('a writer failing three checks in a row hands the lease to a replica that w
   const state = await (await leaseCall('n2', { op: 'beat', synced: now })).json();
   assert.deepEqual([state.writer, state.epoch, state.down], ['n2', 1, ['n1']]);
   assert.equal(state.lapiGrant, false); // old writer renewed moments before its health checks failed
-  assert.ok(telegrams.some((t) => /n2 is now the writer \(was n1, failing 4 checks in a row\)/.test(t)));
+  assert.ok(telegrams.some((t) => /n2-oci-sin2-arm-4c24g is now the writer \(was n1-oci-sin1-arm-4c24g, failing 4 checks in a row\)/.test(t)));
   _test.leases.clear();
   calls = [];
   await call('/api/comments', { method: 'POST', body: '{}' });
@@ -487,14 +487,14 @@ test('a writer that stops renewing hands the lease to the replica holding its da
     await beat('n2', '00000000000000f0');
     await worker.scheduled({}, env);
     assert.equal((await beat('n2', '00000000000000f0')).writer, 'n1');
-    assert.ok(telegrams.some((t) => /Needs a person<\/b>: writer n1 is down \(no lease renewal for 3 min\) and no replica may take over/.test(t)));
+    assert.ok(telegrams.some((t) => /Needs a person<\/b>: writer n1-oci-sin1-arm-4c24g is down \(no lease renewal for 3 min\) and no replica may take over/.test(t)));
     // Within PROMOTE_LAG_TXIDS of what n1 last reported.
     await beat('n2', '00000000000000fc');
     await worker.scheduled({}, env);
     const state = await beat('n2', '00000000000000fc');
     assert.deepEqual([state.writer, state.epoch], ['n2', 1]);
     assert.equal(state.lapiGrant, true); // old writer's last grant has expired
-    assert.ok(telegrams.some((t) => /n2 is now the writer \(was n1, no lease renewal for 3 min, 4 transactions behind its last report\)/.test(t)));
+    assert.ok(telegrams.some((t) => /n2-oci-sin2-arm-4c24g is now the writer \(was n1-oci-sin1-arm-4c24g, no lease renewal for 3 min, 4 transactions behind its last report\)/.test(t)));
   } finally {
     Date.now = real;
   }

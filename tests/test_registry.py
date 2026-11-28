@@ -24,25 +24,25 @@ class Registration(unittest.TestCase):
             host_registration(ROOT, 'not-enrolled')
 
     def test_host_registration_allows_omitted_edge_tunnel(self):
-        raw = (ROOT / 'hosts/oracle-main.yml').read_text()
+        raw = (ROOT / 'hosts/n1-oci-sin1-arm-4c24g.yml').read_text()
         mutated = raw.replace('  tunnel: 09575df7-5465-4201-94c0-130e16472dce\n', '')
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name) / 'hosts'
             directory.mkdir()
-            (directory / 'oracle-main.yml').write_text(mutated)
-            host = host_registration(directory.parent, 'oracle-main')
+            (directory / 'n1-oci-sin1-arm-4c24g.yml').write_text(mutated)
+            host = host_registration(directory.parent, 'n1-oci-sin1-arm-4c24g')
             self.assertNotIn('tunnel', host['edge'])
             self.assertEqual(host['edge']['id'], 'n1')
 
     def test_build_platforms_cover_every_host_of_the_app(self):
-        raw = (ROOT / 'hosts/oracle-main.yml').read_text()
-        registration = {'host': 'oracle-main', 'replica_hosts': ['other'], 'manifest': {'platform': 'linux/arm64'}}
+        raw = (ROOT / 'hosts/n1-oci-sin1-arm-4c24g.yml').read_text()
+        registration = {'host': 'n1-oci-sin1-arm-4c24g', 'replica_hosts': ['other'], 'manifest': {'platform': 'linux/arm64'}}
         with tempfile.TemporaryDirectory() as name:
             release = Path(name)
             (release / 'hosts').mkdir()
-            (release / 'hosts/oracle-main.yml').write_text(raw)
+            (release / 'hosts/n1-oci-sin1-arm-4c24g.yml').write_text(raw)
             other = release / 'hosts/other.yml'
-            other.write_text(raw.replace('host: oracle-main', 'host: other'))
+            other.write_text(raw.replace('host: n1-oci-sin1-arm-4c24g', 'host: other'))
             self.assertEqual(core.build_platforms(release, registration), ['linux/arm64'])
             other.write_text('platform: linux/amd64\n' + other.read_text())
             self.assertEqual(core.build_platforms(release, registration), ['linux/amd64', 'linux/arm64'])
@@ -59,18 +59,18 @@ class Registration(unittest.TestCase):
             for directory in ('registry', 'hosts'):
                 (root / directory).mkdir()
             (root / 'registry/mc-hub.yml').write_text(mutated)
-            self.assertEqual(app_registration(root, 'mc-hub')['host'], 'oracle-main')
+            self.assertEqual(app_registration(root, 'mc-hub')['host'], 'n1-oci-sin1-arm-4c24g')
 
     def test_host_record_of_a_release_with_retired_9router_still_loads(self):
-        raw = (ROOT / 'hosts/oracle-main.yml').read_text()
+        raw = (ROOT / 'hosts/n1-oci-sin1-arm-4c24g.yml').read_text()
         mutated = raw.replace('apps:\n', 'apps:\n  9router:\n    api_host: 9router-api.tuannguyenviet.site\n    dashboard_host: 9router.tuannguyenviet.site\n'
                               '    dashboard_alias_host: ""\n    work_dir: /opt/9router\n    compose_project: 9router\n'
                               '    edge_network: edge-9router\n    rtk_network: 9router-rtk\n    route_name: 9router.yml\n', 1)
         self.assertNotEqual(raw, mutated)
         with tempfile.TemporaryDirectory() as name:
             (Path(name) / 'hosts').mkdir()
-            (Path(name) / 'hosts/oracle-main.yml').write_text(mutated)
-            self.assertIn('9router', host_registration(Path(name), 'oracle-main')['apps'])
+            (Path(name) / 'hosts/n1-oci-sin1-arm-4c24g.yml').write_text(mutated)
+            self.assertIn('9router', host_registration(Path(name), 'n1-oci-sin1-arm-4c24g')['apps'])
 
     def test_manifest_bool_does_not_equal_integer(self):
         with self.assertRaisesRegex(Failure, 'MANIFEST_POLICY'):
@@ -87,7 +87,7 @@ class Registration(unittest.TestCase):
                     app_registration(directory.parent, 'omniroute')
 
     def test_drain_wrapper_namespace(self):
-        host = host_registration(ROOT, 'oracle-main')
+        host = host_registration(ROOT, 'n1-oci-sin1-arm-4c24g')
         host['apps']['drain-omniroute'] = {
             'api_host': 'demo.fixture.test', 'dashboard_host': '', 'dashboard_alias_host': '',
             'work_dir': '/opt/demo', 'compose_project': 'drain-omniroute',
@@ -99,7 +99,7 @@ class Registration(unittest.TestCase):
     def test_production_host_profile_loads_single_image_app(self):
         # #81 left a dangling multi_image reference: every real host load raised NameError.
         registration = app_registration(ROOT, 'omniroute')
-        host_record = host_registration(ROOT, 'oracle-main')
+        host_record = host_registration(ROOT, 'n1-oci-sin1-arm-4c24g')
         profile = dict(host_record['apps']['omniroute'], platform_ref='a' * 40,
                        dynamic_dir=host_record['traefik']['dynamic_dir'])
         with mock.patch('core.trusted_path'), mock.patch('core.load', return_value=dict(profile)), \

@@ -1,5 +1,5 @@
 version: 1
-host: oracle-main
+host: n1-oci-sin1-arm-4c24g
 ssh:
   address: 134.185.89.192
   port: 22
@@ -9,10 +9,11 @@ traefik:
   container: edge-traefik
   dynamic_dir: /opt/platform/edge/dynamic
   mount: /etc/traefik/dynamic
-# Edge load balancer (cloudflare/edge-lb): n1-origin.<zone> is a proxied CNAME to this node's
-# tunnel (cloudflare/tofu). Weight is this node's share of balanced reads. n1 has twice the
-# cores and memory of n2/n3 (4 OCPU, 24 GB) but also runs everything that is not balanced
-# (OmniRoute, ACB, the bank gateway, the CrowdSec controller) and the database writer: 40/30/30.
+# Host ids: n<edge id>-<provider>-<region>-<arch>-<cores>c<GB>g. Edge load balancer
+# (cloudflare/edge-lb): n1-origin.<zone> is a proxied CNAME to this node's tunnel (cloudflare/tofu).
+# Weight is this node's share of balanced reads. n1 also runs everything that is not balanced
+# (OmniRoute, ACB, the bank gateway, the CrowdSec controller) and the database writer: 40/30/30
+# while n2 waits for Oracle capacity to grow to 4 OCPU, 35/35/30 after.
 edge:
   id: n1
   tunnel: 09575df7-5465-4201-94c0-130e16472dce
