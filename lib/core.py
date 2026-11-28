@@ -232,8 +232,11 @@ def host_registration(release, host_id):
     if 'edge' in value:
         # Load-balancer identity: <id>-origin.<zone> is a proxied CNAME to this node's tunnel.
         edge = value['edge']
-        fields(edge, {'id', 'tunnel', 'weight'}, {'id', 'weight'})
+        fields(edge, {'id', 'tunnel', 'weight', 'location'}, {'id', 'weight'})
         require(type(edge['id']) is str and re.fullmatch(r'[a-z][a-z0-9]{0,15}', edge['id']) and ('tunnel' not in edge or (type(edge['tunnel']) is str and re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', edge['tunnel']))) and type(edge['weight']) is int and 0 <= edge['weight'] <= 100, 'REGISTRY_POLICY')
+        # [latitude, longitude] in degrees: the edge sends readers to the nodes nearest them.
+        location = edge.get('location', [0, 0])
+        require(type(location) is list and len(location) == 2 and all(type(x) in (int, float) for x in location) and abs(location[0]) <= 90 and abs(location[1]) <= 180, 'REGISTRY_POLICY')
     ssh = value['ssh']
     fields(ssh, {'address', 'port', 'host_key', 'fingerprint'}, {'port', 'fingerprint'})
     if 'address' in ssh:
