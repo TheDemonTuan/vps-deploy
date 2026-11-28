@@ -24,7 +24,7 @@ class PreflightParity(unittest.TestCase):
         self.runtime = self.config / 'runtime.env'
         self.runtime.write_text('INITIAL_PASSWORD=fixture-only\nJWT_SECRET=x\nAPI_KEY_SECRET=y\nPUBLIC_URL=https://omni.test\nPUBLIC_API_URL=https://api.omni.test\n')
         self.registration = app_registration(ROOT, 'omniroute')
-        self.binding = host_registration(ROOT, 'oracle-main')['apps']['omniroute']
+        self.binding = host_registration(ROOT, 'n1-oci-sin1-arm-4c24g')['apps']['omniroute']
         self.base = {
             'services': {name: {'container_name': name, 'environment': {'INITIAL_PASSWORD': 'fixture-only'},
                                'networks': ['edge'], 'volumes': [{'type': 'volume', 'target': '/app/data', 'source': 'data'}]}

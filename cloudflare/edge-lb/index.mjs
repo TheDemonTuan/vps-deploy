@@ -81,7 +81,7 @@ export default {
       // Workers Analytics Engine: per node requests, status and time to response headers.
       env.METRICS?.writeDataPoint({
         indexes: [meta.node || "edge"],
-        blobs: [url.hostname, meta.node || "edge", request.method, meta.outcome],
+        blobs: [url.hostname, named(meta.node || "edge"), request.method, meta.outcome],
         doubles: [status, Date.now() - started],
       });
     }
@@ -560,7 +560,7 @@ export class Lease {
       if (!force && age < LEASE_MS) {
         return Response.json({ error: "WRITER_ALIVE", writer: s.writer, seconds: Math.round(age / 1000) }, { status: 409 });
       }
-      alerts.push(`🔁 <b>Writer moved</b>: ${node} is now the writer (was ${s.writer}${force ? ", forced" : ""}); ${s.writer} steps down to replica when it is back.`);
+      alerts.push(`🔁 <b>Writer moved</b>: ${named(node)} is now the writer (was ${named(s.writer)}${force ? ", forced" : ""}); ${named(s.writer)} steps down to replica when it is back.`);
       s.lapiAfter = Math.max(s.lapiAfter || 0, (s.beats[s.writer] || 0) + LEASE_MS);
       s.writer = node;
       s.epoch++;
@@ -569,7 +569,7 @@ export class Lease {
     }
     if (op === "check") {
       const age = now - (s.beats[s.writer] ?? 0);
-      results.lease = age < LEASE_MS ? "" : `writer ${s.writer} has not renewed the lease for ${Math.round(age / 60000)} min (it stopped taking writes after 150 s)`;
+      results.lease = age < LEASE_MS ? "" : `writer ${named(s.writer)} has not renewed the lease for ${Math.round(age / 60000)} min (it stopped taking writes after 150 s)`;
       s.failingSince ??= {};
       for (const [check, detail] of Object.entries(results)) {
         s.fails[check] = detail ? (s.fails[check] ?? 0) + 1 : 0;
@@ -596,10 +596,10 @@ export class Lease {
         s.load[n] = l;
         if (l.factor < 1 && !s.alerted[`load:${n}`]) {
           s.alerted[`load:${n}`] = true;
-          alerts.push(`🟠 <b>${n} busy</b>: ${Math.round(l.busy * 100)}% of its capacity in use; it gets ${l.factor * 100}% of its usual share of readers until that falls below ${LOAD_COOL * 100}%.`);
+          alerts.push(`🟠 <b>${named(n)} busy</b>: ${Math.round(l.busy * 100)}% of its capacity in use; it gets ${l.factor * 100}% of its usual share of readers until that falls below ${LOAD_COOL * 100}%.`);
         } else if (l.factor === 1 && s.alerted[`load:${n}`]) {
           delete s.alerted[`load:${n}`];
-          alerts.push(`✅ <b>${n}</b>: load back to normal, full share of readers again`);
+          alerts.push(`✅ <b>${named(n)}</b>: load back to normal, full share of readers again`);
         }
       }
       const writerFails = Math.max(0, ...Object.keys(s.fails).filter((check) => check.startsWith(`${s.writer} `)).map((check) => s.fails[check]));
@@ -618,7 +618,7 @@ export class Lease {
         const why = writerFails >= PROMOTE_CHECKS ? `failing ${writerFails} checks in a row` : `no lease renewal for ${Math.round(age / 60000)} min`;
         if (next) {
           const lag = s.floor || floor === null ? "" : `, ${floor > at(next) ? floor - at(next) : 0n} transactions behind its last report`;
-          alerts.push(`🔁 <b>Writer moved</b>: ${next} is now the writer (was ${s.writer}, ${why}${lag}); ${s.writer} steps down to replica when it is back.`);
+          alerts.push(`🔁 <b>Writer moved</b>: ${named(next)} is now the writer (was ${named(s.writer)}, ${why}${lag}); ${named(s.writer)} steps down to replica when it is back.`);
           s.lapiAfter = Math.max(s.lapiAfter || 0, (s.beats[s.writer] || 0) + LEASE_MS);
           s.writer = next;
           s.epoch++;
@@ -627,7 +627,7 @@ export class Lease {
           delete s.alerted.failover;
         } else if (!s.alerted.failover) {
           s.alerted.failover = true;
-          alerts.push(`🆘 <b>Needs a person</b>: writer ${s.writer} is down (${why}) and no replica may take over by itself (each must pass its checks, renew the lease and hold the writer's data). ` +
+          alerts.push(`🆘 <b>Needs a person</b>: writer ${named(s.writer)} is down (${why}) and no replica may take over by itself (each must pass its checks, renew the lease and hold the writer's data). ` +
             (s.floor ? "Even forced promotion requires the last acknowledged position." : "<code>sudo /opt/platform/peer/role.sh promote --force</code> on a replica takes it anyway, losing what that replica lacks."));
         }
       } else {
@@ -642,12 +642,14 @@ export class Lease {
 
 // Telegram HTML: a check's name and what its failure means, from a detail that may hold anything.
 const esc = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const label = (check) => (check === "lease" ? "Lease" : check.replace(" ", " · "));
+const label = (check) => (check === "lease" ? "Lease" : check.replace(/^(\S+) /, (_, n) => `${named(n)} · `));
+// Alerts and analytics name a node by its host id (n2-oci-sin2-arm-4c24g), which starts with its edge id.
+const named = (n) => config.nodes[n]?.name ?? n;
 function impact(check, writer) {
   if (check === "lease") return "";
   const node = check.split(" ")[0];
   return node === writer
-    ? `. ${node} is the writer: writes wait, and after ${PROMOTE_CHECKS} failed checks in a row the edge hands writing to a current replica.`
+    ? `. ${named(node)} is the writer: writes wait, and after ${PROMOTE_CHECKS} failed checks in a row the edge hands writing to a current replica.`
     : ". Readers are sent to the other nodes meanwhile.";
 }
 

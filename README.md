@@ -249,7 +249,7 @@ sequenceDiagram
    ```yaml
    version: 1
    app: my-service
-   host: oracle-main
+   host: n1-oci-sin1-arm-4c24g
    caller:
      repository: TheDemonTuan/my-service
      ref: refs/heads/master
@@ -383,7 +383,7 @@ UID 1000 with a read-only root, and deploy independently.
   Litestream, node bootstrap, promotion).
 - Frontend SSR reads published content from the same node's mc-hub-api at
   `http://edge-traefik:8082` (`API_URL`, entrypoint `internal`, router `mc-hub-api-internal`).
-- Domains live in `hosts/oracle-main.yml`: each app's `api_host` is its domain and
+- Domains live in `hosts/n1-oci-sin1-arm-4c24g.yml`: each app's `api_host` is its domain and
   `dashboard_alias_host` the previous one, kept routed by Traefik as a **fallback**
   (`tuannguyenviet.site`, `minecraft-api.tuannguyenviet.site`). The adapters, the deploy probe
   (`api_host`) and the Cloudflare OpenTofu code (`cloudflare/tofu/`) read them from there;
@@ -536,7 +536,7 @@ Controller verification installs pinned `PyYAML==6.0.3` before its Python suites
 - uptimeflare publishes `uptimeflare_worker` and `uptimeflare-web` as a checked pair. Existing every-minute Cron, exact RemoteChecker namespace and D1 database are read/verified, never migrated or restored. HTTP checks exercise both SHA markers, actual Next HTML/JS/CSS and D1-backed `/api/data`. Candidate failure restores only owned exact prior versions; deployment drift forbids overwrite. Legacy untagged recovery reports prior SHA as unverified.
 - Production uptimeflare verification runs pinned Playwright through a dedicated forced-command VPS probe, using the installed sandboxed Chromium and a fresh anonymous profile. It navigates the real public `https://status.tuannguyenviet.site/` through normal DNS/Cloudflare and fetches compiled `/_next/static/` assets, D1-backed `/api/data` and expected SHA markers in the same browser session. It does not use origin IPs, internal service bindings, browser accounts, Access credentials or browser-identity overrides. Non-200 navigation, wrong MIME/body/SHA, redirects, missing product scripts and invalid API data still fail; no hosted-browser or loose-HTTP fallback exists. The current public baseline must pass before any version upload; candidate and rollback checks use the same public probe.
 - Failed uptimeflare Chromium navigation includes only a validated Cloudflare Ray ID, the `challenge`/`none` mitigation classification and an explicitly labelled 1xxx provider error code when available. The sanitized receipt never includes response bodies, cookies, arbitrary headers or credentials. Use that runner Ray ID in Cloudflare Security Events to identify the actual blocking product/rule; a different client's 1010 response does not prove the runner has the same block. A focused `app=uptimeflare, mode=check` dispatch is read-only and retains the production baseline gate. Do not retry `publish`, change browser identity, disable protections or suppress failures to diagnose a blocked baseline.
-- The normal production job receives only `UPTIMEFLARE_PROBE_SSH_KEY`, a separate key for `probe-uptimeflare` on the fingerprint-pinned `oracle-main` host. Its forced command accepts only bounded web/monitor SHA JSON, not a shell, arbitrary URL or path. The account has no Docker/group/admin access; a no-argument root-owned launcher creates a serialized, resource-limited, transient systemd unit running the unprivileged probe. Cloudflare/GitHub credentials remain on the hosted controller and are never sent to the probe. Browser sandboxing stays enabled. No persistent GitHub runner/service or global security exemption is installed. Runtime installation and dedicated-key enrollment are separate operator actions documented in [`install/README.md`](install/README.md); platform-admin SSH keys are never added to normal deployment jobs.
+- The normal production job receives only `UPTIMEFLARE_PROBE_SSH_KEY`, a separate key for `probe-uptimeflare` on the fingerprint-pinned `n1-oci-sin1-arm-4c24g` host. Its forced command accepts only bounded web/monitor SHA JSON, not a shell, arbitrary URL or path. The account has no Docker/group/admin access; a no-argument root-owned launcher creates a serialized, resource-limited, transient systemd unit running the unprivileged probe. Cloudflare/GitHub credentials remain on the hosted controller and are never sent to the probe. Browser sandboxing stays enabled. No persistent GitHub runner/service or global security exemption is installed. Runtime installation and dedicated-key enrollment are separate operator actions documented in [`install/README.md`](install/README.md); platform-admin SSH keys are never added to normal deployment jobs.
 - The controller also compares the probe script SHA-256 with its trusted checkout before accepting any captured resources. A stale or mismatched installed probe fails closed; reviewing and enrolling the matching immutable probe runtime is part of changing that script, not an automatic upload through the restricted probe account.
 
 Manual operations run from this repository:

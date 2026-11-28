@@ -1,7 +1,6 @@
 # One shared secret: copied from secrets_source when this node lacks it, never overwritten unless
 # sync (copied again whenever it differs; only for files copied as they are), never logged.
-# secret: {dest, src (default dest), owner, mode, keep (regex: lines to copy), node_line (rewrite
-# NODE= to this node's id), sync}.
+# secret: {dest, src (default dest), owner, mode, keep (regex: lines to copy), sync}.
 - name: "Look for {{ secret.dest }}"
   ansible.builtin.stat:
     path: "{{ secret.dest }}"
@@ -29,8 +28,7 @@
     - name: "Write {{ secret.dest }}"
       vars:
         lines: "{{ (shared_secret_value.content | b64decode).splitlines() }}"
-        kept: "{{ lines | select('match', secret.keep) | list if secret.keep is defined else lines }}"
-        text: "{{ kept | map('regex_replace', '^NODE=.*$', 'NODE=' ~ edge_id) | list if secret.node_line | default(false) else kept }}"
+        text: "{{ lines | select('match', secret.keep) | list if secret.keep is defined else lines }}"
       ansible.builtin.copy:
         content: "{{ (text | join('\n') ~ '\n') if text else '' }}"
         dest: "{{ secret.dest }}"

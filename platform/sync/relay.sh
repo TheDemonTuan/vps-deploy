@@ -4,7 +4,7 @@
 # Keeps /relay/copy a mirror of the writer's Litestream copy of <db> (/litestream/<db><LTX_SUFFIX>
 # on its read-only SFTP), which this node's follower reads as a local replica (type file).
 # Litestream's own SFTP client waits one round trip per small read (about 1 KB) and lists every
-# level each second: from 250 ms away (vps-n4) a 4.5 MB restore took 40 minutes. rclone keeps its
+# level each second: from 250 ms away (n3, Buffalo) a 4.5 MB restore took 40 minutes. rclone keeps its
 # SSH connections (rcd) and pipelines transfers.
 # Level 0 (each new transaction, kept there at least 5 minutes) every second, the other levels (a
 # restore's base, the follower's gap fill) every minute. /relay/at: when a pass last reached the

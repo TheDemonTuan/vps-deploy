@@ -1,5 +1,5 @@
 version: 1
-host: vps-n4
+host: n3-vhs-buf-x86-4c16g
 # Not Oracle: VPS Hosting Service (Virtualizor panel vpsportal.com), Buffalo NY, AlmaLinux 10.2
 # x86-64, 4 vCPU (i9-14900K), 16 GB, 400 GB. Balanced apps only; images are built for it too.
 platform: linux/amd64
@@ -14,7 +14,7 @@ traefik:
   mount: /etc/traefik/dynamic
 # Far from the readers (US): a little less weight than the two Oracle nodes.
 edge:
-  id: n4
+  id: n3
   tunnel: 992dc99e-1470-48d0-a676-a7de907e0f6e
   weight: 30
 apps:

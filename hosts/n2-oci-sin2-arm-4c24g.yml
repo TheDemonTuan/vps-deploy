@@ -1,5 +1,5 @@
 version: 1
-host: oracle-sg2
+host: n2-oci-sin2-arm-4c24g
 ssh:
   address: 217.142.186.194
   port: 22
@@ -9,7 +9,8 @@ traefik:
   container: edge-traefik
   dynamic_dir: /opt/platform/edge/dynamic
   mount: /etc/traefik/dynamic
-# Second node (Oracle ap-singapore-2, 2 OCPU, 12 GB). Balanced apps and the monitoring hub.
+# Oracle ap-singapore-2. Named for 4 OCPU / 24 GB: still 2 OCPU / 12 GB until Oracle has A1
+# capacity for the resize (retried every 5 minutes from the workstation). Balanced apps only.
 edge:
   id: n2
   tunnel: 2c0939e7-b73e-4d29-9c7f-ac30f59a3ebf

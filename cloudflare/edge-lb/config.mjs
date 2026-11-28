@@ -2,14 +2,17 @@ export default {
   "nodes": {
     "n1": {
       "ip": "134.185.89.192",
+      "name": "n1-oci-sin1-arm-4c24g",
       "weight": 40
     },
     "n2": {
       "ip": "217.142.186.194",
+      "name": "n2-oci-sin2-arm-4c24g",
       "weight": 30
     },
-    "n4": {
+    "n3": {
       "ip": "192.255.159.24",
+      "name": "n3-vhs-buf-x86-4c16g",
       "weight": 30
     }
   },
@@ -89,7 +92,7 @@ export default {
       "nodes": [
         "n1",
         "n2",
-        "n4"
+        "n3"
       ],
       "primary": "n1",
       "rules": "mc-hub-api",
@@ -100,7 +103,7 @@ export default {
       "nodes": [
         "n1",
         "n2",
-        "n4"
+        "n3"
       ],
       "primary": "n1",
       "rules": "mc-hub",

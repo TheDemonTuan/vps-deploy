@@ -19,7 +19,7 @@ class EdgeLb(unittest.TestCase):
             root = Path(directory)
             for name in ('hosts', 'registry'):
                 shutil.copytree(edge_lb.ROOT / name, root / name)
-            path = root / 'hosts/oracle-sg2.yml'
+            path = root / 'hosts/n2-oci-sin2-arm-4c24g.yml'
             text = path.read_text()
             start = text.index('edge:\n')
             path.write_text(text[:start] + text[text.index('apps:\n'):])

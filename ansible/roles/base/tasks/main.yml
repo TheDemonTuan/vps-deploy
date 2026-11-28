@@ -3,6 +3,10 @@
     name: [jq, curl, openssh-clients, acl, git-core, nftables, policycoreutils-python-utils, dnf-automatic, logrotate, tar]
     state: present
 
+- name: Hostname is the host id (hosts/<id>.yml)
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
 # Both nodes rebooted with no record of why: journald keeps logs across boots once this exists.
 - name: Persistent journal
   ansible.builtin.file:

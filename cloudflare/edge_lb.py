@@ -57,7 +57,7 @@ def plan(root=ROOT):
                 raise Failure('EDGE_NODE_REQUIRED:' + app + '@' + name)
             # shortcut: the node's egress address is its ssh.address (true for Oracle public IPs); the
             # Worker accepts X-Edge-Node only from it. Give hosts an explicit egress IP if that changes.
-            edge = dict(record['edge'], ip=record['ssh']['address'])
+            edge = dict(record['edge'], ip=record['ssh']['address'], name=record['host'])
             if nodes.setdefault(edge['id'], edge) != edge:
                 raise Failure('EDGE_NODE_ID_REUSED:' + edge['id'])
             ids.append(edge['id'])
@@ -77,7 +77,7 @@ def plan(root=ROOT):
             raise Failure('EDGE_BUCKET_BINDING_REUSED:' + bucket['binding'])
         for node in ids:
             tunnels.setdefault(node, set()).add(site)
-    worker = {'nodes': {node: {'weight': nodes[node]['weight'], 'ip': nodes[node]['ip']} for node in sorted(tunnels)}, 'sites': sites, 'rules': rules}
+    worker = {'nodes': {node: {key: nodes[node][key] for key in ('weight', 'ip', 'name')} for node in sorted(tunnels)}, 'sites': sites, 'rules': rules}
     return {'worker': worker, 'buckets': buckets, 'leased': any(site['lease'] for site in sites.values()),
             'tunnels': {node: (nodes[node]['tunnel'], sorted(hostnames)) for node, hostnames in tunnels.items()}}
 

@@ -5,7 +5,7 @@ locals {
   }
 
   tunnel_ingress = {
-    "oracle-main" = [
+    "n1-oci-sin1-arm-4c24g" = [
       { hostname = "tuannguyenviet.site", origin_server_name = "tuannguyenviet.site" },
       { hostname = "bank.tuannguyenviet.site", origin_server_name = "bank.tuannguyenviet.site", match_sn_ito_host = false },
       { hostname = "transactions.tuannguyenviet.site", origin_server_name = "transactions.tuannguyenviet.site", match_sn_ito_host = false },
@@ -19,10 +19,6 @@ locals {
       { hostname = "monitor.thedemontuan.dev", origin_server_name = "monitor.thedemontuan.dev" },
       { hostname = "metrics.thedemontuan.dev", origin_server_name = "metrics.thedemontuan.dev" },
     ],
-    "oracle-sg2" = [
-      { hostname = "thedemontuan.dev", origin_server_name = "thedemontuan.dev" },
-      { hostname = "api.thedemontuan.dev", origin_server_name = "api.thedemontuan.dev" },
-    ],
   }
 
   default_tunnel_ingress = [
@@ -34,7 +30,7 @@ locals {
 resource "cloudflare_zero_trust_tunnel_cloudflared" "edge" {
   for_each   = local.edge_hosts
   account_id = var.account_id
-  name       = each.key == "oracle-main" ? "shared-edge-vps" : each.key == "oracle-sg2" ? "shared-edge-vps-n2" : "shared-edge-${each.key}"
+  name       = "shared-edge-${each.value.edge.id}"
   config_src = "cloudflare"
 }
 

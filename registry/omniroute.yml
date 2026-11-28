@@ -1,6 +1,6 @@
 version: 1
 app: omniroute
-host: oracle-main
+host: n1-oci-sin1-arm-4c24g
 caller:
   repository: TheDemonTuan/OmniRoute
   ref: refs/heads/production

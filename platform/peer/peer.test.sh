@@ -13,7 +13,7 @@ cp write-position.sh "$t/"
 sed -e "s#/etc/platform#$t/etc#g; s#/var/lib/platform-peer#$t/peer#g; s#/var/lib/docker/volumes/mc-hub-api-data/_data#$t/vol#;
   s#/run/platform-peer#$t/run#g; s#/srv/platform-sync/litestream#$t/sync#g; s#/var/lib/crowdsec/follow#$t/follow#g;
   s#/var/lib/platform-relay#$t/relay#g; s#/var/lib/node-exporter#$t/metrics#" peer.sh >"$t/peer.sh"
-printf 'NODE=n2\nNODE_IP=10.0.0.2\nROLE=replica\nLEASE_URL=http://lease.invalid\nTELEGRAM_CHAT_ID=1\n' >"$t/etc/peer.env"
+printf 'NODE=n2\nNAME=n2-oci-sin2-arm-4c24g\nNODE_IP=10.0.0.2\nROLE=replica\nLEASE_URL=http://lease.invalid\nTELEGRAM_CHAT_ID=1\n' >"$t/etc/peer.env"
 printf 'n1 10.0.0.1 ecdsa-sha2-nistp256 AAAAone\nn2 10.0.0.2 ecdsa-sha2-nistp256 AAAAtwo\n' >"$t/etc/nodes"
 printf 'PRIMARY_SSH=10.0.0.1:22\n' >"$t/etc/litestream-primary.env"
 echo token >"$t/etc/telegram-token"; echo key >"$t/etc/edge-node-key"
@@ -48,12 +48,12 @@ check "followers that keep up with the relays raise nothing" '[ ! -e "$t/telegra
 
 touch "$t/stuck"; for _ in 1 2 3 4; do run; done
 check "a stuck copy alerts once, in plain words with where to start" '[ "$(grep -c "^--- message" "$t/telegram")" = 2 ] &&
-  grep -qx "parse_mode=HTML" "$t/telegram" && grep -q "n2: CrowdSec ban database copy is behind" "$t/telegram" &&
+  grep -qx "parse_mode=HTML" "$t/telegram" && grep -q "n2-oci-sin2-arm-4c24g: CrowdSec ban database copy is behind" "$t/telegram" &&
   grep -q "litestream-crowdsec</code> on n2" "$t/telegram" && grep -q "ours is stuck at #5003" "$t/telegram" &&
-  grep -q "n2: mc-hub database copy is behind" "$t/telegram"'
+  grep -q "n2-oci-sin2-arm-4c24g: mc-hub database copy is behind" "$t/telegram"'
 
 rm "$t/stuck"; run; run
-check "its recovery replies to that alert" '[ "$(grep -c "n2: resolved after" "$t/telegram")" = 2 ] &&
+check "its recovery replies to that alert" '[ "$(grep -c "n2-oci-sin2-arm-4c24g: resolved after" "$t/telegram")" = 2 ] &&
   grep -qF "\"message_id\":1," "$t/telegram" && grep -qF "\"message_id\":2," "$t/telegram" &&
   [ ! -e "$t/peer/crowdsec_follower.alerted" ] && [ "$(grep -c "^--- message" "$t/telegram")" = 4 ]'
 
