@@ -5,8 +5,8 @@ inputs:
     description: Registered app ID
     required: true
   host:
-    description: Registered host ID
-    required: true
+    description: Registered host ID; empty rolls out to every registered host, one at a time (scripts/rollout.py)
+    default: ''
   operation:
     description: deploy, status, rollback, or reconcile
     required: true
@@ -42,7 +42,7 @@ runs:
         [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$CALLER_SHA" ]]
         [[ "$PLATFORM_REF" =~ ^[0-9a-f]{40}$ && "$ACTION_REF" == "$PLATFORM_REF" ]]
         [[ "$APP" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
-        [[ "$HOST" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
+        [[ -z "$HOST" || "$HOST" =~ ^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$ ]]
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: TheDemonTuan/vps-deploy
@@ -93,7 +93,7 @@ runs:
         IMAGE_REF: ${{ inputs.image-ref }}
         IMAGES: ${{ inputs.images }}
       run: python3 platform/scripts/check-caller.py deploy/action.yml
-    - name: Submit request and verify strict status
+    - name: Roll out host by host, each proved before the next
       shell: bash
       working-directory: source
       env:
@@ -122,4 +122,4 @@ runs:
         if [[ "$OPERATION" == deploy ]]; then
           args+=(--image "$IMAGE_REF")
         fi
-        DEPLOY_KEY_FILE="$sshdir/key" python3 ../platform/scripts/ssh-request.py "${args[@]}"
+        DEPLOY_KEY_FILE="$sshdir/key" python3 ../platform/scripts/rollout.py "${args[@]}"
