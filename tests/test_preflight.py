@@ -73,5 +73,25 @@ class InstallerCommandErrors(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 'COMMAND_FAILED')
 
 
+class InstallerBusy(unittest.TestCase):
+    def busy(self, operation, status):
+        with tempfile.TemporaryDirectory() as name:
+            state = Path(name)
+            (state / 'state.json').write_text(json.dumps({'operation': operation}))
+            (state / 'requests/gh-1').mkdir(parents=True)
+            (state / 'requests/gh-1/result.json').write_text(json.dumps({'status': status}))
+            with mock.patch.object(installer, 'trusted_path'), \
+                    mock.patch.object(installer, 'run', return_value=SimpleNamespace(stdout=b'')):
+                installer.busy('demo', state)
+
+    def test_a_receipt_a_later_reconcile_settled_does_not_block(self):
+        self.busy(None, 'recovery_required')
+
+    def test_a_pending_intent_or_running_request_blocks(self):
+        for operation, status in (({'phase': 'prepared'}, 'complete'), (None, 'running'), (None, 'queued')):
+            with self.subTest(operation=operation, status=status), self.assertRaisesRegex(Failure, 'INSTALL_BUSY'):
+                self.busy(operation, status)
+
+
 if __name__ == '__main__':
     unittest.main()

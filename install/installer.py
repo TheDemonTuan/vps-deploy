@@ -224,9 +224,12 @@ def acquire(path):
         raise
 
 def busy(app, state_dir):
+    settled = ('complete', 'failed')
     if (state_dir / 'state.json').exists():
         trusted_path(state_dir / 'state.json')
         require(json.loads((state_dir / 'state.json').read_bytes()).get('operation') is None, 'INSTALL_BUSY')
+        # No intent left, so a recovery_required receipt is one a later reconcile already settled.
+        settled += ('recovery_required',)
     requests = state_dir / 'requests'
     if requests.exists():
         trusted_path(requests, directory=True)
@@ -236,7 +239,7 @@ def busy(app, state_dir):
             if not receipt.is_file():
                 raise Failure('INSTALL_BUSY')
             trusted_path(receipt)
-            require(json.loads(receipt.read_bytes()).get('status') in ('complete', 'failed'), 'INSTALL_BUSY')
+            require(json.loads(receipt.read_bytes()).get('status') in settled, 'INSTALL_BUSY')
     patterns = ['vps-deploy-' + app + '@*.service']
     output = run('/usr/bin/systemctl', 'list-units', '--all', '--plain', '--no-legend', '--no-pager', *patterns).stdout.decode()
     require(not any(row.split()[2:3] == ['active'] or row.split()[3:4] == ['running'] for row in output.splitlines()), 'INSTALL_BUSY')
@@ -398,8 +401,10 @@ def main():
         require((installed / 'registry').exists(), 'APP_NOT_REGISTERED')
         old_registration = app_registration(installed, args.app)
         old_host = host_registration(installed, previous.get('host', old_registration['host']))
-        # A renamed host keeps its apps when it is the same machine (same SSH address and host key).
-        require(old_host['host'] == args.host or old_host['ssh'] == host_record['ssh'], 'APP_BINDING_MISMATCH')
+        # A renamed host keeps its apps when it is the same machine: same SSH address and host key
+        # fingerprint (older releases pin no host_key).
+        same = all(old_host['ssh'].get(key) == host_record['ssh'].get(key) for key in ('address', 'port', 'fingerprint'))
+        require(old_host['host'] == args.host or same, 'APP_BINDING_MISMATCH')
         host(cfg, old_registration, old_host)
     enrolled_collisions(args.app, binding, host_record)
     source_env = cfg / 'runtime.env' if optional_trusted(cfg / 'runtime.env') else Path(binding['work_dir']) / '.env'

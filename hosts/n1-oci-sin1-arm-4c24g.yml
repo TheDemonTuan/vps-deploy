@@ -12,12 +12,12 @@ traefik:
 # Host ids: n<edge id>-<provider>-<region>-<arch>-<cores>c<GB>g. Edge load balancer
 # (cloudflare/edge-lb): n1-origin.<zone> is a proxied CNAME to this node's tunnel (cloudflare/tofu).
 # Weight is this node's share of balanced reads. n1 also runs everything that is not balanced
-# (OmniRoute, ACB, the bank gateway, the CrowdSec controller) and the database writer: 40/30/30
-# while n2 waits for Oracle capacity to grow to 4 OCPU, 35/35/30 after.
+# (OmniRoute, ACB, the bank gateway, the CrowdSec controller) and the database writer, so it
+# shares evenly with n2 (also 4 OCPU / 24 GB): 35/35/30.
 edge:
   id: n1
   tunnel: 09575df7-5465-4201-94c0-130e16472dce
-  weight: 40
+  weight: 35
 apps:
   omniroute:
     api_host: omniroute-api.tuannguyenviet.site
