@@ -2,7 +2,7 @@ version: 1
 app: mc-hub
 host: oracle-main
 # Read copies behind the edge load balancer (cloudflare/edge-lb); `host` keeps the writes.
-replica_hosts: [oracle-sg2, oracle-n3, vps-n4]
+replica_hosts: [oracle-sg2, vps-n4]
 caller:
   repository: TheDemonTuan/mc-hub
   ref: refs/heads/main

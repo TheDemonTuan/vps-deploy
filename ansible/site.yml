@@ -1,6 +1,6 @@
 # Every edge node's platform layer (platform/README.md "Add a node"), from this repository.
 #   ansible-playbook site.yml --check --diff     what would change, on every node
-#   ansible-playbook site.yml                    apply (one node: --limit oracle-n3; a part: --tags sync)
+#   ansible-playbook site.yml                    apply (one node: --limit vps-n4; a part: --tags sync)
 # Apps are enrolled by the installer and deployed by their CI; app routes in
 # /opt/platform/edge/dynamic/<app>.yml belong to the deploy engine and are never touched here.
 # sync before crowdsec: the LAPI tunnel pins the LAPI node's host key from /etc/platform/known_hosts.
