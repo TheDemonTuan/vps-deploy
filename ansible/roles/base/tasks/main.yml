@@ -59,13 +59,21 @@
     name: [setroubleshoot-server, setroubleshoot-plugins]
     state: absent
 
-# Performance Co-Pilot (~100 MB, its own archives on disk) and OCI's log shipper (fluentd, ~90 MB)
-# duplicate platform/monitor; masked so package updates and the cloud agent cannot start them.
-- name: No PCP, no unified-monitoring-agent
+# Masked so package updates and the cloud agent cannot start them again:
+# - Performance Co-Pilot (~100 MB, its own archives on disk) and OCI's log shipper (fluentd, ~90 MB)
+#   duplicate platform/monitor;
+# - daemons nothing here uses: mDNS, NFS's portmapper (listens on 111), power and disk managers,
+#   libstoragemgmt, DTrace's probe daemon, mcelog (a VM has no machine checks to log);
+# - timers with nothing to do: firmware refresh, RAID check (no md arrays), locate's daily index of
+#   every file (Docker's overlays included).
+- name: No PCP, no unified-monitoring-agent, no unused daemons and timers
   ansible.builtin.shell: |
     for u in pmcd.service pmlogger.service pmie.service pmproxy.service pmlogger_farm.service pmie_farm.service \
              pmlogger_check.timer pmlogger_daily.timer pmie_check.timer pmie_daily.timer \
-             pmlogger_farm_check.timer pmie_farm_check.timer unified-monitoring-agent.service; do
+             pmlogger_farm_check.timer pmie_farm_check.timer unified-monitoring-agent.service \
+             avahi-daemon.socket avahi-daemon.service rpcbind.socket rpcbind.service upower.service \
+             udisks2.service libstoragemgmt.service dtprobed.service mcelog.service \
+             fwupd-refresh.timer raid-check.timer mlocate-updatedb.timer plocate-updatedb.timer; do
       systemctl cat "$u" >/dev/null 2>&1 || continue
       [ "$(systemctl is-enabled "$u" 2>/dev/null)" = masked ] && continue
       {{ 'echo "mask $u"; continue' if ansible_check_mode else '' }}
@@ -75,13 +83,35 @@
   check_mode: false
   changed_when: base_masked.stdout | length > 0
 
+# Cockpit is a password login on :9090 (n3's image enabled it); PackageKit only serves it.
+- name: No Cockpit, no PackageKit
+  ansible.builtin.dnf:
+    name: [cockpit, cockpit-ws, cockpit-bridge, cockpit-system, PackageKit]
+    state: absent
+
+# Keys only: a locked password opens no console, su or web login either. Undo on one node with
+# `passwd -u <user>` (the hash is kept).
+- name: No login passwords
+  ansible.builtin.user:
+    name: "{{ item }}"
+    password_lock: true
+  loop: [root, "{{ ansible_user }}"]
+
+# 00-: sshd keeps the first value it reads, and providers' drop-ins sort after it (n3's image ships
+# 01-permitrootlogin.conf with PermitRootLogin yes, which beat the old 99-hardening.conf).
 - name: SSH daemon hardening (keys only, no root login)
   ansible.builtin.copy:
     src: "{{ platform_src }}/base/sshd-hardening.conf"
-    dest: /etc/ssh/sshd_config.d/99-hardening.conf
+    dest: /etc/ssh/sshd_config.d/00-hardening.conf
     owner: root
     group: root
     mode: "0600"
+  notify: Reload sshd
+
+- name: No hardening drop-in under its old name
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d/99-hardening.conf
+    state: absent
   notify: Reload sshd
 
 - name: Security updates only, applied by dnf-automatic
