@@ -3,12 +3,12 @@ export default {
     "n1": {
       "ip": "134.185.89.192",
       "name": "n1-oci-sin1-arm-4c24g",
-      "weight": 40
+      "weight": 35
     },
     "n2": {
       "ip": "217.142.186.194",
       "name": "n2-oci-sin2-arm-4c24g",
-      "weight": 30
+      "weight": 35
     },
     "n3": {
       "ip": "192.255.159.24",

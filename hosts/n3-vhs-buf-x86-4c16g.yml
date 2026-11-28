@@ -19,7 +19,7 @@ edge:
   weight: 30
 apps:
   mc-hub:
-    # Same bindings as on oracle-main: the edge load balancer serves both hosts from either node.
+    # Same bindings as on n1: the edge load balancer serves both hosts from either node.
     api_host: thedemontuan.dev
     dashboard_host: ""
     dashboard_alias_host: tuannguyenviet.site
